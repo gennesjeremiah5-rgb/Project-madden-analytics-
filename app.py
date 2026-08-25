@@ -1,4 +1,5 @@
 from pathlib import Path
+from io import BytesIO
 from flask import Flask, request, jsonify, render_template_string, send_file
 import json
 import os
@@ -6,6 +7,7 @@ import hashlib
 import uuid
 import re
 import requests
+from PIL import Image, ImageDraw, ImageFont
 import threading
 import time
 from nacl.signing import VerifyKey
@@ -26,6 +28,7 @@ ANALYST_HISTORY_FILE = "analyst_history.json"
 ANALYST_POST_HISTORY_FILE = "analyst_discord_posts.json"
 PROJECT_MADDEN_ANALYST = "Marcus Hayes"
 DISCORD_DEBUG_FILE = "discord_interaction_debug.json"
+TRADE_CARD_DIR = "generated_trade_cards"
 STANDINGS_POST_LOCK = threading.Lock()
 
 
@@ -1056,6 +1059,672 @@ def summarize_asset(asset):
 # DISCORD - TRADE APPROVAL ONLY
 # =========================================================
 
+
+def team_logo_url_from_name(team_name):
+    team = find_team(team_name)
+
+    if not team:
+        return ""
+
+    abbr = (
+        team.get("abbrName")
+        or team.get("abbr")
+        or ""
+    ).lower()
+
+    if not abbr:
+        return ""
+
+    return (
+        "https://a.espncdn.com/i/teamlogos/"
+        f"nfl/500/{abbr}.png"
+    )
+
+
+def fetch_image_for_card(url):
+    if not url:
+        return None
+
+    try:
+        response = requests.get(
+            url,
+            timeout=10
+        )
+        response.raise_for_status()
+
+        image = Image.open(
+            BytesIO(response.content)
+        ).convert("RGBA")
+
+        return image
+
+    except Exception:
+        return None
+
+
+def trade_card_font(size, bold=False):
+    candidates = []
+
+    if bold:
+        candidates.extend([
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+        ])
+    else:
+        candidates.extend([
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        ])
+
+    for candidate in candidates:
+        if Path(candidate).exists():
+            try:
+                return ImageFont.truetype(
+                    candidate,
+                    size
+                )
+            except Exception:
+                pass
+
+    return ImageFont.load_default()
+
+
+def format_trade_card_asset(asset):
+    if isinstance(asset, str):
+        return asset
+
+    if not isinstance(asset, dict):
+        return str(asset)
+
+    if asset.get("type") == "pick":
+        year = asset.get("year", "")
+        round_number = asset.get(
+            "round",
+            ""
+        )
+        return (
+            f"{year} Round {round_number}"
+        ).strip()
+
+    name = (
+        asset.get("name")
+        or asset.get("player")
+        or "Player"
+    )
+
+    position = (
+        asset.get("position")
+        or ""
+    )
+
+    overall = (
+        asset.get("overall")
+        or asset.get("ovr")
+    )
+
+    dev = (
+        asset.get("dev")
+        or ""
+    )
+
+    pieces = [str(name)]
+
+    meta = []
+
+    if position:
+        meta.append(str(position))
+
+    if overall is not None:
+        meta.append(
+            f"{overall} OVR"
+        )
+
+    if dev:
+        meta.append(
+            str(dev).replace(
+                "_",
+                " "
+            ).title()
+        )
+
+    if meta:
+        pieces.append(
+            " • ".join(meta)
+        )
+
+    return " — ".join(pieces)
+
+
+def get_trade_side_assets(
+    analysis,
+    side
+):
+    keys = []
+
+    if side == "a":
+        keys = [
+            "team_a_sends",
+            "team_a_assets",
+            "team_a_trade_assets"
+        ]
+    else:
+        keys = [
+            "team_b_sends",
+            "team_b_assets",
+            "team_b_trade_assets"
+        ]
+
+    for key in keys:
+        value = analysis.get(key)
+
+        if isinstance(value, list):
+            return value
+
+    return []
+
+
+def wrap_card_text(
+    draw,
+    text,
+    font,
+    max_width
+):
+    words = str(text).split()
+    lines = []
+    current = ""
+
+    for word in words:
+        test = (
+            word
+            if not current
+            else f"{current} {word}"
+        )
+
+        bbox = draw.textbbox(
+            (0, 0),
+            test,
+            font=font
+        )
+
+        width = (
+            bbox[2] - bbox[0]
+        )
+
+        if width <= max_width:
+            current = test
+        else:
+            if current:
+                lines.append(current)
+            current = word
+
+    if current:
+        lines.append(current)
+
+    return lines or [""]
+
+
+def draw_trade_side(
+    canvas,
+    draw,
+    x,
+    y,
+    width,
+    height,
+    team_name,
+    assets,
+    grade,
+    logo
+):
+    panel_fill = (18, 20, 27)
+    header_fill = (30, 33, 44)
+    border = (90, 54, 180)
+    white = (242, 242, 245)
+    muted = (182, 184, 192)
+    accent = (139, 76, 255)
+
+    draw.rounded_rectangle(
+        (x, y, x + width, y + height),
+        radius=24,
+        fill=panel_fill,
+        outline=border,
+        width=3
+    )
+
+    draw.rounded_rectangle(
+        (x, y, x + width, y + 110),
+        radius=24,
+        fill=header_fill
+    )
+
+    title_font = trade_card_font(
+        34,
+        bold=True
+    )
+
+    body_font = trade_card_font(
+        25,
+        bold=True
+    )
+
+    meta_font = trade_card_font(
+        20,
+        bold=False
+    )
+
+    grade_font = trade_card_font(
+        42,
+        bold=True
+    )
+
+    if logo:
+        logo_copy = logo.copy()
+        logo_copy.thumbnail(
+            (72, 72)
+        )
+
+        canvas.alpha_composite(
+            logo_copy,
+            (
+                x + 22,
+                y + 19
+            )
+        )
+
+        title_x = x + 112
+    else:
+        title_x = x + 28
+
+    draw.text(
+        (title_x, y + 29),
+        str(team_name).upper(),
+        font=title_font,
+        fill=white
+    )
+
+    current_y = y + 135
+
+    if not assets:
+        draw.text(
+            (x + 28, current_y),
+            "NO ASSETS",
+            font=body_font,
+            fill=muted
+        )
+    else:
+        for asset in assets[:5]:
+            formatted = (
+                format_trade_card_asset(
+                    asset
+                )
+            )
+
+            lines = wrap_card_text(
+                draw,
+                formatted,
+                body_font,
+                width - 56
+            )
+
+            draw.text(
+                (
+                    x + 28,
+                    current_y
+                ),
+                "•",
+                font=body_font,
+                fill=accent
+            )
+
+            text_y = current_y
+
+            for line in lines[:2]:
+                draw.text(
+                    (
+                        x + 52,
+                        text_y
+                    ),
+                    line,
+                    font=body_font,
+                    fill=white
+                )
+                text_y += 31
+
+            current_y = (
+                text_y + 18
+            )
+
+            draw.line(
+                (
+                    x + 28,
+                    current_y - 6,
+                    x + width - 28,
+                    current_y - 6
+                ),
+                fill=(48, 51, 61),
+                width=2
+            )
+
+            if current_y > (
+                y + height - 125
+            ):
+                break
+
+    draw.text(
+        (
+            x + 28,
+            y + height - 82
+        ),
+        "TRADE GRADE",
+        font=meta_font,
+        fill=muted
+    )
+
+    draw.text(
+        (
+            x + width - 110,
+            y + height - 94
+        ),
+        str(grade or "—"),
+        font=grade_font,
+        fill=white
+    )
+
+
+def generate_trade_card(
+    analysis
+):
+    width = 1600
+    height = 980
+
+    canvas = Image.new(
+        "RGBA",
+        (width, height),
+        (10, 11, 16, 255)
+    )
+
+    draw = ImageDraw.Draw(
+        canvas
+    )
+
+    white = (244, 244, 247)
+    muted = (178, 180, 190)
+    accent = (139, 76, 255)
+
+    # Header.
+    draw.rounded_rectangle(
+        (42, 36, width - 42, 160),
+        radius=30,
+        fill=(22, 24, 31),
+        outline=accent,
+        width=3
+    )
+
+    header_font = trade_card_font(
+        45,
+        bold=True
+    )
+
+    small_font = trade_card_font(
+        22,
+        bold=False
+    )
+
+    draw.text(
+        (84, 67),
+        "PROJECT MADDEN TRADE PROPOSAL",
+        font=header_font,
+        fill=white
+    )
+
+    trade_id = str(
+        analysis.get(
+            "trade_id",
+            ""
+        )
+    )
+
+    if trade_id:
+        draw.text(
+            (84, 125),
+            f"Trade ID: {trade_id}",
+            font=small_font,
+            fill=muted
+        )
+
+    team_a = analysis.get(
+        "team_a",
+        "TEAM A"
+    )
+
+    team_b = analysis.get(
+        "team_b",
+        "TEAM B"
+    )
+
+    assets_a = get_trade_side_assets(
+        analysis,
+        "a"
+    )
+
+    assets_b = get_trade_side_assets(
+        analysis,
+        "b"
+    )
+
+    grade_a = (
+        analysis.get(
+            "team_a_grade",
+            {}
+        ).get(
+            "grade",
+            "—"
+        )
+        if isinstance(
+            analysis.get(
+                "team_a_grade"
+            ),
+            dict
+        )
+        else "—"
+    )
+
+    grade_b = (
+        analysis.get(
+            "team_b_grade",
+            {}
+        ).get(
+            "grade",
+            "—"
+        )
+        if isinstance(
+            analysis.get(
+                "team_b_grade"
+            ),
+            dict
+        )
+        else "—"
+    )
+
+    logo_a = fetch_image_for_card(
+        team_logo_url_from_name(
+            team_a
+        )
+    )
+
+    logo_b = fetch_image_for_card(
+        team_logo_url_from_name(
+            team_b
+        )
+    )
+
+    panel_y = 195
+    panel_h = 590
+    panel_w = 680
+
+    draw_trade_side(
+        canvas,
+        draw,
+        65,
+        panel_y,
+        panel_w,
+        panel_h,
+        team_a,
+        assets_a,
+        grade_a,
+        logo_a
+    )
+
+    draw_trade_side(
+        canvas,
+        draw,
+        855,
+        panel_y,
+        panel_w,
+        panel_h,
+        team_b,
+        assets_b,
+        grade_b,
+        logo_b
+    )
+
+    versus_font = trade_card_font(
+        52,
+        bold=True
+    )
+
+    draw.text(
+        (775, 455),
+        "⇄",
+        font=versus_font,
+        fill=accent,
+        anchor="mm"
+    )
+
+    review = analysis.get(
+        "trade_committee",
+        {}
+    )
+
+    decision = (
+        review.get(
+            "decision",
+            "LEAGUE OFFICE REVIEW"
+        )
+        if isinstance(
+            review,
+            dict
+        )
+        else "LEAGUE OFFICE REVIEW"
+    )
+
+    gap = (
+        review.get(
+            "gap_percentage"
+        )
+        if isinstance(
+            review,
+            dict
+        )
+        else None
+    )
+
+    draw.rounded_rectangle(
+        (
+            65,
+            820,
+            width - 65,
+            930
+        ),
+        radius=22,
+        fill=(22, 24, 31),
+        outline=(74, 77, 88),
+        width=2
+    )
+
+    decision_font = trade_card_font(
+        30,
+        bold=True
+    )
+
+    draw.text(
+        (95, 846),
+        "LEAGUE OFFICE REVIEW",
+        font=small_font,
+        fill=muted
+    )
+
+    draw.text(
+        (95, 878),
+        str(decision),
+        font=decision_font,
+        fill=white
+    )
+
+    if gap is not None:
+        draw.text(
+            (
+                width - 330,
+                878
+            ),
+            f"Value Gap: {gap}%",
+            font=small_font,
+            fill=muted
+        )
+
+    out_dir = (
+        Path(__file__).resolve().parent
+        / TRADE_CARD_DIR
+    )
+
+    out_dir.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    filename = (
+        f"trade_{trade_id or 'preview'}.png"
+    )
+
+    output_path = (
+        out_dir / filename
+    )
+
+    canvas.convert(
+        "RGB"
+    ).save(
+        output_path,
+        "PNG",
+        optimize=True
+    )
+
+    return output_path
+
+
+@app.route(
+    "/trade-card/<trade_id>.png",
+    methods=["GET"]
+)
+def trade_card_image(
+    trade_id
+):
+    filepath = (
+        Path(__file__).resolve().parent
+        / TRADE_CARD_DIR
+        / f"trade_{trade_id}.png"
+    )
+
+    if not filepath.exists():
+        return jsonify({
+            "error":
+                "trade card not found"
+        }), 404
+
+    return send_file(
+        filepath,
+        mimetype="image/png"
+    )
+
+
 def post_trade_to_discord(analysis):
     webhook_url = os.environ.get(
         "DISCORD_WEBHOOK_URL"
@@ -1151,13 +1820,42 @@ def post_trade_to_discord(analysis):
         ]
     }
 
-    if screenshot_url:
+    trade_card_url = ""
+
+    try:
+        trade_card_path = generate_trade_card(
+            analysis
+        )
+
+        trade_card_url = (
+            "https://project-madden-analytics.onrender.com/"
+            f"trade-card/{analysis.get('trade_id')}.png"
+        )
+    except Exception as e:
+        print(
+            "TRADE CARD ERROR:",
+            str(e)
+        )
+
+    # The generated Project Madden card is the main visual.
+    if trade_card_url:
         try:
             payload["embeds"][0]["image"] = {
-                "url": screenshot_url
+                "url": trade_card_url
             }
         except Exception:
             pass
+
+    # If a user also uploaded the Madden trade screen, include it as
+    # a second proof embed instead of replacing the generated card.
+    if screenshot_url:
+        payload["embeds"].append({
+            "title":
+                "📸 Madden Trade Screen • Proof",
+            "image": {
+                "url": screenshot_url
+            }
+        })
 
     try:
         response = requests.post(
