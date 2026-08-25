@@ -58,6 +58,589 @@ def get_schedule_file(season_type, week_number):
     )
 
 
+def get_weekly_file(season_type, week_number, stat_type):
+    return os.path.join(
+        DATA_DIR,
+        "weekly",
+        season_type,
+        f"week_{week_number}",
+        f"{stat_type}.json"
+    )
+
+
+# =========================================================
+# STORY DETECTOR
+# =========================================================
+
+def classify_game_story(game, team_map):
+
+    home_id = str(game.get("homeTeamId"))
+    away_id = str(game.get("awayTeamId"))
+
+    home = team_map.get(home_id, {})
+    away = team_map.get(away_id, {})
+
+    home_score = game.get("homeScore", 0)
+    away_score = game.get("awayScore", 0)
+
+    home_ovr = home.get("overall")
+    away_ovr = away.get("overall")
+
+    stories = []
+
+    result = {
+        "schedule_id": game.get("scheduleId"),
+
+        "away_team": away.get(
+            "name",
+            "Unknown"
+        ),
+
+        "home_team": home.get(
+            "name",
+            "Unknown"
+        ),
+
+        "away_score": away_score,
+        "home_score": home_score,
+
+        "away_overall": away_ovr,
+        "home_overall": home_ovr,
+
+        "stories": stories
+    }
+
+    # Pregame only
+    if home_score == 0 and away_score == 0:
+
+        if (
+            home_ovr is not None
+            and away_ovr is not None
+        ):
+
+            gap = abs(
+                home_ovr - away_ovr
+            )
+
+            if gap == 0:
+
+                stories.append({
+                    "type": "even_matchup",
+                    "severity": "medium",
+                    "headline":
+                        "Evenly matched teams"
+                })
+
+            elif gap >= 6:
+
+                stories.append({
+                    "type": "major_mismatch",
+                    "severity": "high",
+                    "headline":
+                        "Major overall mismatch"
+                })
+
+            elif gap >= 4:
+
+                stories.append({
+                    "type": "clear_favorite",
+                    "severity": "medium",
+                    "headline":
+                        "Clear favorite by overall"
+                })
+
+        if game.get(
+            "isGameOfTheWeek",
+            False
+        ):
+
+            stories.append({
+                "type": "game_of_the_week",
+                "severity": "high",
+                "headline":
+                    "Game of the Week"
+            })
+
+        if (
+            home.get("user")
+            or away.get("user")
+        ):
+
+            stories.append({
+                "type": "user_game",
+                "severity": "medium",
+                "headline":
+                    "User-controlled team involved"
+            })
+
+        return result
+
+    # Postgame
+    margin = abs(
+        home_score - away_score
+    )
+
+    result["margin"] = margin
+
+    if home_score > away_score:
+
+        winner = home
+        loser = away
+
+        winner_score = home_score
+        loser_score = away_score
+
+        winner_location = "home"
+
+    elif away_score > home_score:
+
+        winner = away
+        loser = home
+
+        winner_score = away_score
+        loser_score = home_score
+
+        winner_location = "away"
+
+    else:
+
+        stories.append({
+            "type": "tie",
+            "severity": "medium",
+            "headline":
+                "Game ended in a tie"
+        })
+
+        return result
+
+    result["winner"] = winner.get(
+        "name",
+        "Unknown"
+    )
+
+    result["loser"] = loser.get(
+        "name",
+        "Unknown"
+    )
+
+    result["winner_location"] = (
+        winner_location
+    )
+
+    # Blowout logic
+    if margin >= 30:
+
+        stories.append({
+            "type": "embarrassing_blowout",
+            "severity": "critical",
+            "headline":
+                "Embarrassing blowout"
+        })
+
+    elif margin >= 20:
+
+        stories.append({
+            "type": "blowout",
+            "severity": "high",
+            "headline":
+                "Lopsided loss"
+        })
+
+    elif margin <= 3:
+
+        stories.append({
+            "type": "nail_biter",
+            "severity": "high",
+            "headline":
+                "Nail-biter"
+        })
+
+    elif margin <= 7:
+
+        stories.append({
+            "type": "close_game",
+            "severity": "medium",
+            "headline":
+                "One-score game"
+        })
+
+    # Road win
+    if winner_location == "away":
+
+        stories.append({
+            "type": "road_win",
+            "severity": "medium",
+            "headline":
+                "Road victory"
+        })
+
+    # Upset
+    winner_ovr = winner.get(
+        "overall"
+    )
+
+    loser_ovr = loser.get(
+        "overall"
+    )
+
+    if (
+        winner_ovr is not None
+        and loser_ovr is not None
+        and winner_ovr < loser_ovr
+    ):
+
+        difference = (
+            loser_ovr - winner_ovr
+        )
+
+        severity = "medium"
+
+        if difference >= 5:
+            severity = "high"
+
+        if difference >= 8:
+            severity = "critical"
+
+        stories.append({
+            "type": "upset",
+            "severity": severity,
+            "headline":
+                "Upset victory",
+
+            "overall_difference":
+                difference
+        })
+
+    # Favorite failed badly
+    if (
+        winner_ovr is not None
+        and loser_ovr is not None
+    ):
+
+        if (
+            loser_ovr > winner_ovr
+            and margin >= 14
+        ):
+
+            stories.append({
+                "type":
+                    "favorite_disappointment",
+
+                "severity":
+                    "high",
+
+                "headline":
+                    "Favorite failed to deliver"
+            })
+
+    # Shutout
+    if loser_score == 0:
+
+        stories.append({
+            "type": "shutout",
+            "severity": "high",
+            "headline":
+                "Shutout"
+        })
+
+    return result
+
+
+# =========================================================
+# PLAYER PERFORMANCE DETECTORS
+# =========================================================
+
+def qb_story(
+    name,
+    yards,
+    touchdowns,
+    interceptions,
+    completion_pct=None
+):
+
+    stories = []
+
+    grade = "C"
+
+    if (
+        touchdowns >= 5
+        and interceptions == 0
+    ):
+        grade = "A+"
+
+        stories.append({
+            "type": "elite_qb_game",
+            "severity": "critical",
+            "headline":
+                "Elite quarterback performance"
+        })
+
+    elif (
+        touchdowns >= 4
+        and interceptions <= 1
+    ):
+        grade = "A"
+
+        stories.append({
+            "type": "great_qb_game",
+            "severity": "high",
+            "headline":
+                "Outstanding quarterback performance"
+        })
+
+    elif interceptions >= 4:
+
+        grade = "F"
+
+        stories.append({
+            "type": "qb_disaster",
+            "severity": "critical",
+            "headline":
+                "Quarterback disaster"
+        })
+
+    elif interceptions >= 3:
+
+        grade = "D"
+
+        stories.append({
+            "type": "bad_qb_game",
+            "severity": "high",
+            "headline":
+                "Turnover-heavy quarterback performance"
+        })
+
+    elif (
+        yards < 150
+        and touchdowns == 0
+    ):
+
+        grade = "D"
+
+        stories.append({
+            "type": "ineffective_qb_game",
+            "severity": "medium",
+            "headline":
+                "Ineffective quarterback performance"
+        })
+
+    elif yards >= 350:
+
+        grade = "A"
+
+        stories.append({
+            "type": "big_passing_game",
+            "severity": "high",
+            "headline":
+                "Huge passing performance"
+        })
+
+    if (
+        completion_pct is not None
+        and completion_pct < 50
+    ):
+
+        stories.append({
+            "type": "poor_accuracy",
+            "severity": "medium",
+            "headline":
+                "Poor passing accuracy"
+        })
+
+    return {
+        "player": name,
+        "grade": grade,
+        "stories": stories
+    }
+
+
+def rushing_story(
+    name,
+    yards,
+    touchdowns,
+    carries=None
+):
+
+    stories = []
+    grade = "C"
+
+    if yards >= 200:
+
+        grade = "A+"
+
+        stories.append({
+            "type": "monster_rushing_game",
+            "severity": "critical",
+            "headline":
+                "Monster rushing performance"
+        })
+
+    elif yards >= 150:
+
+        grade = "A"
+
+        stories.append({
+            "type": "dominant_rushing_game",
+            "severity": "high",
+            "headline":
+                "Dominant rushing performance"
+        })
+
+    elif (
+        yards < 30
+        and carries is not None
+        and carries >= 10
+    ):
+
+        grade = "D"
+
+        stories.append({
+            "type": "poor_rushing_game",
+            "severity": "medium",
+            "headline":
+                "Ineffective rushing performance"
+        })
+
+    if touchdowns >= 3:
+
+        stories.append({
+            "type": "multi_td_rushing_game",
+            "severity": "high",
+            "headline":
+                "Three-touchdown rushing game"
+        })
+
+    return {
+        "player": name,
+        "grade": grade,
+        "stories": stories
+    }
+
+
+def receiving_story(
+    name,
+    yards,
+    touchdowns,
+    receptions=None
+):
+
+    stories = []
+    grade = "C"
+
+    if yards >= 200:
+
+        grade = "A+"
+
+        stories.append({
+            "type": "monster_receiving_game",
+            "severity": "critical",
+            "headline":
+                "Monster receiving performance"
+        })
+
+    elif yards >= 150:
+
+        grade = "A"
+
+        stories.append({
+            "type": "dominant_receiving_game",
+            "severity": "high",
+            "headline":
+                "Dominant receiving performance"
+        })
+
+    elif (
+        yards < 30
+        and receptions is not None
+        and receptions >= 4
+    ):
+
+        grade = "D"
+
+        stories.append({
+            "type": "quiet_receiving_game",
+            "severity": "medium",
+            "headline":
+                "Disappointing receiving performance"
+        })
+
+    if touchdowns >= 3:
+
+        stories.append({
+            "type": "multi_td_receiving_game",
+            "severity": "high",
+            "headline":
+                "Three-touchdown receiving game"
+        })
+
+    return {
+        "player": name,
+        "grade": grade,
+        "stories": stories
+    }
+
+
+def defense_story(
+    name,
+    sacks=0,
+    interceptions=0,
+    forced_fumbles=0
+):
+
+    stories = []
+    grade = "C"
+
+    if sacks >= 4:
+
+        grade = "A+"
+
+        stories.append({
+            "type": "historic_pass_rush",
+            "severity": "critical",
+            "headline":
+                "Historic pass-rushing performance"
+        })
+
+    elif sacks >= 3:
+
+        grade = "A"
+
+        stories.append({
+            "type": "dominant_pass_rush",
+            "severity": "high",
+            "headline":
+                "Dominant pass-rushing performance"
+        })
+
+    if interceptions >= 2:
+
+        grade = "A"
+
+        stories.append({
+            "type": "ballhawk_game",
+            "severity": "high",
+            "headline":
+                "Ballhawk defensive performance"
+        })
+
+    if forced_fumbles >= 2:
+
+        grade = "A"
+
+        stories.append({
+            "type": "turnover_creator",
+            "severity": "high",
+            "headline":
+                "Turnover-forcing performance"
+        })
+
+    return {
+        "player": name,
+        "grade": grade,
+        "stories": stories
+    }
+
+
 # =========================================================
 # HOME / HEALTH
 # =========================================================
@@ -66,15 +649,15 @@ def get_schedule_file(season_type, week_number):
 def home():
     return jsonify({
         "status": "online",
-        "service": "Project Madden Analytics"
+        "service":
+            "Project Madden Analytics"
     })
 
 
 @app.route("/health")
 def health():
     return jsonify({
-        "online": True,
-        "service": "Project Madden Analytics"
+        "online": True
     })
 
 
@@ -82,18 +665,25 @@ def health():
 # SNALLABOT RECEIVER
 # =========================================================
 
-@app.route("/snallabot/<path:subpath>", methods=["GET", "POST", "PUT"])
+@app.route(
+    "/snallabot/<path:subpath>",
+    methods=["GET", "POST", "PUT"]
+)
 def snallabot_receiver(subpath):
 
     if request.method == "GET":
+
         return jsonify({
             "working": True,
             "path": subpath
         })
 
-    data = request.get_json(silent=True)
+    data = request.get_json(
+        silent=True
+    )
 
     if data is None:
+
         return jsonify({
             "success": False,
             "error": "No JSON received"
@@ -101,104 +691,115 @@ def snallabot_receiver(subpath):
 
     parts = subpath.split("/")
 
-    print("")
-    print("========================================")
-    print("PROJECT MADDEN EXPORT")
-    print("Path:", subpath)
-    print("========================================")
+    print(
+        "PROJECT MADDEN EXPORT:",
+        subpath
+    )
 
-    # -----------------------------------------------------
-    # LEAGUE TEAMS
-    # -----------------------------------------------------
-
+    # League teams
     if parts[-1] == "leagueteams":
 
         with open(
-            os.path.join(DATA_DIR, "leagueteams.json"),
+            os.path.join(
+                DATA_DIR,
+                "leagueteams.json"
+            ),
             "w"
         ) as f:
-            json.dump(data, f, indent=2)
 
-        print("Saved: LEAGUE TEAMS")
+            json.dump(
+                data,
+                f,
+                indent=2
+            )
 
         return jsonify({
             "success": True,
             "type": "leagueteams"
         }), 200
 
-    # -----------------------------------------------------
-    # STANDINGS
-    # -----------------------------------------------------
-
+    # Standings
     if parts[-1] == "standings":
 
         with open(
-            os.path.join(DATA_DIR, "standings.json"),
+            os.path.join(
+                DATA_DIR,
+                "standings.json"
+            ),
             "w"
         ) as f:
-            json.dump(data, f, indent=2)
 
-        print("Saved: STANDINGS")
+            json.dump(
+                data,
+                f,
+                indent=2
+            )
 
         return jsonify({
             "success": True,
             "type": "standings"
         }), 200
 
-    # -----------------------------------------------------
-    # EXTRA DATA
-    # -----------------------------------------------------
-
+    # Extra
     if parts[-1] == "extra":
 
         with open(
-            os.path.join(DATA_DIR, "extra.json"),
+            os.path.join(
+                DATA_DIR,
+                "extra.json"
+            ),
             "w"
         ) as f:
-            json.dump(data, f, indent=2)
 
-        print("Saved: EXTRA DATA")
+            json.dump(
+                data,
+                f,
+                indent=2
+            )
 
         return jsonify({
             "success": True,
             "type": "extra"
         }), 200
 
-    # -----------------------------------------------------
-    # FREE AGENTS
-    # -----------------------------------------------------
-
-    if "freeagents" in parts and parts[-1] == "roster":
-
-        players = data.get("rosterInfoList", [])
+    # Free agents
+    if (
+        "freeagents" in parts
+        and parts[-1] == "roster"
+    ):
 
         with open(
-            os.path.join(DATA_DIR, "freeagents_roster.json"),
+            os.path.join(
+                DATA_DIR,
+                "freeagents_roster.json"
+            ),
             "w"
         ) as f:
-            json.dump(data, f, indent=2)
 
-        print(
-            f"Saved free agents roster | "
-            f"{len(players)} players"
-        )
+            json.dump(
+                data,
+                f,
+                indent=2
+            )
 
         return jsonify({
             "success": True,
-            "type": "freeagents",
-            "player_count": len(players)
+            "type": "freeagents"
         }), 200
 
-    # -----------------------------------------------------
-    # TEAM ROSTERS
-    # -----------------------------------------------------
+    # Team rosters
+    if (
+        "team" in parts
+        and parts[-1] == "roster"
+    ):
 
-    if "team" in parts and parts[-1] == "roster":
+        team_index = parts.index(
+            "team"
+        )
 
-        team_index = parts.index("team")
-        team_id = parts[team_index + 1]
-
-        players = data.get("rosterInfoList", [])
+        team_id = parts[
+            team_index + 1
+        ]
 
         with open(
             os.path.join(
@@ -207,38 +808,46 @@ def snallabot_receiver(subpath):
             ),
             "w"
         ) as f:
-            json.dump(data, f, indent=2)
 
-        print(
-            f"Saved roster: Team {team_id} | "
-            f"{len(players)} players"
-        )
+            json.dump(
+                data,
+                f,
+                indent=2
+            )
 
         return jsonify({
             "success": True,
             "type": "roster",
-            "team_id": team_id,
-            "player_count": len(players)
+            "team_id": team_id
         }), 200
 
-    # -----------------------------------------------------
-    # WEEKLY DATA
-    # -----------------------------------------------------
-
+    # Weekly data
     if "week" in parts:
 
         try:
-            week_index = parts.index("week")
 
-            season_type = parts[week_index + 1]
-            week_number = parts[week_index + 2]
-            stat_type = parts[week_index + 3]
+            week_index = parts.index(
+                "week"
+            )
+
+            season_type = parts[
+                week_index + 1
+            ]
+
+            week_number = parts[
+                week_index + 2
+            ]
+
+            stat_type = parts[
+                week_index + 3
+            ]
 
         except Exception:
+
             return jsonify({
                 "success": False,
-                "error": "Invalid weekly export path",
-                "path": subpath
+                "error":
+                    "Invalid weekly export path"
             }), 400
 
         weekly_dir = os.path.join(
@@ -260,28 +869,23 @@ def snallabot_receiver(subpath):
             ),
             "w"
         ) as f:
-            json.dump(data, f, indent=2)
 
-        print(
-            f"Saved weekly data | "
-            f"{season_type.upper()} "
-            f"Week {week_number} | "
-            f"{stat_type}"
-        )
+            json.dump(
+                data,
+                f,
+                indent=2
+            )
 
         return jsonify({
             "success": True,
             "type": "weekly",
-            "season_type": season_type,
-            "week": week_number,
-            "stat_type": stat_type
+            "season_type":
+                season_type,
+            "week":
+                week_number,
+            "stat_type":
+                stat_type
         }), 200
-
-    # -----------------------------------------------------
-    # UNKNOWN
-    # -----------------------------------------------------
-
-    print("Unknown export:", subpath)
 
     return jsonify({
         "success": True,
@@ -291,51 +895,231 @@ def snallabot_receiver(subpath):
 
 
 # =========================================================
-# RAW WEEKLY DATA
+# STORY DETECTOR ENDPOINT
 # =========================================================
 
-@app.route("/analytics/week/<season_type>/<week_number>/<stat_type>")
-def weekly_data(season_type, week_number, stat_type):
-
-    filename = os.path.join(
-        DATA_DIR,
-        "weekly",
-        season_type,
-        f"week_{week_number}",
-        f"{stat_type}.json"
-    )
-
-    if not os.path.exists(filename):
-        return jsonify({
-            "error": "Data not found",
-            "file": filename
-        }), 404
-
-    with open(filename, "r") as f:
-        data = json.load(f)
-
-    return jsonify(data)
-
-
-# =========================================================
-# MATCHUPS
-# =========================================================
-
-@app.route("/analytics/matchups/<season_type>/<week_number>")
-def weekly_matchups(season_type, week_number):
+@app.route(
+    "/analytics/stories/"
+    "<season_type>/"
+    "<week_number>"
+)
+def weekly_stories(
+    season_type,
+    week_number
+):
 
     filename = get_schedule_file(
         season_type,
         week_number
     )
 
-    if not os.path.exists(filename):
+    if not os.path.exists(
+        filename
+    ):
+
         return jsonify({
-            "error": "Schedule data not found"
+            "error":
+                "Schedule data not found"
         }), 404
 
-    with open(filename, "r") as f:
-        schedule_data = json.load(f)
+    with open(
+        filename,
+        "r"
+    ) as f:
+
+        schedule_data = json.load(
+            f
+        )
+
+    team_map = get_team_map()
+
+    games = schedule_data.get(
+        "gameScheduleInfoList",
+        []
+    )
+
+    stories = []
+
+    for game in games:
+
+        stories.append(
+            classify_game_story(
+                game,
+                team_map
+            )
+        )
+
+    important_stories = []
+
+    for game_story in stories:
+
+        for story in game_story[
+            "stories"
+        ]:
+
+            if story[
+                "severity"
+            ] in [
+                "high",
+                "critical"
+            ]:
+
+                important_stories.append({
+                    "away_team":
+                        game_story[
+                            "away_team"
+                        ],
+
+                    "home_team":
+                        game_story[
+                            "home_team"
+                        ],
+
+                    "story":
+                        story
+                })
+
+    return jsonify({
+        "league":
+            "Project Madden",
+
+        "season_type":
+            season_type,
+
+        "week":
+            week_number,
+
+        "important_story_count":
+            len(
+                important_stories
+            ),
+
+        "important_stories":
+            important_stories,
+
+        "games":
+            stories
+    })
+
+
+# =========================================================
+# PREVIEW ANALYST FEED
+# =========================================================
+
+@app.route(
+    "/analyst/pregame/"
+    "<season_type>/"
+    "<week_number>"
+)
+def analyst_pregame(
+    season_type,
+    week_number
+):
+
+    filename = get_schedule_file(
+        season_type,
+        week_number
+    )
+
+    if not os.path.exists(
+        filename
+    ):
+
+        return jsonify({
+            "error":
+                "Schedule data not found"
+        }), 404
+
+    with open(
+        filename,
+        "r"
+    ) as f:
+
+        schedule_data = json.load(
+            f
+        )
+
+    team_map = get_team_map()
+
+    games = schedule_data.get(
+        "gameScheduleInfoList",
+        []
+    )
+
+    feed = []
+
+    for game in games:
+
+        story_data = (
+            classify_game_story(
+                game,
+                team_map
+            )
+        )
+
+        if not story_data[
+            "stories"
+        ]:
+            continue
+
+        feed.append(
+            story_data
+        )
+
+    return jsonify({
+        "analyst":
+            "Project Madden Analyst",
+
+        "season_type":
+            season_type,
+
+        "week":
+            week_number,
+
+        "story_count":
+            len(feed),
+
+        "stories":
+            feed
+    })
+
+
+# =========================================================
+# MATCHUPS
+# =========================================================
+
+@app.route(
+    "/analytics/matchups/"
+    "<season_type>/"
+    "<week_number>"
+)
+def weekly_matchups(
+    season_type,
+    week_number
+):
+
+    filename = get_schedule_file(
+        season_type,
+        week_number
+    )
+
+    if not os.path.exists(
+        filename
+    ):
+
+        return jsonify({
+            "error":
+                "Schedule data not found"
+        }), 404
+
+    with open(
+        filename,
+        "r"
+    ) as f:
+
+        schedule_data = json.load(
+            f
+        )
 
     team_map = get_team_map()
 
@@ -349,102 +1133,15 @@ def weekly_matchups(season_type, week_number):
     for game in games:
 
         away_id = str(
-            game.get("awayTeamId")
+            game.get(
+                "awayTeamId"
+            )
         )
 
         home_id = str(
-            game.get("homeTeamId")
-        )
-
-        away_team = team_map.get(
-            away_id,
-            {}
-        )
-
-        home_team = team_map.get(
-            home_id,
-            {}
-        )
-
-        matchups.append({
-            "schedule_id": game.get("scheduleId"),
-            "status": game.get("status"),
-
-            "game_of_the_week": game.get(
-                "isGameOfTheWeek",
-                False
-            ),
-
-            "away": {
-                "id": game.get("awayTeamId"),
-                "abbr": away_team.get("abbr"),
-                "city": away_team.get("city"),
-                "team": away_team.get("name", "Unknown"),
-                "division": away_team.get("division"),
-                "overall": away_team.get("overall"),
-                "injuries": away_team.get("injuries"),
-                "user": away_team.get("user"),
-                "score": game.get("awayScore", 0)
-            },
-
-            "home": {
-                "id": game.get("homeTeamId"),
-                "abbr": home_team.get("abbr"),
-                "city": home_team.get("city"),
-                "team": home_team.get("name", "Unknown"),
-                "division": home_team.get("division"),
-                "overall": home_team.get("overall"),
-                "injuries": home_team.get("injuries"),
-                "user": home_team.get("user"),
-                "score": game.get("homeScore", 0)
-            }
-        })
-
-    return jsonify({
-        "season_type": season_type,
-        "week": week_number,
-        "game_count": len(matchups),
-        "games": matchups
-    })
-
-
-# =========================================================
-# PREGAME AROUND THE LEAGUE
-# =========================================================
-
-@app.route("/analytics/pregame/<season_type>/<week_number>")
-def pregame_analytics(season_type, week_number):
-
-    filename = get_schedule_file(
-        season_type,
-        week_number
-    )
-
-    if not os.path.exists(filename):
-        return jsonify({
-            "error": "Schedule data not found"
-        }), 404
-
-    with open(filename, "r") as f:
-        schedule_data = json.load(f)
-
-    team_map = get_team_map()
-
-    games = schedule_data.get(
-        "gameScheduleInfoList",
-        []
-    )
-
-    previews = []
-
-    for game in games:
-
-        away_id = str(
-            game.get("awayTeamId")
-        )
-
-        home_id = str(
-            game.get("homeTeamId")
+            game.get(
+                "homeTeamId"
+            )
         )
 
         away = team_map.get(
@@ -457,304 +1154,57 @@ def pregame_analytics(season_type, week_number):
             {}
         )
 
-        away_ovr = away.get("overall")
-        home_ovr = home.get("overall")
-
-        ovr_gap = None
-        favorite = "Even"
-        favorite_location = None
-
-        if (
-            away_ovr is not None
-            and home_ovr is not None
-        ):
-
-            ovr_gap = abs(
-                away_ovr - home_ovr
-            )
-
-            if away_ovr > home_ovr:
-                favorite = away.get(
-                    "name",
-                    "Away"
-                )
-
-                favorite_location = "away"
-
-            elif home_ovr > away_ovr:
-                favorite = home.get(
-                    "name",
-                    "Home"
-                )
-
-                favorite_location = "home"
-
-        division_game = (
-            away.get("division")
-            == home.get("division")
-            and away.get("division") is not None
-        )
-
-        user_game = bool(
-            away.get("user")
-            or home.get("user")
-        )
-
-        user_vs_user = bool(
-            away.get("user")
-            and home.get("user")
-        )
-
-        preview = {
-            "schedule_id": game.get("scheduleId"),
-
+        matchups.append({
             "away": {
-                "abbr": away.get("abbr"),
-                "team": away.get(
-                    "name",
-                    "Unknown"
-                ),
-                "overall": away_ovr,
-                "injuries": away.get(
-                    "injuries",
-                    0
-                ),
-                "user": away.get(
-                    "user",
-                    ""
-                )
+                "team":
+                    away.get(
+                        "name",
+                        "Unknown"
+                    ),
+                "overall":
+                    away.get(
+                        "overall"
+                    ),
+                "score":
+                    game.get(
+                        "awayScore",
+                        0
+                    )
             },
 
             "home": {
-                "abbr": home.get("abbr"),
-                "team": home.get(
-                    "name",
-                    "Unknown"
-                ),
-                "overall": home_ovr,
-                "injuries": home.get(
-                    "injuries",
-                    0
-                ),
-                "user": home.get(
-                    "user",
-                    ""
-                )
+                "team":
+                    home.get(
+                        "name",
+                        "Unknown"
+                    ),
+                "overall":
+                    home.get(
+                        "overall"
+                    ),
+                "score":
+                    game.get(
+                        "homeScore",
+                        0
+                    )
             },
 
-            "overall_gap": ovr_gap,
-
-            "favorite_by_overall": favorite,
-
-            "favorite_location":
-                favorite_location,
-
-            "division_game":
-                division_game,
-
-            "user_game":
-                user_game,
-
-            "user_vs_user":
-                user_vs_user,
-
-            "game_of_the_week":
+            "status":
                 game.get(
-                    "isGameOfTheWeek",
-                    False
+                    "status"
                 )
-        }
-
-        previews.append(preview)
-
-    # -----------------------------------------------------
-    # BIGGEST OVR GAP
-    # -----------------------------------------------------
-
-    games_with_ovr = [
-        game
-        for game in previews
-        if game["overall_gap"] is not None
-    ]
-
-    biggest_mismatch = None
-    closest_matchup = None
-    highest_rated_matchup = None
-
-    if games_with_ovr:
-
-        biggest_mismatch = max(
-            games_with_ovr,
-            key=lambda g:
-                g["overall_gap"]
-        )
-
-        closest_matchup = min(
-            games_with_ovr,
-            key=lambda g:
-                g["overall_gap"]
-        )
-
-        highest_rated_matchup = max(
-            games_with_ovr,
-            key=lambda g:
-                (
-                    g["away"]["overall"]
-                    + g["home"]["overall"]
-                )
-        )
-
-    # -----------------------------------------------------
-    # ROAD FAVORITES
-    # -----------------------------------------------------
-
-    road_favorites = [
-        game
-        for game in previews
-        if game[
-            "favorite_location"
-        ] == "away"
-    ]
-
-    # -----------------------------------------------------
-    # HOME FAVORITES
-    # -----------------------------------------------------
-
-    home_favorites = [
-        game
-        for game in previews
-        if game[
-            "favorite_location"
-        ] == "home"
-    ]
-
-    # -----------------------------------------------------
-    # EVEN MATCHUPS
-    # -----------------------------------------------------
-
-    even_matchups = [
-        game
-        for game in previews
-        if game[
-            "favorite_by_overall"
-        ] == "Even"
-    ]
-
-    # -----------------------------------------------------
-    # DIVISION GAMES
-    # -----------------------------------------------------
-
-    division_games = [
-        game
-        for game in previews
-        if game["division_game"]
-    ]
-
-    # -----------------------------------------------------
-    # USER GAMES
-    # -----------------------------------------------------
-
-    user_games = [
-        game
-        for game in previews
-        if game["user_game"]
-    ]
-
-    user_vs_user_games = [
-        game
-        for game in previews
-        if game["user_vs_user"]
-    ]
-
-    # -----------------------------------------------------
-    # GAME OF THE WEEK
-    # -----------------------------------------------------
-
-    game_of_the_week = [
-        game
-        for game in previews
-        if game["game_of_the_week"]
-    ]
+        })
 
     return jsonify({
-        "league": "Project Madden",
+        "season_type":
+            season_type,
 
-        "season_type": season_type,
+        "week":
+            week_number,
 
-        "week": week_number,
-
-        "game_count": len(previews),
-
-        "featured": {
-            "highest_rated_matchup":
-                highest_rated_matchup,
-
-            "biggest_overall_mismatch":
-                biggest_mismatch,
-
-            "closest_overall_matchup":
-                closest_matchup
-        },
-
-        "home_favorites":
-            home_favorites,
-
-        "road_favorites":
-            road_favorites,
-
-        "even_matchups":
-            even_matchups,
-
-        "division_games":
-            division_games,
-
-        "user_games":
-            user_games,
-
-        "user_vs_user_games":
-            user_vs_user_games,
-
-        "game_of_the_week":
-            game_of_the_week,
-
-        "all_matchups":
-            previews
+        "games":
+            matchups
     })
-
-
-# =========================================================
-# CLEAN TEAM LIST
-# =========================================================
-
-@app.route("/analytics/teams")
-def analytics_teams():
-
-    team_map = get_team_map()
-
-    return jsonify({
-        "team_count": len(team_map),
-        "teams": team_map
-    })
-
-
-# =========================================================
-# RAW STANDINGS
-# =========================================================
-
-@app.route("/analytics/standings")
-def analytics_standings():
-
-    data = load_json_file(
-        "standings.json"
-    )
-
-    if not data:
-        return jsonify({
-            "error":
-                "Standings data not found"
-        }), 404
-
-    return jsonify(data)
 
 
 # =========================================================
@@ -762,6 +1212,7 @@ def analytics_standings():
 # =========================================================
 
 if __name__ == "__main__":
+
     app.run(
         host="0.0.0.0",
         port=10000
