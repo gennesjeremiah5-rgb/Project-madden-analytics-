@@ -1088,6 +1088,7 @@ def post_trade_to_discord(analysis):
         ),
 
         "allowed_mentions": {
+            "parse": [],
             "users": mention_ids
         },
 
