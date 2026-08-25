@@ -1,17 +1,73 @@
+from flask import Flask, request, jsonify, render_template_string
+import json
+import os
+import hashlib
+import uuid
+import re
+import requests
+from datetime import datetime, timezone
+
+
 # =========================================================
-# PROJECT MADDEN GAME ANALYST
-# NON-REPETITIVE REACTION ENGINE
+# FLASK APP - MUST STAY AT TOP
 # =========================================================
+
+app = Flask(__name__)
+
+DATA_DIR = "data"
+os.makedirs(DATA_DIR, exist_ok=True)
 
 ANALYST_HISTORY_FILE = "analyst_history.json"
 
 
 # =========================================================
-# ANALYST HISTORY
+# FILE HELPERS
+# =========================================================
+
+def load_json_file(filename):
+    path = os.path.join(DATA_DIR, filename)
+
+    if not os.path.exists(path):
+        return None
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    except Exception:
+        return None
+
+
+def save_json_file(filename, data):
+    path = os.path.join(DATA_DIR, filename)
+
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+
+def stable_choice(options, key):
+    if not options:
+        return ""
+
+    digest = hashlib.sha256(
+        str(key).encode("utf-8")
+    ).hexdigest()
+
+    number = int(
+        digest[:8],
+        16
+    )
+
+    return options[
+        number % len(options)
+    ]
+
+
+# =========================================================
+# NON-REPETITIVE ANALYST HISTORY
 # =========================================================
 
 def load_analyst_history():
-
     history = load_json_file(
         ANALYST_HISTORY_FILE
     )
@@ -25,10 +81,7 @@ def load_analyst_history():
     return history
 
 
-def save_analyst_history(
-    history
-):
-
+def save_analyst_history(history):
     save_json_file(
         ANALYST_HISTORY_FILE,
         history
@@ -40,7 +93,6 @@ def unique_analyst_choice(
     options,
     key
 ):
-
     if not options:
         return ""
 
@@ -58,46 +110,27 @@ def unique_analyst_choice(
     ]
 
     if not available:
-
         available = options[:]
-
         recent = []
 
     digest = hashlib.sha256(
-        (
-            str(key)
-            +
-            category
-        ).encode(
+        f"{category}-{key}".encode(
             "utf-8"
         )
     ).hexdigest()
 
     index = (
-        int(
-            digest[:8],
-            16
-        )
-        %
-        len(
-            available
-        )
+        int(digest[:8], 16)
+        % len(available)
     )
 
-    selected = available[
-        index
-    ]
+    selected = available[index]
 
-    recent.append(
-        selected
+    recent.append(selected)
+
+    history[category] = (
+        recent[-10:]
     )
-
-    # Keep only the latest lines
-    recent = recent[-8:]
-
-    history[
-        category
-    ] = recent
 
     save_analyst_history(
         history
@@ -107,286 +140,1433 @@ def unique_analyst_choice(
 
 
 # =========================================================
-# ANALYST PERSONALITY
+# NFL LOGOS
 # =========================================================
 
-ANALYST_OPENINGS = [
-
-    "I need everybody to understand what we just watched.",
-
-    "There is no way I'm brushing this result aside.",
-
-    "We have to talk about what happened in this game.",
-
-    "This is exactly why you cannot judge a team on reputation alone.",
-
-    "Somebody needs to explain this performance to me.",
-
-    "I watched this game from beginning to end, and I have plenty to say.",
-
-    "This result deserves attention because it told us a lot.",
-
-    "Forget the excuses. Let's talk about what actually happened on the field.",
-
-    "I've seen enough to have a very strong opinion about this one.",
-
-    "This is one of those games where the final score tells only part of the story.",
-
-    "I don't want to hear about expectations right now. I want to talk about execution.",
-
-    "This game gave us plenty of evidence about where these teams stand.",
-
-    "Ladies and gentlemen, this is exactly the kind of performance that gets people talking.",
-
-    "There are wins, there are losses, and then there are games that send a message.",
-
-    "The film is going to be uncomfortable for somebody after this one."
-
-]
-
-
-ANALYST_POSITIVE_CLOSERS = [
-
-    "If they keep playing like this, the rest of the league needs to pay attention.",
-
-    "That is the type of performance that earns respect.",
-
-    "You don't have to like them, but you better take them seriously.",
-
-    "That looked like a team that knew exactly what it wanted to accomplish.",
-
-    "They earned every bit of praise coming their way after this one.",
-
-    "This is how you make people stop doubting you.",
-
-    "Put this performance on the résumé because it mattered.",
-
-    "The standard just got raised after a game like that.",
-
-    "They did their talking on the field, and that's what matters.",
-
-    "That was professional, composed and impressive."
-
-]
+NFL_LOGO_CODES = {
+    "ARI": "ari",
+    "ATL": "atl",
+    "BAL": "bal",
+    "BUF": "buf",
+    "CAR": "car",
+    "CHI": "chi",
+    "CIN": "cin",
+    "CLE": "cle",
+    "DAL": "dal",
+    "DEN": "den",
+    "DET": "det",
+    "GB": "gb",
+    "HOU": "hou",
+    "IND": "ind",
+    "JAX": "jax",
+    "KC": "kc",
+    "LV": "lv",
+    "LAC": "lac",
+    "LAR": "lar",
+    "MIA": "mia",
+    "MIN": "min",
+    "NE": "ne",
+    "NO": "no",
+    "NYG": "nyg",
+    "NYJ": "nyj",
+    "PHI": "phi",
+    "PIT": "pit",
+    "SEA": "sea",
+    "SF": "sf",
+    "TB": "tb",
+    "TEN": "ten",
+    "WAS": "wsh",
+    "WSH": "wsh"
+}
 
 
-ANALYST_NEGATIVE_CLOSERS = [
+def get_logo_url(abbr):
+    code = NFL_LOGO_CODES.get(
+        str(abbr or "").upper(),
+        str(abbr or "").lower()
+    )
 
-    "They better get this fixed before another opponent exposes the same problem.",
-
-    "That cannot become a habit if this team expects to contend.",
-
-    "The coaching staff has plenty to clean up after that performance.",
-
-    "You cannot keep putting yourself in those situations and expect different results.",
-
-    "This team needs answers, because what we saw was not good enough.",
-
-    "The film room is going to be very uncomfortable after this one.",
-
-    "If they don't correct this quickly, the criticism is only going to get louder.",
-
-    "This is the kind of performance that forces everybody in the building to look in the mirror.",
-
-    "No excuses. Get back to work and fix it.",
-
-    "A serious team cannot be satisfied with what it put on the field."
-
-]
+    return (
+        "https://a.espncdn.com/i/teamlogos/"
+        f"nfl/500/{code}.png"
+    )
 
 
 # =========================================================
-# GAME REACTION BANKS
+# TEAM DATA
 # =========================================================
 
-BLOWOUT_REACTIONS = [
+def get_team_map():
+    data = load_json_file(
+        "leagueteams.json"
+    )
 
-    "{winner} didn't just beat {loser}. They controlled this game and made the difference between these teams look enormous.",
+    if not data:
+        return {}
 
-    "This was domination. {winner} dictated the game while {loser} spent most of the night searching for answers.",
+    teams = {}
 
-    "There was nothing accidental about this result. {winner} imposed its will and never gave {loser} a chance to settle in.",
+    for team in data.get(
+        "leagueTeamInfoList",
+        []
+    ):
+        abbr = team.get(
+            "abbrName"
+        )
 
-    "{loser} got overwhelmed. The score reflects exactly how one-sided this game became.",
+        teams[
+            str(team.get("teamId"))
+        ] = {
+            "teamId":
+                team.get("teamId"),
 
-    "When a game gets this lopsided, you have to give {winner} credit and you also have to ask some serious questions about {loser}.",
+            "abbr":
+                abbr,
 
-    "{winner} took control early and never gave it back. That is what a complete performance looks like.",
+            "city":
+                team.get("cityName"),
 
-    "This looked less like a competitive matchup and more like {winner} making a statement at {loser}'s expense.",
+            "name":
+                team.get("displayName"),
 
-    "The difference in execution was obvious. {winner} was sharper, more physical and much more composed."
+            "nickname":
+                team.get("nickName"),
 
-]
+            "overall":
+                team.get("ovrRating"),
 
+            "user":
+                team.get(
+                    "userName",
+                    ""
+                ),
 
-UPSET_REACTIONS = [
+            "logo":
+                get_logo_url(
+                    abbr
+                )
+        }
 
-    "{winner} came into this game as the lower-rated team and clearly did not care what the ratings said.",
-
-    "Throw the overall ratings out the window. {winner} walked onto the field and beat the team that was supposed to have the advantage.",
-
-    "This is why games aren't decided on the roster screen. {winner} earned this upset on the field.",
-
-    "{loser} had the ratings advantage and still couldn't finish the job. That is going to sting.",
-
-    "Nobody should dismiss {winner} after this. They just took down a team that had the advantage on paper.",
-
-    "The ratings told us one thing. The scoreboard told us something completely different.",
-
-    "{winner} just reminded everybody that execution matters more than numbers next to a team name.",
-
-    "If {loser} thought the ratings were going to win this game for them, {winner} gave them a harsh reality check."
-
-]
-
-
-CLOSE_GAME_REACTIONS = [
-
-    "This game came down to execution in the biggest moments, and {winner} found a way to finish.",
-
-    "There was almost nothing separating these teams, but {winner} made enough plays when the pressure was highest.",
-
-    "{loser} had opportunities to steal this game, but {winner} survived every push.",
-
-    "This was a heavyweight fight all the way to the end, and {winner} landed the final meaningful punch.",
-
-    "Nobody ran away with this game. {winner} simply handled the decisive moments better.",
-
-    "When the margin is this small, every possession matters. {winner} understood that just a little better.",
-
-    "{loser} is going to replay several moments from this game because it was absolutely there for the taking.",
-
-    "This was tense, competitive football, and {winner} deserves credit for staying composed."
-
-]
+    return teams
 
 
-NORMAL_WIN_REACTIONS = [
+def find_team(team_name):
+    target = str(
+        team_name
+    ).strip().lower()
 
-    "{winner} was the better team today and the scoreboard reflected it.",
+    for team in get_team_map().values():
+        options = [
+            team.get("name"),
+            team.get("nickname"),
+            team.get("abbr"),
+            team.get("city")
+        ]
 
-    "{winner} handled its business. It wasn't perfect, but it was convincing enough.",
+        for value in options:
+            if (
+                value
+                and str(value)
+                .strip()
+                .lower()
+                == target
+            ):
+                return team
 
-    "There were moments where {loser} threatened to make this interesting, but {winner} always seemed to have an answer.",
+    return None
 
-    "{winner} played with better control and ultimately deserved this result.",
 
-    "You don't need every victory to be dramatic. {winner} simply went out and earned one.",
+def team_by_id(team_id):
+    return get_team_map().get(
+        str(team_id)
+    )
 
-    "{winner} did enough in all the important areas to leave with the win.",
 
-    "The difference wasn't overwhelming, but {winner} consistently made the better plays.",
+def safe_team_name(team_id):
+    team = team_by_id(
+        team_id
+    )
 
-    "{loser} competed, but {winner} was cleaner when it mattered."
+    if not team:
+        return f"Team {team_id}"
 
-]
+    return (
+        team.get("name")
+        or team.get("abbr")
+        or f"Team {team_id}"
+    )
+
+
+def safe_team_overall(team_id):
+    team = team_by_id(
+        team_id
+    )
+
+    if not team:
+        return None
+
+    try:
+        return int(
+            team.get("overall")
+        )
+
+    except Exception:
+        return None
 
 
 # =========================================================
-# PLAYER REACTION BANKS
+# ROSTER HELPERS
 # =========================================================
 
-QB_ELITE_REACTIONS = [
+def recursive_records(obj):
+    records = []
 
-    "{player} was operating at an elite level. {yards} passing yards, {tds} touchdowns and only {ints} interceptions is the type of quarterback performance that changes games.",
+    if isinstance(obj, list):
+        for item in obj:
+            if isinstance(
+                item,
+                dict
+            ):
+                records.append(item)
 
-    "{player} controlled this offense from the quarterback position. With {yards} yards and {tds} touchdowns, the defense never found a comfortable answer.",
+            records.extend(
+                recursive_records(item)
+            )
 
-    "That was quarterback excellence from {player}. The production was there, the decisions were there and the results followed.",
+    elif isinstance(obj, dict):
+        for value in obj.values():
+            if isinstance(
+                value,
+                (list, dict)
+            ):
+                records.extend(
+                    recursive_records(value)
+                )
 
-    "{player} was dealing. When your quarterback gives you {yards} yards and {tds} touchdowns, you expect to win football games.",
+    return records
 
-    "{player} looked completely comfortable running the offense. That was a high-level performance.",
 
-    "If you're looking for the reason this offense was successful, start with {player}. He dictated the game."
+def first_value(record, keys):
+    for key in keys:
+        if key in record:
+            value = record.get(key)
 
+            if value is not None:
+                return value
+
+    return None
+
+
+def detect_player_name(record):
+    full_name = first_value(
+        record,
+        [
+            "fullName",
+            "playerName",
+            "displayName",
+            "name",
+            "full_name",
+            "player_name"
+        ]
+    )
+
+    if full_name:
+        return str(
+            full_name
+        ).strip()
+
+    first = first_value(
+        record,
+        [
+            "firstName",
+            "first_name",
+            "firstname"
+        ]
+    )
+
+    last = first_value(
+        record,
+        [
+            "lastName",
+            "last_name",
+            "lastname"
+        ]
+    )
+
+    if first and last:
+        return (
+            f"{first} {last}"
+        ).strip()
+
+    return None
+
+
+def detect_position(record):
+    value = first_value(
+        record,
+        [
+            "position",
+            "positionAbbr",
+            "positionName",
+            "pos",
+            "position_abbr"
+        ]
+    )
+
+    if value is None:
+        return None
+
+    return str(
+        value
+    ).upper()
+
+
+def detect_overall(record):
+    value = first_value(
+        record,
+        [
+            "playerBestOvr",
+            "playerSchemeOvr",
+            "teamSchemeOvr",
+            "ovrRating",
+            "overallRating",
+            "overall",
+            "ovr",
+            "overall_rating",
+            "playerOverall",
+            "overallPlayerRating"
+        ]
+    )
+
+    try:
+        return int(value)
+
+    except (
+        TypeError,
+        ValueError
+    ):
+        return None
+
+
+def detect_age(record):
+    value = first_value(
+        record,
+        [
+            "age",
+            "playerAge",
+            "player_age"
+        ]
+    )
+
+    try:
+        return int(value)
+
+    except (
+        TypeError,
+        ValueError
+    ):
+        return None
+
+
+def detect_dev(record):
+    value = first_value(
+        record,
+        [
+            "devTrait",
+            "developmentTrait",
+            "development",
+            "dev",
+            "dev_trait"
+        ]
+    )
+
+    if value is None:
+        return "normal"
+
+    if isinstance(value, int):
+        mapping = {
+            0: "normal",
+            1: "star",
+            2: "superstar",
+            3: "xfactor"
+        }
+
+        return mapping.get(
+            value,
+            "normal"
+        )
+
+    text = str(
+        value
+    ).strip().lower()
+
+    if (
+        "factor" in text
+        or text == "xf"
+    ):
+        return "xfactor"
+
+    if "superstar" in text:
+        return "superstar"
+
+    if "star" in text:
+        return "star"
+
+    return "normal"
+
+
+def get_team_roster(team_name):
+    team = find_team(
+        team_name
+    )
+
+    if not team:
+        raise ValueError(
+            f"Could not find team "
+            f"'{team_name}' in "
+            f"Snallabot league data."
+        )
+
+    team_id = team.get(
+        "teamId"
+    )
+
+    roster = load_json_file(
+        f"roster_{team_id}.json"
+    )
+
+    if not roster:
+        raise ValueError(
+            f"No Snallabot roster "
+            f"found for the "
+            f"{team.get('name')}. "
+            f"Run the Snallabot "
+            f"roster export again."
+        )
+
+    return team, roster
+
+
+def build_roster_index(team_name):
+    team, roster = (
+        get_team_roster(
+            team_name
+        )
+    )
+
+    records = recursive_records(
+        roster
+    )
+
+    players = []
+    seen = set()
+
+    for record in records:
+        name = detect_player_name(
+            record
+        )
+
+        overall = detect_overall(
+            record
+        )
+
+        position = detect_position(
+            record
+        )
+
+        age = detect_age(
+            record
+        )
+
+        if not name:
+            continue
+
+        if (
+            overall is None
+            and position is None
+            and age is None
+        ):
+            continue
+
+        key = (
+            name.lower(),
+            position,
+            overall
+        )
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+
+        players.append({
+            "name":
+                name,
+
+            "position":
+                position,
+
+            "overall":
+                overall,
+
+            "age":
+                age,
+
+            "dev":
+                detect_dev(
+                    record
+                )
+        })
+
+    players.sort(
+        key=lambda p: (
+            -(p.get("overall") or 0),
+            p.get("name", "")
+        )
+    )
+
+    return team, players
+
+
+def find_player_on_team(
+    team_name,
+    player_name
+):
+    team, players = (
+        build_roster_index(
+            team_name
+        )
+    )
+
+    target = (
+        player_name
+        .strip()
+        .lower()
+    )
+
+    exact = [
+        player
+        for player in players
+        if player[
+            "name"
+        ].lower() == target
+    ]
+
+    if exact:
+        player = exact[0]
+
+    else:
+        partial = [
+            player
+            for player in players
+            if target
+            in player[
+                "name"
+            ].lower()
+        ]
+
+        if len(partial) == 1:
+            player = partial[0]
+
+        elif len(partial) > 1:
+            names = ", ".join(
+                player["name"]
+                for player in partial[:8]
+            )
+
+            raise ValueError(
+                f"'{player_name}' matched "
+                f"multiple players: {names}."
+            )
+
+        else:
+            raise ValueError(
+                f"Could not find "
+                f"'{player_name}' on the "
+                f"{team.get('name')} roster."
+            )
+
+    missing = []
+
+    if player.get("overall") is None:
+        missing.append("OVR")
+
+    if player.get("age") is None:
+        missing.append("age")
+
+    if not player.get("position"):
+        missing.append("position")
+
+    if missing:
+        raise ValueError(
+            f"Found {player['name']}, "
+            f"but Snallabot did not provide: "
+            f"{', '.join(missing)}."
+        )
+
+    return {
+        "type":
+            "player",
+
+        "name":
+            player["name"],
+
+        "position":
+            player["position"],
+
+        "overall":
+            player["overall"],
+
+        "age":
+            player["age"],
+
+        "dev":
+            player.get(
+                "dev",
+                "normal"
+            )
+    }
+
+
+# =========================================================
+# TRADE PARSER
+# =========================================================
+
+def parse_easy_pick(line):
+    clean = (
+        line.strip()
+        .lower()
+        .replace(",", " ")
+    )
+
+    year_match = re.search(
+        r"\b(20\d{2})\b",
+        clean
+    )
+
+    if not year_match:
+        return None
+
+    year = int(
+        year_match.group(1)
+    )
+
+    round_match = re.search(
+        r"(?:round\s*)?"
+        r"([1-7])"
+        r"(?:st|nd|rd|th)?",
+        clean
+    )
+
+    if not round_match:
+        return None
+
+    round_number = int(
+        round_match.group(1)
+    )
+
+    years_away = max(
+        0,
+        year - datetime.now().year
+    )
+
+    return {
+        "type":
+            "pick",
+
+        "year":
+            year,
+
+        "round":
+            round_number,
+
+        "years_away":
+            years_away
+    }
+
+
+def parse_trade_assets(
+    text,
+    team_name
+):
+    assets = []
+
+    for line in text.splitlines():
+        line = line.strip()
+
+        if not line:
+            continue
+
+        pick = parse_easy_pick(
+            line
+        )
+
+        if pick:
+            assets.append(
+                pick
+            )
+
+            continue
+
+        player = find_player_on_team(
+            team_name,
+            line
+        )
+
+        assets.append(
+            player
+        )
+
+    if not assets:
+        raise ValueError(
+            f"{team_name} must send "
+            f"at least one asset."
+        )
+
+    return assets
+
+
+# =========================================================
+# TRADE VALUE ENGINE
+# =========================================================
+
+DEV_VALUES = {
+    "normal": 0,
+    "star": 5,
+    "superstar": 10,
+    "xfactor": 16
+}
+
+POSITION_MULTIPLIERS = {
+    "QB": 1.30,
+    "WR": 1.08,
+    "TE": 1.02,
+    "LT": 1.08,
+    "RT": 1.03,
+    "LG": 1.00,
+    "RG": 1.00,
+    "C": 1.00,
+    "LE": 1.08,
+    "RE": 1.08,
+    "EDGE": 1.10,
+    "DT": 1.03,
+    "LOLB": 1.03,
+    "ROLB": 1.03,
+    "MLB": 1.00,
+    "LB": 1.00,
+    "CB": 1.08,
+    "FS": 1.03,
+    "SS": 1.03,
+    "HB": 0.94,
+    "RB": 0.94,
+    "FB": 0.80,
+    "K": 0.72,
+    "P": 0.65
+}
+
+PICK_VALUES = {
+    1: 36,
+    2: 24,
+    3: 15,
+    4: 9,
+    5: 5,
+    6: 3,
+    7: 2
+}
+
+
+def calculate_player_value(asset):
+    overall = float(
+        asset["overall"]
+    )
+
+    age = int(
+        asset["age"]
+    )
+
+    position = str(
+        asset["position"]
+    ).upper()
+
+    dev = str(
+        asset.get(
+            "dev",
+            "normal"
+        )
+    ).lower()
+
+    value = max(
+        1,
+        (overall - 60) * 1.8
+    )
+
+    value += DEV_VALUES.get(
+        dev,
+        0
+    )
+
+    if age <= 22:
+        value += 9
+
+    elif age <= 24:
+        value += 6
+
+    elif age <= 26:
+        value += 3
+
+    elif age >= 33:
+        value -= 10
+
+    elif age >= 30:
+        value -= 6
+
+    elif age >= 28:
+        value -= 3
+
+    value *= (
+        POSITION_MULTIPLIERS.get(
+            position,
+            1.0
+        )
+    )
+
+    return round(
+        max(value, 1),
+        2
+    )
+
+
+def calculate_pick_value(asset):
+    round_number = int(
+        asset["round"]
+    )
+
+    years_away = int(
+        asset.get(
+            "years_away",
+            0
+        )
+    )
+
+    value = PICK_VALUES.get(
+        round_number,
+        1
+    )
+
+    if years_away > 0:
+        value *= (
+            0.90 ** years_away
+        )
+
+    return round(
+        value,
+        2
+    )
+
+
+def calculate_asset_value(asset):
+    if asset[
+        "type"
+    ] == "pick":
+        return calculate_pick_value(
+            asset
+        )
+
+    return calculate_player_value(
+        asset
+    )
+
+
+def calculate_package_value(assets):
+    total = 0
+    breakdown = []
+
+    for asset in assets:
+        value = calculate_asset_value(
+            asset
+        )
+
+        total += value
+
+        breakdown.append({
+            **asset,
+            "calculated_value":
+                value
+        })
+
+    return (
+        round(total, 2),
+        breakdown
+    )
+
+
+def trade_grade(
+    received,
+    sent
+):
+    difference = (
+        received - sent
+    )
+
+    if sent <= 0:
+        percentage = 100
+
+    else:
+        percentage = (
+            difference / sent
+        ) * 100
+
+    if percentage >= 40:
+        grade = "A+"
+
+    elif percentage >= 25:
+        grade = "A"
+
+    elif percentage >= 12:
+        grade = "B+"
+
+    elif percentage >= 4:
+        grade = "B"
+
+    elif percentage > -4:
+        grade = "C+"
+
+    elif percentage > -12:
+        grade = "C"
+
+    elif percentage > -25:
+        grade = "D"
+
+    else:
+        grade = "F"
+
+    return {
+        "grade":
+            grade,
+
+        "difference":
+            round(
+                difference,
+                2
+            ),
+
+        "percentage":
+            round(
+                percentage,
+                1
+            )
+    }
+
+
+def committee_review(
+    team_a,
+    team_b,
+    value_a,
+    value_b
+):
+    highest = max(
+        value_a,
+        value_b
+    )
+
+    lowest = min(
+        value_a,
+        value_b
+    )
+
+    if highest <= 0:
+        gap_percent = 0
+
+    else:
+        gap_percent = (
+            (
+                highest - lowest
+            )
+            / highest
+        ) * 100
+
+    gap_percent = round(
+        gap_percent,
+        1
+    )
+
+    if value_a > value_b:
+        advantage_team = team_a
+        disadvantage_team = team_b
+
+    elif value_b > value_a:
+        advantage_team = team_b
+        disadvantage_team = team_a
+
+    else:
+        advantage_team = None
+        disadvantage_team = None
+
+    if gap_percent <= 10:
+        decision = "AUTO APPROVE"
+        level = "GOOD"
+        emoji = "✅"
+
+    elif gap_percent <= 20:
+        decision = "COMMITTEE REVIEW"
+        level = "QUESTIONABLE"
+        emoji = "🟡"
+
+    elif gap_percent < 35:
+        decision = (
+            "STRONG COMMITTEE REVIEW"
+        )
+
+        level = "BAD"
+        emoji = "🟠"
+
+    else:
+        decision = "AUTO DENY"
+        level = "VERY BAD"
+        emoji = "❌"
+
+    return {
+        "decision":
+            decision,
+
+        "level":
+            level,
+
+        "emoji":
+            emoji,
+
+        "value_gap_percent":
+            gap_percent,
+
+        "advantage_team":
+            advantage_team,
+
+        "disadvantage_team":
+            disadvantage_team
+    }
+
+
+# =========================================================
+# TRADE ANALYST
+# =========================================================
+
+TRADE_STEAL_LINES = [
+    "Somebody needs to explain this deal because the value is nowhere close.",
+
+    "I would be asking serious questions if my front office agreed to this.",
+
+    "One side of this trade came away looking a whole lot smarter than the other.",
+
+    "This is exactly the kind of deal people bring up months later and ask how it ever got approved.",
+
+    "There is a clear winner here, and pretending otherwise would be ridiculous."
+]
+
+TRADE_CLOSE_LINES = [
+    "This one is close enough that both teams can defend their thinking.",
+
+    "I can understand the logic from both sides even if I prefer one package.",
+
+    "This is the kind of trade that will really be judged by what happens on the field.",
+
+    "Neither side should be embarrassed by the value in this deal.",
+
+    "This is competitive enough that I can see the argument both ways."
 ]
 
 
-QB_BAD_REACTIONS = [
+def generate_trade_reaction(
+    team_a,
+    team_b,
+    grade_a,
+    grade_b,
+    value_a_received,
+    value_b_received,
+    trade_id
+):
+    if value_a_received > value_b_received:
+        winner = team_a
+        loser = team_b
 
-    "{player} has to be better than this. A quarterback cannot put the offense in danger with {ints} interceptions and expect the rest of the team to constantly rescue him.",
+    elif value_b_received > value_a_received:
+        winner = team_b
+        loser = team_a
 
-    "I'm putting a lot of this on {player}. The quarterback has too much responsibility to play this poorly.",
+    else:
+        winner = None
+        loser = None
 
-    "{player} had a rough day, and there is no way around it. The decision-making has to improve.",
+    gap = max(
+        abs(
+            grade_a["percentage"]
+        ),
+        abs(
+            grade_b["percentage"]
+        )
+    )
 
-    "When the quarterback struggles like {player} did, everybody on offense ends up playing uphill.",
+    if winner is None:
+        return (
+            "Even trade",
+            unique_analyst_choice(
+                "trade_close",
+                TRADE_CLOSE_LINES,
+                trade_id
+            )
+        )
 
-    "This was not good enough from {player}. Turnovers and missed opportunities made life much harder than it needed to be.",
+    if gap >= 25:
+        intro = unique_analyst_choice(
+            "trade_steal",
+            TRADE_STEAL_LINES,
+            trade_id
+        )
 
-    "{player} is going to have to own this performance because the quarterback position demands better."
+        return (
+            f"{winner} won the trade",
+            (
+                f"{intro} "
+                f"I have {winner} getting "
+                f"the better end of this, "
+                f"and {loser} has some "
+                f"explaining to do."
+            )
+        )
 
-]
-
-
-QB_SOLID_REACTIONS = [
-
-    "{player} gave his team a steady performance and avoided becoming the reason they lost.",
-
-    "This wasn't a historic quarterback game, but {player} did enough to keep the offense functioning.",
-
-    "{player} managed the game well and made enough throws when they were needed.",
-
-    "You can win plenty of football games with the kind of performance {player} delivered.",
-
-    "{player} wasn't flawless, but he gave the offense stability.",
-
-    "There were good moments and things to clean up, but {player} kept the offense moving."
-
-]
-
-
-RUSHING_REACTIONS = [
-
-    "{player} punished this defense on the ground. {yards} rushing yards and {tds} touchdowns made him one of the biggest reasons his offense succeeded.",
-
-    "The defense knew {player} was getting the football and still couldn't consistently stop him.",
-
-    "{player} took over the running game. Once he found a rhythm, the defense had a serious problem.",
-
-    "{player} ran with purpose all game long and finished with {yards} yards on the ground.",
-
-    "That was a physical rushing performance from {player}. He kept putting the offense in favorable situations.",
-
-    "{player} made the ground game matter, and that changed the way the defense had to play."
-
-]
-
-
-RECEIVING_REACTIONS = [
-
-    "{player} was a nightmare to cover. {yards} receiving yards and {tds} touchdowns tells you exactly how much damage he did.",
-
-    "Every time the offense needed a big play, {player} seemed to be involved.",
-
-    "{player} completely changed this game as a receiver. The defense never found a consistent answer.",
-
-    "{player} put together a huge receiving performance and forced the secondary to account for him on every snap.",
-
-    "That was a takeover game from {player}. {yards} yards through the air is serious production.",
-
-    "{player} made life miserable for the secondary and delivered whenever his number was called."
-
-]
+    return (
+        f"Slight edge to {winner}",
+        (
+            f"I lean toward {winner}, "
+            f"but this is not a deal "
+            f"I would call completely "
+            f"one-sided."
+        )
+    )
 
 
-DEFENSE_REACTIONS = [
+def analyze_trade(data):
+    team_a = data["team_a"]
+    team_b = data["team_b"]
 
-    "{player} was everywhere defensively. {sacks} sacks and {ints} interceptions is impact football.",
+    value_a_sent, breakdown_a = (
+        calculate_package_value(
+            data["team_a_sends"]
+        )
+    )
 
-    "{player} changed possessions and disrupted the offense all game long.",
+    value_b_sent, breakdown_b = (
+        calculate_package_value(
+            data["team_b_sends"]
+        )
+    )
 
-    "That was a defensive takeover from {player}. He kept showing up around the football.",
+    value_a_received = (
+        value_b_sent
+    )
 
-    "{player} made the offense account for him on every important snap.",
+    value_b_received = (
+        value_a_sent
+    )
 
-    "Defense is about creating problems, and {player} created plenty of them.",
+    grade_a = trade_grade(
+        value_a_received,
+        value_a_sent
+    )
 
-    "{player} delivered the kind of defensive performance coaches will replay in the film room all week."
+    grade_b = trade_grade(
+        value_b_received,
+        value_b_sent
+    )
 
-]
+    trade_id = str(
+        uuid.uuid4()
+    )[:8]
+
+    verdict, reaction = (
+        generate_trade_reaction(
+            team_a,
+            team_b,
+            grade_a,
+            grade_b,
+            value_a_received,
+            value_b_received,
+            trade_id
+        )
+    )
+
+    committee = committee_review(
+        team_a,
+        team_b,
+        value_a_received,
+        value_b_received
+    )
+
+    return {
+        "trade_id":
+            trade_id,
+
+        "team_a":
+            team_a,
+
+        "team_b":
+            team_b,
+
+        "team_a_mention":
+            data[
+                "team_a_mention"
+            ],
+
+        "team_b_mention":
+            data[
+                "team_b_mention"
+            ],
+
+        "team_a_sends":
+            breakdown_a,
+
+        "team_b_sends":
+            breakdown_b,
+
+        "team_a_value_sent":
+            value_a_sent,
+
+        "team_b_value_sent":
+            value_b_sent,
+
+        "team_a_grade":
+            grade_a,
+
+        "team_b_grade":
+            grade_b,
+
+        "verdict":
+            verdict,
+
+        "reaction":
+            reaction,
+
+        "trade_committee":
+            committee,
+
+        "created_at":
+            datetime.now(
+                timezone.utc
+            ).isoformat()
+    }
+
+
+def dev_display(dev):
+    mapping = {
+        "normal": "Normal",
+        "star": "Star",
+        "superstar": "Superstar",
+        "xfactor": "X-Factor"
+    }
+
+    return mapping.get(
+        str(dev).lower(),
+        str(dev)
+    )
+
+
+def summarize_asset(asset):
+    if asset[
+        "type"
+    ] == "pick":
+        return (
+            f"{asset['year']} "
+            f"Round "
+            f"{asset['round']} Pick"
+        )
+
+    return (
+        f"{asset['name']} — "
+        f"{asset['overall']} OVR "
+        f"{asset['position']} • "
+        f"Age {asset['age']} • "
+        f"{dev_display(asset.get('dev'))}"
+    )
+
+
+# =========================================================
+# DISCORD TRADE POST
+# =========================================================
+
+def post_trade_to_discord(
+    analysis
+):
+    webhook_url = os.environ.get(
+        "DISCORD_WEBHOOK_URL"
+    )
+
+    if not webhook_url:
+        return {
+            "sent": False,
+            "error":
+                (
+                    "DISCORD_WEBHOOK_URL "
+                    "is not configured."
+                )
+        }
+
+    team_a_assets = "\n".join(
+        f"• {summarize_asset(asset)}"
+        for asset
+        in analysis[
+            "team_a_sends"
+        ]
+    )
+
+    team_b_assets = "\n".join(
+        f"• {summarize_asset(asset)}"
+        for asset
+        in analysis[
+            "team_b_sends"
+        ]
+    )
+
+    committee = analysis[
+        "trade_committee"
+    ]
+
+    payload = {
+        "content":
+            (
+                f"{analysis['team_a_mention']} "
+                f"{analysis['team_b_mention']}"
+            ),
+
+        "embeds": [
+            {
+                "title":
+                    (
+                        "🚨 PROJECT MADDEN "
+                        "TRADE PROPOSAL"
+                    ),
+
+                "description":
+                    (
+                        f"**{analysis['team_a']} "
+                        f"↔ "
+                        f"{analysis['team_b']}**"
+                        f"\n\n"
+                        f"Trade ID: "
+                        f"`{analysis['trade_id']}`"
+                    ),
+
+                "fields": [
+                    {
+                        "name":
+                            (
+                                f"{analysis['team_a']} "
+                                f"Sends"
+                            ),
+                        "value":
+                            team_a_assets,
+                        "inline":
+                            False
+                    },
+
+                    {
+                        "name":
+                            (
+                                f"{analysis['team_b']} "
+                                f"Sends"
+                            ),
+                        "value":
+                            team_b_assets,
+                        "inline":
+                            False
+                    },
+
+                    {
+                        "name":
+                            "📊 Trade Grades",
+
+                        "value":
+                            (
+                                f"**{analysis['team_a']}:** "
+                                f"{analysis['team_a_grade']['grade']}"
+                                f"\n"
+                                f"**{analysis['team_b']}:** "
+                                f"{analysis['team_b_grade']['grade']}"
+                            ),
+
+                        "inline":
+                            False
+                    },
+
+                    {
+                        "name":
+                            "🏛️ Trade Committee",
+
+                        "value":
+                            (
+                                f"{committee['emoji']} "
+                                f"**{committee['decision']}**"
+                                f"\n"
+                                f"Quality: "
+                                f"{committee['level']}"
+                                f"\n"
+                                f"Value Gap: "
+                                f"{committee['value_gap_percent']}%"
+                            ),
+
+                        "inline":
+                            False
+                    },
+
+                    {
+                        "name":
+                            (
+                                "🎙️ Project Madden "
+                                "First Take"
+                            ),
+
+                        "value":
+                            (
+                                f"**{analysis['verdict']}**"
+                                f"\n\n"
+                                f"{analysis['reaction']}"
+                            ),
+
+                        "inline":
+                            False
+                    }
+                ]
+            }
+        ]
+    }
+
+    try:
+        response = requests.post(
+            webhook_url,
+            json=payload,
+            timeout=10
+        )
+
+        if response.status_code in [
+            200,
+            204
+        ]:
+            return {
+                "sent": True
+            }
+
+        return {
+            "sent": False,
+            "error":
+                (
+                    f"Discord returned "
+                    f"{response.status_code}"
+                )
+        }
+
+    except Exception as e:
+        return {
+            "sent": False,
+            "error": str(e)
+        }
 
 
 # =========================================================
@@ -398,7 +1578,6 @@ def weekly_file(
     week_number,
     stat_type
 ):
-
     return os.path.join(
         DATA_DIR,
         "weekly",
@@ -413,155 +1592,168 @@ def load_weekly_data(
     week_number,
     stat_type
 ):
-
     path = weekly_file(
         season_type,
         week_number,
         stat_type
     )
 
-    if not os.path.exists(
-        path
-    ):
+    if not os.path.exists(path):
         return None
 
     try:
-
         with open(
             path,
             "r",
             encoding="utf-8"
         ) as f:
-
-            return json.load(
-                f
-            )
-
-    except Exception:
-
-        return None
-
-
-# =========================================================
-# GENERIC STAT FIELD READER
-# =========================================================
-
-def stat_value(
-    record,
-    possible_keys,
-    default=0
-):
-
-    value = first_value(
-        record,
-        possible_keys
-    )
-
-    if value is None:
-        return default
-
-    try:
-
-        if isinstance(
-            value,
-            float
-        ):
-            return value
-
-        return int(
-            value
-        )
-
-    except Exception:
-
-        try:
-            return float(
-                value
-            )
-
-        except Exception:
-            return default
-
-
-def stat_player_name(
-    record
-):
-
-    return detect_player_name(
-        record
-    )
-
-
-# =========================================================
-# TEAM LOOKUP BY ID
-# =========================================================
-
-def team_by_id(
-    team_id
-):
-
-    team_map = get_team_map()
-
-    return team_map.get(
-        str(team_id)
-    )
-
-
-def safe_team_name(
-    team_id
-):
-
-    team = team_by_id(
-        team_id
-    )
-
-    if not team:
-        return (
-            f"Team {team_id}"
-        )
-
-    return (
-        team.get(
-            "name"
-        )
-        or team.get(
-            "abbr"
-        )
-        or f"Team {team_id}"
-    )
-
-
-def safe_team_overall(
-    team_id
-):
-
-    team = team_by_id(
-        team_id
-    )
-
-    if not team:
-        return None
-
-    try:
-        return int(
-            team.get(
-                "overall"
-            )
-        )
+            return json.load(f)
 
     except Exception:
         return None
 
 
 # =========================================================
-# GAME COMPLETION CHECK
+# GAME ANALYST BANKS
 # =========================================================
 
-def game_looks_completed(
-    game
-):
+ANALYST_OPENINGS = [
+    "I need everybody to understand what we just watched.",
 
-    away_score = (
+    "There is no way I'm brushing this result aside.",
+
+    "We have to talk about what happened in this game.",
+
+    "Forget the excuses. Let's talk about what actually happened on the field.",
+
+    "Somebody needs to explain this performance to me.",
+
+    "This result told us a whole lot about both of these teams.",
+
+    "The scoreboard is one thing, but the way this game happened matters even more.",
+
+    "I watched enough of this game to know exactly where I stand.",
+
+    "This is the kind of result that gets everybody's attention.",
+
+    "There are certain games you cannot just move past without saying something."
+]
+
+BLOWOUT_LINES = [
+    "{winner} didn't just win. They completely controlled this matchup.",
+
+    "{loser} got overwhelmed, and the score reflects how one-sided this became.",
+
+    "{winner} imposed its will from start to finish.",
+
+    "This looked like a statement from {winner} and a warning sign for {loser}.",
+
+    "The difference in execution between {winner} and {loser} was obvious.",
+
+    "{winner} made this look much easier than anybody should be comfortable with.",
+
+    "There was no point where {loser} looked capable of matching {winner}'s level.",
+
+    "This was domination, not just a normal victory."
+]
+
+UPSET_LINES = [
+    "{winner} came into this as the lower-rated team and clearly did not care.",
+
+    "Throw the ratings away. {winner} earned this one on the field.",
+
+    "This is exactly why games are not decided by overall ratings.",
+
+    "{loser} had the advantage on paper and still could not finish the job.",
+
+    "{winner} just gave everybody a reason to stop overlooking them.",
+
+    "The roster ratings told one story. The scoreboard told another.",
+
+    "{winner} just proved execution matters more than numbers beside a team name.",
+
+    "If {loser} expected its rating advantage to carry it, {winner} delivered a reality check."
+]
+
+CLOSE_LINES = [
+    "{winner} made the plays that mattered when the pressure was highest.",
+
+    "There was almost nothing separating these teams, but {winner} finished better.",
+
+    "{loser} had chances to steal this game and could not close it.",
+
+    "This game came down to the smallest details, and {winner} handled them better.",
+
+    "When the margin is this thin, every mistake becomes enormous.",
+
+    "{winner} stayed composed when this game could have gone either direction.",
+
+    "{loser} will look back at several moments and know this game was there for the taking.",
+
+    "This was a real pressure test, and {winner} survived it."
+]
+
+NORMAL_WIN_LINES = [
+    "{winner} was simply the better team today.",
+
+    "{winner} handled its business and earned the result.",
+
+    "{loser} competed, but {winner} made more winning plays.",
+
+    "{winner} was cleaner in the moments that mattered.",
+
+    "This was not flawless, but {winner} did enough to stay in control.",
+
+    "{winner} consistently found answers whenever {loser} threatened.",
+
+    "The difference was not massive, but {winner} deserved the win.",
+
+    "{winner} played the more complete game."
+]
+
+POSITIVE_CLOSERS = [
+    "You do not have to like them, but you better respect what they just did.",
+
+    "That is the type of performance that gets everybody's attention.",
+
+    "If they keep playing like this, the rest of the league has a problem.",
+
+    "That looked like a team that knew exactly what it wanted to accomplish.",
+
+    "This is how you make people stop doubting you.",
+
+    "They earned every bit of praise coming their way.",
+
+    "Put this one on the résumé.",
+
+    "That is the standard they should be chasing every week."
+]
+
+NEGATIVE_CLOSERS = [
+    "They better fix this before another opponent exposes the exact same problem.",
+
+    "That cannot become a habit if this team expects to contend.",
+
+    "The film room is going to be uncomfortable after this.",
+
+    "This team needs answers because that was not good enough.",
+
+    "No excuses. Get back to work and clean it up.",
+
+    "The criticism is only going to get louder if this keeps happening.",
+
+    "Everybody in that building needs to look at what went wrong.",
+
+    "A serious team cannot be satisfied with this."
+]
+
+
+# =========================================================
+# GAME STORY LOGIC
+# =========================================================
+
+def game_looks_completed(game):
+    away_score = int(
         game.get(
             "awayScore",
             0
@@ -569,7 +1761,7 @@ def game_looks_completed(
         or 0
     )
 
-    home_score = (
+    home_score = int(
         game.get(
             "homeScore",
             0
@@ -577,25 +1769,15 @@ def game_looks_completed(
         or 0
     )
 
-    # We know current unplayed games
-    # are coming through as 0-0.
-    if (
+    # Snallabot currently uses 0-0
+    # for your unplayed games.
+    return (
         away_score != 0
         or home_score != 0
-    ):
-        return True
-
-    return False
+    )
 
 
-# =========================================================
-# CLASSIFY GAME STORY
-# =========================================================
-
-def classify_game_story(
-    game
-):
-
+def classify_game_story(game):
     away_id = game.get(
         "awayTeamId"
     )
@@ -620,48 +1802,26 @@ def classify_game_story(
         or 0
     )
 
-    away_name = (
-        safe_team_name(
-            away_id
-        )
+    away_name = safe_team_name(
+        away_id
     )
 
-    home_name = (
-        safe_team_name(
-            home_id
-        )
+    home_name = safe_team_name(
+        home_id
     )
 
-    away_ovr = (
-        safe_team_overall(
-            away_id
-        )
+    away_ovr = safe_team_overall(
+        away_id
     )
 
-    home_ovr = (
-        safe_team_overall(
-            home_id
-        )
+    home_ovr = safe_team_overall(
+        home_id
     )
 
-    if (
-        away_score
-        ==
-        home_score
-    ):
-
+    if away_score == home_score:
         return {
             "story_type":
                 "tie",
-
-            "winner":
-                None,
-
-            "loser":
-                None,
-
-            "margin":
-                0,
 
             "away":
                 away_name,
@@ -676,61 +1836,21 @@ def classify_game_story(
                 home_score
         }
 
-    if (
-        away_score
-        >
-        home_score
-    ):
-
-        winner = (
-            away_name
-        )
-
-        loser = (
-            home_name
-        )
-
-        winner_score = (
-            away_score
-        )
-
-        loser_score = (
-            home_score
-        )
-
-        winner_ovr = (
-            away_ovr
-        )
-
-        loser_ovr = (
-            home_ovr
-        )
+    if away_score > home_score:
+        winner = away_name
+        loser = home_name
+        winner_score = away_score
+        loser_score = home_score
+        winner_ovr = away_ovr
+        loser_ovr = home_ovr
 
     else:
-
-        winner = (
-            home_name
-        )
-
-        loser = (
-            away_name
-        )
-
-        winner_score = (
-            home_score
-        )
-
-        loser_score = (
-            away_score
-        )
-
-        winner_ovr = (
-            home_ovr
-        )
-
-        loser_ovr = (
-            away_ovr
-        )
+        winner = home_name
+        loser = away_name
+        winner_score = home_score
+        loser_score = away_score
+        winner_ovr = home_ovr
+        loser_ovr = away_ovr
 
     margin = (
         winner_score
@@ -738,44 +1858,25 @@ def classify_game_story(
         loser_score
     )
 
-    upset = False
-
-    if (
+    upset = (
         winner_ovr is not None
         and loser_ovr is not None
-        and winner_ovr
-        <
-        loser_ovr
-    ):
-
-        upset = True
+        and winner_ovr < loser_ovr
+    )
 
     if margin >= 21:
-
-        story_type = (
-            "blowout"
-        )
+        story_type = "blowout"
 
     elif upset:
-
-        story_type = (
-            "upset"
-        )
+        story_type = "upset"
 
     elif margin <= 3:
-
-        story_type = (
-            "close_game"
-        )
+        story_type = "close_game"
 
     else:
-
-        story_type = (
-            "normal_win"
-        )
+        story_type = "normal_win"
 
     return {
-
         "story_type":
             story_type,
 
@@ -817,111 +1918,10 @@ def classify_game_story(
     }
 
 
-# =========================================================
-# GAME HEADLINES
-# =========================================================
-
-def make_game_headline(
-    story
-):
-
-    winner = story.get(
-        "winner"
-    )
-
-    loser = story.get(
-        "loser"
-    )
-
-    story_type = story.get(
-        "story_type"
-    )
-
-    if story_type == "blowout":
-
-        options = [
-
-            f"{winner} sends a message in dominant win",
-
-            f"{winner} overwhelms {loser}",
-
-            f"{winner} leaves no doubt against {loser}",
-
-            f"{loser} has no answers for {winner}",
-
-            f"{winner} dominates from start to finish"
-        ]
-
-    elif story_type == "upset":
-
-        options = [
-
-            f"{winner} shocks {loser}",
-
-            f"{winner} flips the script against {loser}",
-
-            f"Ratings don't matter as {winner} beats {loser}",
-
-            f"{winner} pulls off the upset",
-
-            f"{loser} stunned by {winner}"
-        ]
-
-    elif story_type == "close_game":
-
-        options = [
-
-            f"{winner} survives a thriller",
-
-            f"{winner} escapes against {loser}",
-
-            f"{winner} delivers in the clutch",
-
-            f"{loser} falls just short",
-
-            f"{winner} wins a nail-biter"
-        ]
-
-    else:
-
-        options = [
-
-            f"{winner} handles business",
-
-            f"{winner} gets the job done",
-
-            f"{winner} earns the win over {loser}",
-
-            f"{winner} proves to be the better team",
-
-            f"{winner} takes care of {loser}"
-        ]
-
-    key = (
-        f"{winner}-"
-        f"{loser}-"
-        f"{story.get('winner_score')}-"
-        f"{story.get('loser_score')}"
-    )
-
-    return (
-        unique_analyst_choice(
-            "game_headlines",
-            options,
-            key
-        )
-    )
-
-
-# =========================================================
-# BUILD FULL GAME TAKE
-# =========================================================
-
 def build_game_take(
     story,
     key
 ):
-
     winner = story.get(
         "winner"
     )
@@ -930,108 +1930,86 @@ def build_game_take(
         "loser"
     )
 
+    opening = unique_analyst_choice(
+        "game_opening",
+        ANALYST_OPENINGS,
+        key
+    )
+
     story_type = story.get(
         "story_type"
     )
 
-    opening = (
-        unique_analyst_choice(
-            "game_opening",
-            ANALYST_OPENINGS,
+    if story_type == "blowout":
+        body_template = unique_analyst_choice(
+            "blowout_body",
+            BLOWOUT_LINES,
             key
         )
-    )
 
-    if story_type == "blowout":
-
-        body_template = (
-            unique_analyst_choice(
-                "blowout_body",
-                BLOWOUT_REACTIONS,
-                key
-            )
-        )
-
-        closer = (
-            unique_analyst_choice(
-                "positive_closer",
-                ANALYST_POSITIVE_CLOSERS,
-                key
-            )
+        closer = unique_analyst_choice(
+            "blowout_closer",
+            POSITIVE_CLOSERS,
+            key
         )
 
     elif story_type == "upset":
-
-        body_template = (
-            unique_analyst_choice(
-                "upset_body",
-                UPSET_REACTIONS,
-                key
-            )
+        body_template = unique_analyst_choice(
+            "upset_body",
+            UPSET_LINES,
+            key
         )
 
-        closer = (
-            unique_analyst_choice(
-                "upset_closer",
-                [
-                    "This league just got a lot more interesting.",
+        closer = unique_analyst_choice(
+            "upset_closer",
+            [
+                "The league better remember this result.",
 
-                    "Anybody overlooking this team needs to reconsider immediately.",
+                "Anybody overlooking this team needs to reconsider.",
 
-                    "That is how you earn respect when nobody expects you to win.",
+                "This league just got a lot more interesting.",
 
-                    "The ratings said one thing, but the football field said another.",
+                "That is how you earn respect when nobody expects you to win.",
 
-                    "You better remember this result the next time somebody calls this team an easy matchup."
-                ],
-                key
-            )
+                "The next team on the schedule better be paying attention."
+            ],
+            key
         )
 
     elif story_type == "close_game":
-
-        body_template = (
-            unique_analyst_choice(
-                "close_body",
-                CLOSE_GAME_REACTIONS,
-                key
-            )
+        body_template = unique_analyst_choice(
+            "close_body",
+            CLOSE_LINES,
+            key
         )
 
-        closer = (
-            unique_analyst_choice(
-                "close_closer",
-                [
-                    "Games like this reveal who can handle pressure.",
+        closer = unique_analyst_choice(
+            "close_closer",
+            [
+                "Games like this reveal who handles pressure.",
 
-                    "That final margin shows just how important every mistake became.",
+                "Every possession mattered and everybody knows it.",
 
-                    "Both teams will find plenty to study when they watch the film.",
+                "Both teams are going to find plenty to study on film.",
 
-                    "The winner gets to celebrate, but neither side can afford to ignore what happened.",
+                "A game this close can change confidence in a hurry.",
 
-                    "This is the kind of game that can shape confidence going forward."
-                ],
-                key
-            )
+                "That is why finishing matters."
+            ],
+            key
         )
 
     else:
-
-        body_template = (
-            unique_analyst_choice(
-                "normal_win_body",
-                NORMAL_WIN_REACTIONS,
-                key
-            )
+        body_template = unique_analyst_choice(
+            "normal_body",
+            NORMAL_WIN_LINES,
+            key
         )
 
-        closer = (
-            unique_analyst_choice(
-                "normal_win_closer",
-                ANALYST_POSITIVE_CLOSERS,
-                key
-            )
+        closer = unique_analyst_choice(
+            "normal_closer",
+            POSITIVE_CLOSERS,
+            key
         )
 
     body = body_template.format(
@@ -1046,245 +2024,213 @@ def build_game_take(
     )
 
 
-# =========================================================
-# GAME REACTION ENDPOINT
-# =========================================================
-
-@app.route(
-    "/analyst/reactions/<season_type>/<int:week_number>"
-)
-def analyst_game_reactions(
-    season_type,
-    week_number
+def make_game_headline(
+    story,
+    key
 ):
-
-    schedule_data = (
-        load_weekly_data(
-            season_type,
-            week_number,
-            "schedules"
-        )
+    winner = story.get(
+        "winner"
     )
 
-    if not schedule_data:
-
-        return jsonify({
-
-            "season_type":
-                season_type,
-
-            "week":
-                week_number,
-
-            "status":
-                "waiting",
-
-            "message":
-                (
-                    "No Snallabot "
-                    "schedule export "
-                    "has been received "
-                    "for this week yet."
-                ),
-
-            "reactions":
-                []
-        })
-
-    games = (
-        schedule_data.get(
-            "gameScheduleInfoList",
-            []
-        )
+    loser = story.get(
+        "loser"
     )
 
-    reactions = []
+    story_type = story.get(
+        "story_type"
+    )
 
-    for game in games:
+    if story_type == "blowout":
+        options = [
+            f"{winner} sends a message",
 
-        if not game_looks_completed(
-            game
-        ):
-            continue
+            f"{winner} overwhelms {loser}",
 
-        story = (
-            classify_game_story(
-                game
-            )
-        )
+            f"{winner} leaves no doubt",
 
-        if (
-            story.get(
-                "story_type"
-            )
-            ==
-            "tie"
-        ):
+            f"{loser} has no answers",
 
-            continue
+            f"{winner} dominates the matchup"
+        ]
 
-        key = (
-            f"{season_type}-"
-            f"{week_number}-"
-            f"{game.get('scheduleId')}"
-        )
+    elif story_type == "upset":
+        options = [
+            f"{winner} shocks {loser}",
 
-        headline = (
-            make_game_headline(
-                story
-            )
-        )
+            f"{winner} pulls the upset",
 
-        take = (
-            build_game_take(
-                story,
-                key
-            )
-        )
+            f"{winner} flips the script",
 
-        reactions.append({
+            f"Ratings mean nothing as {winner} wins",
 
-            "schedule_id":
-                game.get(
-                    "scheduleId"
-                ),
+            f"{loser} stunned by {winner}"
+        ]
 
-            "game":
-                (
-                    f"{story['away']} "
-                    f"{story['away_score']}"
-                    f", "
-                    f"{story['home']} "
-                    f"{story['home_score']}"
-                ),
+    elif story_type == "close_game":
+        options = [
+            f"{winner} survives a thriller",
 
-            "story_type":
-                story[
-                    "story_type"
-                ],
+            f"{winner} escapes against {loser}",
 
-            "headline":
-                headline,
+            f"{winner} delivers in the clutch",
 
-            "winner":
-                story[
-                    "winner"
-                ],
+            f"{loser} falls just short",
 
-            "loser":
-                story[
-                    "loser"
-                ],
+            f"{winner} wins a nail-biter"
+        ]
 
-            "margin":
-                story[
-                    "margin"
-                ],
+    else:
+        options = [
+            f"{winner} handles business",
 
-            "winner_ovr":
-                story.get(
-                    "winner_ovr"
-                ),
+            f"{winner} gets the job done",
 
-            "loser_ovr":
-                story.get(
-                    "loser_ovr"
-                ),
+            f"{winner} beats {loser}",
 
-            "upset":
-                story.get(
-                    "upset",
-                    False
-                ),
+            f"{winner} proves to be the better team",
 
-            "analyst":
-                (
-                    "Project Madden "
-                    "First Take"
-                ),
+            f"{winner} takes care of business"
+        ]
 
-            "analyst_take":
-                take
-        })
-
-    return jsonify({
-
-        "season_type":
-            season_type,
-
-        "week":
-            week_number,
-
-        "completed_games_found":
-            len(
-                reactions
-            ),
-
-        "reactions":
-            reactions
-    })
+    return unique_analyst_choice(
+        "game_headlines",
+        options,
+        key
+    )
 
 
 # =========================================================
-# PLAYER STAT RECORDS
+# PLAYER STAT HELPERS
 # =========================================================
 
-def extract_stat_records(
-    data
+def stat_value(
+    record,
+    keys,
+    default=0
 ):
+    value = first_value(
+        record,
+        keys
+    )
 
+    if value is None:
+        return default
+
+    try:
+        return int(value)
+
+    except Exception:
+        try:
+            return float(value)
+
+        except Exception:
+            return default
+
+
+def extract_stat_records(data):
     if not data:
         return []
 
-    records = (
-        recursive_records(
-            data
-        )
+    records = recursive_records(
+        data
     )
 
-    useful = []
-
-    for record in records:
-
-        name = (
-            stat_player_name(
-                record
-            )
+    return [
+        record
+        for record in records
+        if detect_player_name(
+            record
         )
-
-        if name:
-
-            useful.append(
-                record
-            )
-
-    return useful
+    ]
 
 
 # =========================================================
-# PASSING ANALYSIS
+# PLAYER ANALYST
 # =========================================================
+
+QB_ELITE_LINES = [
+    "{player} was operating at an elite level. {yards} yards, {tds} touchdowns and only {ints} interceptions is serious quarterback production.",
+
+    "{player} controlled this offense from the quarterback position and never let the defense get comfortable.",
+
+    "That was high-level quarterback play from {player}. The numbers back it up.",
+
+    "{player} was dealing. When the quarterback gives you that kind of production, the offense becomes extremely difficult to stop.",
+
+    "{player} looked completely comfortable running the offense.",
+
+    "Start with {player} when you're explaining why this offense was successful."
+]
+
+QB_BAD_LINES = [
+    "{player} has to be better than this. {ints} interceptions puts the entire offense in danger.",
+
+    "I am putting a lot of this on {player}. The quarterback cannot repeatedly put the team behind the eight ball.",
+
+    "{player} had a rough day and there is no way around it.",
+
+    "When the quarterback struggles like this, everybody else ends up playing uphill.",
+
+    "This was not good enough from {player}. The decision-making has to improve.",
+
+    "{player} has to own this performance because the quarterback position demands better."
+]
+
+RUSH_LINES = [
+    "{player} punished the defense on the ground with {yards} rushing yards and {tds} touchdowns.",
+
+    "The defense knew {player} was getting the football and still struggled to stop him.",
+
+    "{player} took over the running game once he found a rhythm.",
+
+    "{player} ran with purpose all game long.",
+
+    "That was a physical rushing performance from {player}.",
+
+    "{player} made the ground game matter, and that changed the whole offense."
+]
+
+REC_LINES = [
+    "{player} was a nightmare to cover with {yards} receiving yards and {tds} touchdowns.",
+
+    "Every time the offense needed a big play, {player} seemed to be involved.",
+
+    "{player} completely changed the game as a receiver.",
+
+    "The secondary never found a consistent answer for {player}.",
+
+    "That was a takeover game from {player}.",
+
+    "{player} delivered whenever his number was called."
+]
+
+DEF_LINES = [
+    "{player} was everywhere defensively.",
+
+    "{player} changed possessions and disrupted the offense all game long.",
+
+    "That was a defensive takeover from {player}.",
+
+    "{player} made the offense account for him on every important snap.",
+
+    "Defense is about creating problems, and {player} created plenty of them.",
+
+    "{player} delivered the kind of defensive performance coaches love."
+]
+
 
 def passing_reactions(
     data,
     season_type,
     week_number
 ):
-
-    records = (
-        extract_stat_records(
-            data
-        )
-    )
-
     results = []
 
-    for record in records:
-
-        player = (
-            stat_player_name(
-                record
-            )
+    for record in extract_stat_records(
+        data
+    ):
+        player = detect_player_name(
+            record
         )
 
         yards = stat_value(
@@ -1293,7 +2239,6 @@ def passing_reactions(
                 "passYds",
                 "passingYards",
                 "passYards",
-                "yards",
                 "pass_yds"
             ]
         )
@@ -1304,7 +2249,6 @@ def passing_reactions(
                 "passTDs",
                 "passingTDs",
                 "passTouchdowns",
-                "tds",
                 "pass_tds"
             ]
         )
@@ -1315,7 +2259,6 @@ def passing_reactions(
                 "passInts",
                 "passingInts",
                 "interceptions",
-                "ints",
                 "pass_ints"
             ]
         )
@@ -1328,13 +2271,9 @@ def passing_reactions(
             continue
 
         key = (
-            f"pass-"
             f"{season_type}-"
             f"{week_number}-"
-            f"{player}-"
-            f"{yards}-"
-            f"{tds}-"
-            f"{ints}"
+            f"{player}-passing"
         )
 
         if (
@@ -1342,15 +2281,14 @@ def passing_reactions(
             and tds >= 3
             and ints <= 1
         ):
-
             story_type = (
                 "elite_qb_game"
             )
 
             template = (
                 unique_analyst_choice(
-                    "elite_qb",
-                    QB_ELITE_REACTIONS,
+                    "qb_elite",
+                    QB_ELITE_LINES,
                     key
                 )
             )
@@ -1362,32 +2300,14 @@ def passing_reactions(
                 and tds == 0
             )
         ):
-
             story_type = (
                 "qb_disaster"
             )
 
             template = (
                 unique_analyst_choice(
-                    "bad_qb",
-                    QB_BAD_REACTIONS,
-                    key
-                )
-            )
-
-        elif (
-            yards >= 220
-            or tds >= 2
-        ):
-
-            story_type = (
-                "solid_qb_game"
-            )
-
-            template = (
-                unique_analyst_choice(
-                    "solid_qb",
-                    QB_SOLID_REACTIONS,
+                    "qb_bad",
+                    QB_BAD_LINES,
                     key
                 )
             )
@@ -1395,15 +2315,7 @@ def passing_reactions(
         else:
             continue
 
-        text = template.format(
-            player=player,
-            yards=yards,
-            tds=tds,
-            ints=ints
-        )
-
         results.append({
-
             "player":
                 player,
 
@@ -1425,36 +2337,29 @@ def passing_reactions(
             },
 
             "analyst_take":
-                text
+                template.format(
+                    player=player,
+                    yards=yards,
+                    tds=tds,
+                    ints=ints
+                )
         })
 
     return results
 
-
-# =========================================================
-# RUSHING ANALYSIS
-# =========================================================
 
 def rushing_reactions(
     data,
     season_type,
     week_number
 ):
-
-    records = (
-        extract_stat_records(
-            data
-        )
-    )
-
     results = []
 
-    for record in records:
-
-        player = (
-            stat_player_name(
-                record
-            )
+    for record in extract_stat_records(
+        data
+    ):
+        player = detect_player_name(
+            record
         )
 
         yards = stat_value(
@@ -1484,24 +2389,18 @@ def rushing_reactions(
             continue
 
         key = (
-            f"rush-"
             f"{season_type}-"
             f"{week_number}-"
-            f"{player}-"
-            f"{yards}-"
-            f"{tds}"
+            f"{player}-rushing"
         )
 
-        template = (
-            unique_analyst_choice(
-                "rushing_star",
-                RUSHING_REACTIONS,
-                key
-            )
+        template = unique_analyst_choice(
+            "rush_star",
+            RUSH_LINES,
+            key
         )
 
         results.append({
-
             "player":
                 player,
 
@@ -1530,30 +2429,18 @@ def rushing_reactions(
     return results
 
 
-# =========================================================
-# RECEIVING ANALYSIS
-# =========================================================
-
 def receiving_reactions(
     data,
     season_type,
     week_number
 ):
-
-    records = (
-        extract_stat_records(
-            data
-        )
-    )
-
     results = []
 
-    for record in records:
-
-        player = (
-            stat_player_name(
-                record
-            )
+    for record in extract_stat_records(
+        data
+    ):
+        player = detect_player_name(
+            record
         )
 
         yards = stat_value(
@@ -1583,24 +2470,18 @@ def receiving_reactions(
             continue
 
         key = (
-            f"rec-"
             f"{season_type}-"
             f"{week_number}-"
-            f"{player}-"
-            f"{yards}-"
-            f"{tds}"
+            f"{player}-receiving"
         )
 
-        template = (
-            unique_analyst_choice(
-                "receiving_star",
-                RECEIVING_REACTIONS,
-                key
-            )
+        template = unique_analyst_choice(
+            "receiver_star",
+            REC_LINES,
+            key
         )
 
         results.append({
-
             "player":
                 player,
 
@@ -1629,30 +2510,18 @@ def receiving_reactions(
     return results
 
 
-# =========================================================
-# DEFENSIVE ANALYSIS
-# =========================================================
-
 def defense_reactions(
     data,
     season_type,
     week_number
 ):
-
-    records = (
-        extract_stat_records(
-            data
-        )
-    )
-
     results = []
 
-    for record in records:
-
-        player = (
-            stat_player_name(
-                record
-            )
+    for record in extract_stat_records(
+        data
+    ):
+        player = detect_player_name(
+            record
         )
 
         sacks = stat_value(
@@ -1669,21 +2538,18 @@ def defense_reactions(
             record,
             [
                 "defInts",
-                "interceptions",
                 "defensiveInterceptions",
                 "def_ints"
             ]
         )
 
-        forced_fumbles = (
-            stat_value(
-                record,
-                [
-                    "forcedFumbles",
-                    "fumblesForced",
-                    "ff"
-                ]
-            )
+        forced_fumbles = stat_value(
+            record,
+            [
+                "forcedFumbles",
+                "fumblesForced",
+                "ff"
+            ]
         )
 
         if (
@@ -1694,25 +2560,18 @@ def defense_reactions(
             continue
 
         key = (
-            f"def-"
             f"{season_type}-"
             f"{week_number}-"
-            f"{player}-"
-            f"{sacks}-"
-            f"{ints}-"
-            f"{forced_fumbles}"
+            f"{player}-defense"
         )
 
-        template = (
-            unique_analyst_choice(
-                "defensive_star",
-                DEFENSE_REACTIONS,
-                key
-            )
+        template = unique_analyst_choice(
+            "def_star",
+            DEF_LINES,
+            key
         )
 
         results.append({
-
             "player":
                 player,
 
@@ -1734,10 +2593,13 @@ def defense_reactions(
             },
 
             "analyst_take":
-                template.format(
-                    player=player,
-                    sacks=sacks,
-                    ints=ints
+                (
+                    f"{template} "
+                    f"He finished with "
+                    f"{sacks} sacks, "
+                    f"{ints} interceptions "
+                    f"and {forced_fumbles} "
+                    f"forced fumbles."
                 )
         })
 
@@ -1745,7 +2607,499 @@ def defense_reactions(
 
 
 # =========================================================
-# PLAYER REACTION ENDPOINT
+# HOME ROUTES
+# =========================================================
+
+@app.route("/")
+def home():
+    return jsonify({
+        "status":
+            "online",
+
+        "service":
+            "Project Madden Analytics",
+
+        "snallabot":
+            "connected",
+
+        "trade_center":
+            "/proposetrade",
+
+        "team_api":
+            "/api/teams",
+
+        "player_search":
+            "/api/players",
+
+        "game_analyst":
+            "/analyst/reactions/pre/1",
+
+        "player_analyst":
+            "/analyst/players/pre/1",
+
+        "weekly_show":
+            "/analyst/show/pre/1",
+
+        "discord_webhook_configured":
+            bool(
+                os.environ.get(
+                    "DISCORD_WEBHOOK_URL"
+                )
+            )
+    })
+
+
+@app.route("/health")
+def health():
+    return jsonify({
+        "online":
+            True,
+
+        "discord_webhook_configured":
+            bool(
+                os.environ.get(
+                    "DISCORD_WEBHOOK_URL"
+                )
+            )
+    })
+
+
+# =========================================================
+# SNALLABOT RECEIVER
+# =========================================================
+
+@app.route(
+    "/snallabot/<path:subpath>",
+    methods=[
+        "GET",
+        "POST",
+        "PUT"
+    ]
+)
+def snallabot_receiver(subpath):
+    if request.method == "GET":
+        return jsonify({
+            "working":
+                True,
+
+            "path":
+                subpath
+        })
+
+    data = request.get_json(
+        silent=True
+    )
+
+    if data is None:
+        return jsonify({
+            "success":
+                False,
+
+            "error":
+                "No JSON received"
+        }), 400
+
+    parts = subpath.split(
+        "/"
+    )
+
+    print(
+        "PROJECT MADDEN EXPORT:",
+        subpath
+    )
+
+    if parts[-1] == "leagueteams":
+        save_json_file(
+            "leagueteams.json",
+            data
+        )
+
+        return jsonify({
+            "success":
+                True,
+
+            "type":
+                "leagueteams"
+        })
+
+    if parts[-1] == "standings":
+        save_json_file(
+            "standings.json",
+            data
+        )
+
+        return jsonify({
+            "success":
+                True,
+
+            "type":
+                "standings"
+        })
+
+    if parts[-1] == "extra":
+        save_json_file(
+            "extra.json",
+            data
+        )
+
+        return jsonify({
+            "success":
+                True,
+
+            "type":
+                "extra"
+        })
+
+    if (
+        "freeagents" in parts
+        and parts[-1] == "roster"
+    ):
+        save_json_file(
+            "freeagents_roster.json",
+            data
+        )
+
+        return jsonify({
+            "success":
+                True,
+
+            "type":
+                "freeagents"
+        })
+
+    if (
+        "team" in parts
+        and parts[-1] == "roster"
+    ):
+        team_index = parts.index(
+            "team"
+        )
+
+        team_id = parts[
+            team_index + 1
+        ]
+
+        save_json_file(
+            f"roster_{team_id}.json",
+            data
+        )
+
+        return jsonify({
+            "success":
+                True,
+
+            "type":
+                "roster",
+
+            "team_id":
+                team_id
+        })
+
+    if "week" in parts:
+        try:
+            week_index = parts.index(
+                "week"
+            )
+
+            season_type = parts[
+                week_index + 1
+            ]
+
+            week_number = parts[
+                week_index + 2
+            ]
+
+            stat_type = parts[
+                week_index + 3
+            ]
+
+        except Exception:
+            return jsonify({
+                "success":
+                    False,
+
+                "error":
+                    "Invalid weekly export path"
+            }), 400
+
+        weekly_dir = os.path.join(
+            DATA_DIR,
+            "weekly",
+            season_type,
+            f"week_{week_number}"
+        )
+
+        os.makedirs(
+            weekly_dir,
+            exist_ok=True
+        )
+
+        with open(
+            os.path.join(
+                weekly_dir,
+                f"{stat_type}.json"
+            ),
+            "w",
+            encoding="utf-8"
+        ) as f:
+            json.dump(
+                data,
+                f,
+                indent=2
+            )
+
+        return jsonify({
+            "success":
+                True,
+
+            "type":
+                "weekly",
+
+            "season_type":
+                season_type,
+
+            "week":
+                week_number,
+
+            "stat_type":
+                stat_type
+        })
+
+    return jsonify({
+        "success":
+            True,
+
+        "type":
+            "unknown",
+
+        "path":
+            subpath
+    })
+
+
+# =========================================================
+# TEAM API
+# =========================================================
+
+@app.route("/api/teams")
+def teams_api():
+    teams = list(
+        get_team_map().values()
+    )
+
+    teams.sort(
+        key=lambda t:
+            t.get(
+                "name",
+                ""
+            )
+    )
+
+    return jsonify({
+        "team_count":
+            len(teams),
+
+        "teams":
+            teams
+    })
+
+
+# =========================================================
+# PLAYER API
+# =========================================================
+
+@app.route("/api/players")
+def players_api():
+    team_name = request.args.get(
+        "team",
+        ""
+    )
+
+    query = request.args.get(
+        "q",
+        ""
+    ).strip().lower()
+
+    try:
+        team, players = (
+            build_roster_index(
+                team_name
+            )
+        )
+
+    except Exception as e:
+        return jsonify({
+            "error":
+                str(e)
+        }), 400
+
+    if query:
+        players = [
+            player
+            for player in players
+            if query
+            in player[
+                "name"
+            ].lower()
+        ]
+
+    return jsonify({
+        "team":
+            team.get("name"),
+
+        "team_logo":
+            team.get("logo"),
+
+        "player_count":
+            len(players),
+
+        "players":
+            players[:100]
+    })
+
+
+# =========================================================
+# GAME ANALYST API
+# =========================================================
+
+@app.route(
+    "/analyst/reactions/<season_type>/<int:week_number>"
+)
+def analyst_game_reactions(
+    season_type,
+    week_number
+):
+    schedule_data = load_weekly_data(
+        season_type,
+        week_number,
+        "schedules"
+    )
+
+    if not schedule_data:
+        return jsonify({
+            "season_type":
+                season_type,
+
+            "week":
+                week_number,
+
+            "status":
+                "waiting",
+
+            "message":
+                (
+                    "No Snallabot schedule "
+                    "export received yet."
+                ),
+
+            "reactions":
+                []
+        })
+
+    games = schedule_data.get(
+        "gameScheduleInfoList",
+        []
+    )
+
+    reactions = []
+
+    for game in games:
+        if not game_looks_completed(
+            game
+        ):
+            continue
+
+        story = classify_game_story(
+            game
+        )
+
+        if story.get(
+            "story_type"
+        ) == "tie":
+            continue
+
+        key = (
+            f"{season_type}-"
+            f"{week_number}-"
+            f"{game.get('scheduleId')}"
+        )
+
+        reactions.append({
+            "schedule_id":
+                game.get(
+                    "scheduleId"
+                ),
+
+            "game":
+                (
+                    f"{story['away']} "
+                    f"{story['away_score']}, "
+                    f"{story['home']} "
+                    f"{story['home_score']}"
+                ),
+
+            "story_type":
+                story[
+                    "story_type"
+                ],
+
+            "headline":
+                make_game_headline(
+                    story,
+                    key
+                ),
+
+            "winner":
+                story.get(
+                    "winner"
+                ),
+
+            "loser":
+                story.get(
+                    "loser"
+                ),
+
+            "margin":
+                story.get(
+                    "margin"
+                ),
+
+            "upset":
+                story.get(
+                    "upset",
+                    False
+                ),
+
+            "analyst":
+                (
+                    "Project Madden "
+                    "Debate Analyst"
+                ),
+
+            "analyst_take":
+                build_game_take(
+                    story,
+                    key
+                )
+        })
+
+    return jsonify({
+        "season_type":
+            season_type,
+
+        "week":
+            week_number,
+
+        "completed_games_found":
+            len(reactions),
+
+        "reactions":
+            reactions
+    })
+
+
+# =========================================================
+# PLAYER ANALYST API
 # =========================================================
 
 @app.route(
@@ -1755,43 +3109,33 @@ def analyst_player_reactions(
     season_type,
     week_number
 ):
-
-    passing_data = (
-        load_weekly_data(
-            season_type,
-            week_number,
-            "passing"
-        )
+    passing_data = load_weekly_data(
+        season_type,
+        week_number,
+        "passing"
     )
 
-    rushing_data = (
-        load_weekly_data(
-            season_type,
-            week_number,
-            "rushing"
-        )
+    rushing_data = load_weekly_data(
+        season_type,
+        week_number,
+        "rushing"
     )
 
-    receiving_data = (
-        load_weekly_data(
-            season_type,
-            week_number,
-            "receiving"
-        )
+    receiving_data = load_weekly_data(
+        season_type,
+        week_number,
+        "receiving"
     )
 
-    defense_data = (
-        load_weekly_data(
-            season_type,
-            week_number,
-            "defense"
-        )
+    defense_data = load_weekly_data(
+        season_type,
+        week_number,
+        "defense"
     )
 
     reactions = []
 
     if passing_data:
-
         reactions.extend(
             passing_reactions(
                 passing_data,
@@ -1801,7 +3145,6 @@ def analyst_player_reactions(
         )
 
     if rushing_data:
-
         reactions.extend(
             rushing_reactions(
                 rushing_data,
@@ -1811,7 +3154,6 @@ def analyst_player_reactions(
         )
 
     if receiving_data:
-
         reactions.extend(
             receiving_reactions(
                 receiving_data,
@@ -1821,7 +3163,6 @@ def analyst_player_reactions(
         )
 
     if defense_data:
-
         reactions.extend(
             defense_reactions(
                 defense_data,
@@ -1831,7 +3172,6 @@ def analyst_player_reactions(
         )
 
     return jsonify({
-
         "season_type":
             season_type,
 
@@ -1839,7 +3179,6 @@ def analyst_player_reactions(
             week_number,
 
         "files_received": {
-
             "passing":
                 passing_data
                 is not None,
@@ -1858,9 +3197,7 @@ def analyst_player_reactions(
         },
 
         "reaction_count":
-            len(
-                reactions
-            ),
+            len(reactions),
 
         "status":
             (
@@ -1876,8 +3213,7 @@ def analyst_player_reactions(
 
 
 # =========================================================
-# ANALYST WEEKLY SHOW
-# Combines games + players
+# WEEKLY SHOW
 # =========================================================
 
 @app.route(
@@ -1887,48 +3223,31 @@ def analyst_weekly_show(
     season_type,
     week_number
 ):
-
-    schedule_data = (
-        load_weekly_data(
-            season_type,
-            week_number,
-            "schedules"
-        )
+    schedule_data = load_weekly_data(
+        season_type,
+        week_number,
+        "schedules"
     )
 
     game_segments = []
 
     if schedule_data:
-
-        games = (
-            schedule_data.get(
-                "gameScheduleInfoList",
-                []
-            )
-        )
-
-        for game in games:
-
-            if not (
-                game_looks_completed(
-                    game
-                )
+        for game in schedule_data.get(
+            "gameScheduleInfoList",
+            []
+        ):
+            if not game_looks_completed(
+                game
             ):
                 continue
 
-            story = (
-                classify_game_story(
-                    game
-                )
+            story = classify_game_story(
+                game
             )
 
-            if (
-                story.get(
-                    "story_type"
-                )
-                ==
-                "tie"
-            ):
+            if story.get(
+                "story_type"
+            ) == "tie":
                 continue
 
             key = (
@@ -1939,17 +3258,16 @@ def analyst_weekly_show(
             )
 
             game_segments.append({
-
                 "headline":
                     make_game_headline(
-                        story
+                        story,
+                        key
                     ),
 
                 "game":
                     (
                         f"{story['away']} "
-                        f"{story['away_score']}"
-                        f", "
+                        f"{story['away_score']}, "
                         f"{story['home']} "
                         f"{story['home_score']}"
                     ),
@@ -1966,42 +3284,33 @@ def analyst_weekly_show(
                     )
             })
 
-    passing_data = (
-        load_weekly_data(
-            season_type,
-            week_number,
-            "passing"
-        )
-    )
-
-    rushing_data = (
-        load_weekly_data(
-            season_type,
-            week_number,
-            "rushing"
-        )
-    )
-
-    receiving_data = (
-        load_weekly_data(
-            season_type,
-            week_number,
-            "receiving"
-        )
-    )
-
-    defense_data = (
-        load_weekly_data(
-            season_type,
-            week_number,
-            "defense"
-        )
-    )
-
     player_segments = []
 
-    if passing_data:
+    passing_data = load_weekly_data(
+        season_type,
+        week_number,
+        "passing"
+    )
 
+    rushing_data = load_weekly_data(
+        season_type,
+        week_number,
+        "rushing"
+    )
+
+    receiving_data = load_weekly_data(
+        season_type,
+        week_number,
+        "receiving"
+    )
+
+    defense_data = load_weekly_data(
+        season_type,
+        week_number,
+        "defense"
+    )
+
+    if passing_data:
         player_segments.extend(
             passing_reactions(
                 passing_data,
@@ -2011,7 +3320,6 @@ def analyst_weekly_show(
         )
 
     if rushing_data:
-
         player_segments.extend(
             rushing_reactions(
                 rushing_data,
@@ -2021,7 +3329,6 @@ def analyst_weekly_show(
         )
 
     if receiving_data:
-
         player_segments.extend(
             receiving_reactions(
                 receiving_data,
@@ -2031,7 +3338,6 @@ def analyst_weekly_show(
         )
 
     if defense_data:
-
         player_segments.extend(
             defense_reactions(
                 defense_data,
@@ -2041,7 +3347,6 @@ def analyst_weekly_show(
         )
 
     return jsonify({
-
         "show":
             "Project Madden First Take",
 
@@ -2065,12 +3370,1121 @@ def analyst_weekly_show(
 
         "total_segments":
             (
-                len(
-                    game_segments
-                )
+                len(game_segments)
                 +
-                len(
-                    player_segments
-                )
+                len(player_segments)
             )
     })
+
+
+# =========================================================
+# TRADE PAGE
+# =========================================================
+
+TRADE_PAGE = """
+<!DOCTYPE html>
+<html>
+<head>
+
+<meta name="viewport"
+content="width=device-width, initial-scale=1">
+
+<title>Project Madden Trade Center</title>
+
+<style>
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    background: #0b0c10;
+    color: white;
+    font-family: Arial, sans-serif;
+}
+
+.container {
+    max-width: 900px;
+    margin: auto;
+    padding: 18px;
+}
+
+.title {
+    text-align: center;
+    font-size: 30px;
+    font-weight: 900;
+}
+
+.subtitle {
+    text-align: center;
+    color: #8e94a5;
+    margin-bottom: 25px;
+}
+
+.card,
+.result,
+.committee {
+    background: #171920;
+    border: 1px solid #292d39;
+    border-radius: 16px;
+    padding: 18px;
+    margin-bottom: 18px;
+}
+
+input,
+select {
+    width: 100%;
+    padding: 13px;
+    margin-top: 7px;
+    margin-bottom: 12px;
+    background: #0e1016;
+    color: white;
+    border: 1px solid #363b49;
+    border-radius: 11px;
+    font-size: 16px;
+}
+
+button {
+    width: 100%;
+    padding: 15px;
+    border: 0;
+    border-radius: 11px;
+    background: #5865f2;
+    color: white;
+    font-size: 17px;
+    font-weight: 800;
+}
+
+.team-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.team-logo {
+    width: 42px;
+    height: 42px;
+    object-fit: contain;
+}
+
+.search-results {
+    background: #151821;
+    border: 1px solid #353a48;
+    border-radius: 11px;
+    max-height: 280px;
+    overflow-y: auto;
+    display: none;
+}
+
+.search-results.open {
+    display: block;
+}
+
+.player-option {
+    padding: 12px;
+    border-bottom: 1px solid #282c35;
+}
+
+.player-option:last-child {
+    border-bottom: 0;
+}
+
+.player-option strong {
+    display: block;
+}
+
+.small {
+    color: #9ba1af;
+    font-size: 13px;
+    margin-top: 4px;
+}
+
+.asset {
+    background: #20232c;
+    border-radius: 10px;
+    padding: 10px;
+    margin-top: 8px;
+}
+
+.error {
+    background: #42191d;
+    padding: 14px;
+    border-radius: 10px;
+    margin-bottom: 15px;
+}
+
+.success {
+    background: #15361d;
+    padding: 14px;
+    border-radius: 10px;
+    margin-bottom: 15px;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="container">
+
+<div class="title">
+🏈 PROJECT MADDEN
+</div>
+
+<div class="subtitle">
+Trade Proposal Center
+</div>
+
+
+{% if error %}
+
+<div class="error">
+{{ error }}
+</div>
+
+{% endif %}
+
+
+{% if analysis %}
+
+<div class="result">
+
+<h2>
+🚨 TRADE PROPOSED
+</h2>
+
+<h3>
+{{ analysis.team_a }} Sends
+</h3>
+
+{% for asset in analysis.team_a_sends %}
+<p>
+• {{ summarize(asset) }}
+</p>
+{% endfor %}
+
+<h3>
+{{ analysis.team_b }} Sends
+</h3>
+
+{% for asset in analysis.team_b_sends %}
+<p>
+• {{ summarize(asset) }}
+</p>
+{% endfor %}
+
+<h3>
+📊 Grades
+</h3>
+
+<p>
+{{ analysis.team_a }}:
+<strong>
+{{ analysis.team_a_grade.grade }}
+</strong>
+</p>
+
+<p>
+{{ analysis.team_b }}:
+<strong>
+{{ analysis.team_b_grade.grade }}
+</strong>
+</p>
+
+<h3>
+🎙️ Project Madden First Take
+</h3>
+
+<p>
+<strong>
+{{ analysis.verdict }}
+</strong>
+</p>
+
+<p>
+{{ analysis.reaction }}
+</p>
+
+</div>
+
+
+<div class="committee">
+
+<h2>
+🏛️ Trade Committee
+</h2>
+
+<h2>
+{{ analysis.trade_committee.emoji }}
+{{ analysis.trade_committee.decision }}
+</h2>
+
+<p>
+Value Gap:
+{{ analysis.trade_committee.value_gap_percent }}%
+</p>
+
+</div>
+
+
+{% if discord.sent %}
+
+<div class="success">
+✅ Posted to Discord.
+</div>
+
+{% else %}
+
+<div class="error">
+Discord failed:
+{{ discord.error }}
+</div>
+
+{% endif %}
+
+<a href="/proposetrade">
+<button>
+Propose Another Trade
+</button>
+</a>
+
+
+{% else %}
+
+
+<form
+method="POST"
+id="tradeForm">
+
+
+<div class="card">
+
+<h2>
+TEAM A
+</h2>
+
+<label>
+Select Team
+</label>
+
+<select
+name="team_a"
+id="teamA"
+required>
+
+<option value="">
+Select Team A
+</option>
+
+</select>
+
+<div
+id="teamALogo">
+</div>
+
+<label>
+Discord @
+</label>
+
+<input
+name="team_a_mention"
+placeholder="@RavensOwner"
+required>
+
+<label>
+Search Players
+</label>
+
+<input
+id="playerSearchA"
+placeholder="Select a team first"
+disabled>
+
+<div
+id="resultsA"
+class="search-results">
+</div>
+
+<div
+id="selectedA">
+</div>
+
+<label>
+Draft Pick
+</label>
+
+<select id="pickYearA">
+<option>2027</option>
+<option>2028</option>
+<option>2029</option>
+<option>2030</option>
+<option>2031</option>
+</select>
+
+<select id="pickRoundA">
+<option value="1">Round 1</option>
+<option value="2">Round 2</option>
+<option value="3">Round 3</option>
+<option value="4">Round 4</option>
+<option value="5">Round 5</option>
+<option value="6">Round 6</option>
+<option value="7">Round 7</option>
+</select>
+
+<button
+type="button"
+onclick="addPick('A')">
++ Add Pick
+</button>
+
+<input
+type="hidden"
+name="team_a_assets"
+id="assetsA">
+
+</div>
+
+
+<div class="card">
+
+<h2>
+TEAM B
+</h2>
+
+<label>
+Select Team
+</label>
+
+<select
+name="team_b"
+id="teamB"
+required>
+
+<option value="">
+Select Team B
+</option>
+
+</select>
+
+<div
+id="teamBLogo">
+</div>
+
+<label>
+Discord @
+</label>
+
+<input
+name="team_b_mention"
+placeholder="@ChiefsOwner"
+required>
+
+<label>
+Search Players
+</label>
+
+<input
+id="playerSearchB"
+placeholder="Select a team first"
+disabled>
+
+<div
+id="resultsB"
+class="search-results">
+</div>
+
+<div
+id="selectedB">
+</div>
+
+<label>
+Draft Pick
+</label>
+
+<select id="pickYearB">
+<option>2027</option>
+<option>2028</option>
+<option>2029</option>
+<option>2030</option>
+<option>2031</option>
+</select>
+
+<select id="pickRoundB">
+<option value="1">Round 1</option>
+<option value="2">Round 2</option>
+<option value="3">Round 3</option>
+<option value="4">Round 4</option>
+<option value="5">Round 5</option>
+<option value="6">Round 6</option>
+<option value="7">Round 7</option>
+</select>
+
+<button
+type="button"
+onclick="addPick('B')">
++ Add Pick
+</button>
+
+<input
+type="hidden"
+name="team_b_assets"
+id="assetsB">
+
+</div>
+
+
+<button
+type="submit">
+🚨 PROPOSE TRADE
+</button>
+
+</form>
+
+
+<script>
+
+const teams = [];
+
+const selected = {
+    A: [],
+    B: []
+};
+
+
+async function loadTeams() {
+
+    const res =
+        await fetch(
+            "/api/teams"
+        );
+
+    const data =
+        await res.json();
+
+    teams.push(
+        ...(data.teams || [])
+    );
+
+    ["A","B"].forEach(side => {
+
+        const select =
+            document.getElementById(
+                "team" + side
+            );
+
+        teams.forEach(team => {
+
+            const option =
+                document.createElement(
+                    "option"
+                );
+
+            option.value =
+                team.name;
+
+            option.textContent =
+                `${team.name} (${team.abbr})`;
+
+            option.dataset.logo =
+                team.logo;
+
+            select.appendChild(
+                option
+            );
+
+        });
+
+        select.addEventListener(
+            "change",
+            () => {
+
+                selected[side] =
+                    [];
+
+                syncAssets(side);
+
+                const search =
+                    document.getElementById(
+                        "playerSearch"
+                        + side
+                    );
+
+                if (select.value) {
+                    search.disabled =
+                        false;
+
+                    search.placeholder =
+                        `Search ${select.value} players...`;
+
+                    const team =
+                        teams.find(
+                            t =>
+                            t.name
+                            ===
+                            select.value
+                        );
+
+                    document.getElementById(
+                        "team"
+                        + side
+                        + "Logo"
+                    ).innerHTML =
+                        team
+                        ?
+                        `<div class="team-row">
+                        <img
+                        class="team-logo"
+                        src="${team.logo}">
+                        <strong>
+                        ${team.name}
+                        </strong>
+                        </div>`
+                        :
+                        "";
+
+                } else {
+
+                    search.disabled =
+                        true;
+                }
+
+            }
+        );
+
+    });
+}
+
+
+async function searchPlayers(
+    side
+) {
+
+    const team =
+        document.getElementById(
+            "team" + side
+        ).value;
+
+    const query =
+        document.getElementById(
+            "playerSearch"
+            + side
+        ).value;
+
+    if (!team) {
+        return;
+    }
+
+    const res =
+        await fetch(
+            "/api/players?team="
+            +
+            encodeURIComponent(team)
+            +
+            "&q="
+            +
+            encodeURIComponent(query)
+        );
+
+    const data =
+        await res.json();
+
+    const box =
+        document.getElementById(
+            "results" + side
+        );
+
+    box.innerHTML = "";
+
+    if (
+        !data.players
+        ||
+        data.players.length
+        === 0
+    ) {
+
+        box.innerHTML =
+            "<div class='player-option'>No players found</div>";
+
+        box.classList.add(
+            "open"
+        );
+
+        return;
+    }
+
+    data.players
+    .slice(0,30)
+    .forEach(player => {
+
+        const div =
+            document.createElement(
+                "div"
+            );
+
+        div.className =
+            "player-option";
+
+        div.innerHTML = `
+            <strong>
+            ${player.name}
+            </strong>
+
+            <div
+            class="small">
+
+            ${player.overall}
+            OVR
+            •
+            ${player.position}
+            •
+            Age
+            ${player.age}
+            •
+            ${player.dev}
+
+            </div>
+        `;
+
+        div.onclick = () => {
+
+            if (
+                selected[side]
+                .some(
+                    x =>
+                    x.type
+                    ===
+                    "player"
+                    &&
+                    x.name
+                    ===
+                    player.name
+                )
+            ) {
+                return;
+            }
+
+            selected[side]
+            .push({
+                type:
+                    "player",
+
+                name:
+                    player.name
+            });
+
+            document.getElementById(
+                "playerSearch"
+                + side
+            ).value = "";
+
+            box.classList.remove(
+                "open"
+            );
+
+            syncAssets(side);
+
+        };
+
+        box.appendChild(
+            div
+        );
+
+    });
+
+    box.classList.add(
+        "open"
+    );
+}
+
+
+function addPick(side) {
+
+    const year =
+        document.getElementById(
+            "pickYear"
+            + side
+        ).value;
+
+    const round =
+        document.getElementById(
+            "pickRound"
+            + side
+        ).value;
+
+    selected[side]
+    .push({
+        type:
+            "pick",
+
+        year:
+            year,
+
+        round:
+            round
+    });
+
+    syncAssets(side);
+}
+
+
+function removeAsset(
+    side,
+    index
+) {
+
+    selected[side]
+    .splice(
+        index,
+        1
+    );
+
+    syncAssets(side);
+}
+
+
+function syncAssets(side) {
+
+    const box =
+        document.getElementById(
+            "selected"
+            + side
+        );
+
+    box.innerHTML = "";
+
+    const lines = [];
+
+    selected[side]
+    .forEach(
+        (item,index) => {
+
+            let label = "";
+
+            if (
+                item.type
+                ===
+                "player"
+            ) {
+
+                label =
+                    item.name;
+
+                lines.push(
+                    item.name
+                );
+
+            } else {
+
+                label =
+                    `${item.year}
+                    Round
+                    ${item.round}`;
+
+                lines.push(
+                    `${item.year} Round ${item.round}`
+                );
+            }
+
+            const div =
+                document.createElement(
+                    "div"
+                );
+
+            div.className =
+                "asset";
+
+            div.innerHTML =
+                `${label}
+                <button
+                type="button"
+                style="
+                width:auto;
+                float:right;
+                padding:4px 9px;
+                "
+                onclick="
+                removeAsset(
+                    '${side}',
+                    ${index}
+                )">
+                ✕
+                </button>`;
+
+            box.appendChild(
+                div
+            );
+
+        }
+    );
+
+    document.getElementById(
+        "assets"
+        + side
+    ).value =
+        lines.join(
+            "\\n"
+        );
+}
+
+
+["A","B"].forEach(side => {
+
+    document.getElementById(
+        "playerSearch"
+        + side
+    ).addEventListener(
+        "input",
+        () => {
+            searchPlayers(
+                side
+            );
+        }
+    );
+
+});
+
+
+document.getElementById(
+    "tradeForm"
+).addEventListener(
+    "submit",
+    event => {
+
+        syncAssets("A");
+        syncAssets("B");
+
+        if (
+            selected.A.length
+            === 0
+            ||
+            selected.B.length
+            === 0
+        ) {
+
+            event.preventDefault();
+
+            alert(
+                "Both teams must send at least one asset."
+            );
+
+        }
+
+    }
+);
+
+
+loadTeams();
+
+</script>
+
+
+{% endif %}
+
+
+</div>
+
+</body>
+</html>
+"""
+
+
+# =========================================================
+# TRADE ROUTE
+# =========================================================
+
+@app.route(
+    "/proposetrade",
+    methods=[
+        "GET",
+        "POST"
+    ]
+)
+def propose_trade():
+    if request.method == "GET":
+        return render_template_string(
+            TRADE_PAGE,
+            analysis=None,
+            error=None,
+            discord=None,
+            summarize=
+                summarize_asset
+        )
+
+    team_a = request.form.get(
+        "team_a",
+        ""
+    ).strip()
+
+    team_b = request.form.get(
+        "team_b",
+        ""
+    ).strip()
+
+    mention_a = request.form.get(
+        "team_a_mention",
+        ""
+    ).strip()
+
+    mention_b = request.form.get(
+        "team_b_mention",
+        ""
+    ).strip()
+
+    if not team_a or not team_b:
+        return render_template_string(
+            TRADE_PAGE,
+            analysis=None,
+            error=
+                "Select both teams.",
+            discord=None,
+            summarize=
+                summarize_asset
+        )
+
+    if (
+        team_a.lower()
+        ==
+        team_b.lower()
+    ):
+        return render_template_string(
+            TRADE_PAGE,
+            analysis=None,
+            error=
+                (
+                    "A team cannot "
+                    "trade with itself."
+                ),
+            discord=None,
+            summarize=
+                summarize_asset
+        )
+
+    try:
+        team_a_assets = (
+            parse_trade_assets(
+                request.form.get(
+                    "team_a_assets",
+                    ""
+                ),
+                team_a
+            )
+        )
+
+        team_b_assets = (
+            parse_trade_assets(
+                request.form.get(
+                    "team_b_assets",
+                    ""
+                ),
+                team_b
+            )
+        )
+
+    except Exception as e:
+        return render_template_string(
+            TRADE_PAGE,
+            analysis=None,
+            error=
+                str(e),
+            discord=None,
+            summarize=
+                summarize_asset
+        )
+
+    analysis = analyze_trade({
+        "team_a":
+            team_a,
+
+        "team_b":
+            team_b,
+
+        "team_a_mention":
+            mention_a,
+
+        "team_b_mention":
+            mention_b,
+
+        "team_a_sends":
+            team_a_assets,
+
+        "team_b_sends":
+            team_b_assets
+    })
+
+    proposals = load_json_file(
+        "trade_proposals.json"
+    )
+
+    if not isinstance(
+        proposals,
+        list
+    ):
+        proposals = []
+
+    proposals.append(
+        analysis
+    )
+
+    save_json_file(
+        "trade_proposals.json",
+        proposals
+    )
+
+    discord_result = (
+        post_trade_to_discord(
+            analysis
+        )
+    )
+
+    return render_template_string(
+        TRADE_PAGE,
+        analysis=
+            analysis,
+        error=
+            None,
+        discord=
+            discord_result,
+        summarize=
+            summarize_asset
+    )
+
+
+# =========================================================
+# TRADE PROPOSALS API
+# =========================================================
+
+@app.route(
+    "/analyst/trade-proposals"
+)
+def trade_proposals_api():
+    proposals = load_json_file(
+        "trade_proposals.json"
+    )
+
+    if not isinstance(
+        proposals,
+        list
+    ):
+        proposals = []
+
+    return jsonify({
+        "count":
+            len(proposals),
+
+        "proposals":
+            proposals
+    })
+
+
+# =========================================================
+# START APP
+# THIS MUST STAY LAST
+# =========================================================
+
+if __name__ == "__main__":
+    app.run(
+        host="0.0.0.0",
+        port=10000
+    )
