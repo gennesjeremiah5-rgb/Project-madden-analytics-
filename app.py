@@ -3266,21 +3266,12 @@ def register_trade_slash_command():
             )
         }
 
-    def player_option(name, description):
+    def asset_option(name, description, required=False):
         return {
             "type": 3,
             "name": name,
             "description": description,
-            "required": False,
-            "autocomplete": True
-        }
-
-    def pick_option(name, description):
-        return {
-            "type": 3,
-            "name": name,
-            "description": description,
-            "required": False,
+            "required": required,
             "autocomplete": True
         }
 
@@ -3291,6 +3282,7 @@ def register_trade_slash_command():
             "for League Office Review"
         ),
         "options": [
+            # Required options must come first.
             {
                 "type": 3,
                 "name": "team_a",
@@ -3304,25 +3296,10 @@ def register_trade_slash_command():
                 "description": "Discord owner of Team A",
                 "required": True
             },
-            player_option(
-                "team_a_player_1",
-                "Team A player #1"
-            ),
-            player_option(
-                "team_a_player_2",
-                "Team A player #2"
-            ),
-            player_option(
-                "team_a_player_3",
-                "Team A player #3"
-            ),
-            pick_option(
-                "team_a_pick_1",
-                "Team A draft pick #1"
-            ),
-            pick_option(
-                "team_a_pick_2",
-                "Team A draft pick #2"
+            asset_option(
+                "team_a_asset_1",
+                "Team A player or draft pick #1",
+                True
             ),
             {
                 "type": 3,
@@ -3337,25 +3314,44 @@ def register_trade_slash_command():
                 "description": "Discord owner of Team B",
                 "required": True
             },
-            player_option(
-                "team_b_player_1",
-                "Team B player #1"
+            asset_option(
+                "team_b_asset_1",
+                "Team B player or draft pick #1",
+                True
             ),
-            player_option(
-                "team_b_player_2",
-                "Team B player #2"
+
+            # Optional extra assets.
+            asset_option(
+                "team_a_asset_2",
+                "Team A player or draft pick #2"
             ),
-            player_option(
-                "team_b_player_3",
-                "Team B player #3"
+            asset_option(
+                "team_a_asset_3",
+                "Team A player or draft pick #3"
             ),
-            pick_option(
-                "team_b_pick_1",
-                "Team B draft pick #1"
+            asset_option(
+                "team_a_asset_4",
+                "Team A player or draft pick #4"
             ),
-            pick_option(
-                "team_b_pick_2",
-                "Team B draft pick #2"
+            asset_option(
+                "team_a_asset_5",
+                "Team A player or draft pick #5"
+            ),
+            asset_option(
+                "team_b_asset_2",
+                "Team B player or draft pick #2"
+            ),
+            asset_option(
+                "team_b_asset_3",
+                "Team B player or draft pick #3"
+            ),
+            asset_option(
+                "team_b_asset_4",
+                "Team B player or draft pick #4"
+            ),
+            asset_option(
+                "team_b_asset_5",
+                "Team B player or draft pick #5"
             )
         ]
     }
@@ -3407,8 +3403,7 @@ def register_trade_slash_command():
         "scope": scope,
         "guild_id_configured": bool(guild_id),
         "trade_ui": (
-            "3 player slots + 2 draft-pick "
-            "dropdowns per team"
+            "5 clean player/pick asset slots per team"
         ),
         "note": (
             "Guild command updates are nearly instant."
@@ -3505,48 +3500,8 @@ def handle_trade_autocomplete(interaction):
             }
         })
 
-    # DRAFT PICK DROPDOWNS
-    if "_pick_" in focused_name:
-        query = raw_value.lower()
-        current_year = datetime.now().year
-
-        # Include current season plus three future draft classes.
-        pick_choices = []
-
-        for year in range(
-            current_year,
-            current_year + 4
-        ):
-            for round_number in range(1, 8):
-                value = (
-                    f"{year} Round "
-                    f"{round_number}"
-                )
-
-                if (
-                    not query
-                    or query in value.lower()
-                ):
-                    pick_choices.append({
-                        "name": value,
-                        "value": value
-                    })
-
-                if len(pick_choices) >= 25:
-                    break
-
-            if len(pick_choices) >= 25:
-                break
-
-        return jsonify({
-            "type": 8,
-            "data": {
-                "choices": pick_choices
-            }
-        })
-
-    # PLAYER DROPDOWNS
-    if "_player_" in focused_name:
+    # COMBINED PLAYER + DRAFT PICK ASSET DROPDOWNS
+    if "_asset_" in focused_name:
         side = (
             "team_a"
             if focused_name.startswith("team_a")
@@ -3575,93 +3530,132 @@ def handle_trade_autocomplete(interaction):
                 }
             })
 
-        # Don't offer the same player twice on one side.
-        selected_players = set()
+        # Hide assets already chosen in another slot on the same side.
+        selected_assets = set()
 
         for key, value in option_map.items():
             if (
                 key.startswith(
-                    f"{side}_player_"
+                    f"{side}_asset_"
                 )
                 and key != focused_name
                 and value
             ):
-                selected_players.add(
+                selected_assets.add(
                     str(value).lower()
                 )
 
         query = raw_value.lower()
+        choices = []
 
+        # Player choices from Snallabot roster.
         try:
             team, players = build_roster_index(
                 team_name
             )
+
+            for player in players:
+                player_name = str(
+                    player.get(
+                        "name",
+                        ""
+                    )
+                ).strip()
+
+                if not player_name:
+                    continue
+
+                if (
+                    player_name.lower()
+                    in selected_assets
+                ):
+                    continue
+
+                position = str(
+                    player.get(
+                        "position",
+                        ""
+                    )
+                )
+
+                overall = player.get(
+                    "overall"
+                )
+
+                if (
+                    query
+                    and query
+                    not in player_name.lower()
+                    and query
+                    not in position.lower()
+                    and "round" not in query
+                ):
+                    continue
+
+                label = (
+                    f"👤 {position or 'PLAYER'} • "
+                    f"{player_name}"
+                )
+
+                if overall is not None:
+                    label += (
+                        f" • {overall} OVR"
+                    )
+
+                choices.append({
+                    "name": label[:100],
+                    "value": player_name[:100]
+                })
+
+                if len(choices) >= 18:
+                    break
+
         except Exception:
-            return jsonify({
-                "type": 8,
-                "data": {
-                    "choices": [
-                        {
-                            "name":
-                                "Roster unavailable — run Snallabot roster export",
-                            "value":
-                                raw_value[:100]
-                        }
+            pass
+
+        # Draft pick choices.
+        current_year = datetime.now().year
+
+        for year in range(
+            current_year,
+            current_year + 4
+        ):
+            for round_number in range(
+                1,
+                8
+            ):
+                pick_value = (
+                    f"{year} Round "
+                    f"{round_number}"
+                )
+
+                if (
+                    pick_value.lower()
+                    in selected_assets
+                ):
+                    continue
+
+                if (
+                    query
+                    and query
+                    not in pick_value.lower()
+                    and query not in [
+                        "pick",
+                        "picks",
+                        "draft"
                     ]
-                }
-            })
+                ):
+                    continue
 
-        choices = []
+                choices.append({
+                    "name":
+                        f"🏈 Draft Pick • {pick_value}",
+                    "value":
+                        pick_value
+                })
 
-        for player in players:
-            player_name = str(
-                player.get(
-                    "name",
-                    ""
-                )
-            ).strip()
-
-            if not player_name:
-                continue
-
-            if (
-                player_name.lower()
-                in selected_players
-            ):
-                continue
-
-            position = str(
-                player.get(
-                    "position",
-                    ""
-                )
-            )
-
-            if (
-                query
-                and query
-                not in player_name.lower()
-                and query
-                not in position.lower()
-            ):
-                continue
-
-            overall = player.get("overall")
-
-            label = (
-                f"{position or 'PLAYER'} • "
-                f"{player_name}"
-            )
-
-            if overall is not None:
-                label += (
-                    f" • {overall} OVR"
-                )
-
-            choices.append({
-                "name": label[:100],
-                "value": player_name[:100]
-            })
+                if len(choices) >= 25:
+                    break
 
             if len(choices) >= 25:
                 break
@@ -3669,7 +3663,7 @@ def handle_trade_autocomplete(interaction):
         return jsonify({
             "type": 8,
             "data": {
-                "choices": choices
+                "choices": choices[:25]
             }
         })
 
@@ -3713,30 +3707,34 @@ def build_discord_trade_result_text(interaction):
     ).strip()
 
     team_a_assets_list = [
-        str(options.get(key, "")).strip()
-        for key in [
-            "team_a_player_1",
-            "team_a_player_2",
-            "team_a_player_3",
-            "team_a_pick_1",
-            "team_a_pick_2"
-        ]
+        str(
+            options.get(
+                f"team_a_asset_{slot}",
+                ""
+            )
+        ).strip()
+        for slot in range(1, 6)
         if str(
-            options.get(key, "")
+            options.get(
+                f"team_a_asset_{slot}",
+                ""
+            )
         ).strip()
     ]
 
     team_b_assets_list = [
-        str(options.get(key, "")).strip()
-        for key in [
-            "team_b_player_1",
-            "team_b_player_2",
-            "team_b_player_3",
-            "team_b_pick_1",
-            "team_b_pick_2"
-        ]
+        str(
+            options.get(
+                f"team_b_asset_{slot}",
+                ""
+            )
+        ).strip()
+        for slot in range(1, 6)
         if str(
-            options.get(key, "")
+            options.get(
+                f"team_b_asset_{slot}",
+                ""
+            )
         ).strip()
     ]
 
