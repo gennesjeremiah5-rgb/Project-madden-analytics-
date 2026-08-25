@@ -84,21 +84,11 @@ def snallabot_receiver(subpath):
     print("Path:", subpath)
     print("========================================")
 
-    #
     # EXTRA DATA
-    #
     if parts[-1] == "extra":
 
-        save_json(
-            "extra.json",
-            data
-        )
-
-        update_latest(
-            "extra",
-            subpath,
-            data
-        )
+        save_json("extra.json", data)
+        update_latest("extra", subpath, data)
 
         print("Saved: EXTRA DATA")
 
@@ -107,9 +97,7 @@ def snallabot_receiver(subpath):
             "type": "extra"
         }), 200
 
-    #
     # TEAM ROSTER
-    #
     if "team" in parts and parts[-1] == "roster":
 
         team_index = parts.index("team")
@@ -144,9 +132,7 @@ def snallabot_receiver(subpath):
             "player_count": len(players)
         }), 200
 
-    #
-    # FREE AGENT ROSTER
-    #
+    # FREE AGENTS
     if "freeagents" in parts and parts[-1] == "roster":
 
         players = data.get("rosterInfoList", [])
@@ -173,9 +159,7 @@ def snallabot_receiver(subpath):
             "player_count": len(players)
         }), 200
 
-    #
     # WEEKLY DATA
-    #
     if "week" in parts:
 
         try:
@@ -208,11 +192,7 @@ def snallabot_receiver(subpath):
         )
 
         with open(filename, "w") as f:
-            json.dump(
-                data,
-                f,
-                indent=2
-            )
+            json.dump(data, f, indent=2)
 
         update_latest(
             f"{season_type}_week_{week_number}_{stat_type}",
@@ -235,36 +215,7 @@ def snallabot_receiver(subpath):
             "stat_type": stat_type
         }), 200
 
-    #
-    # LEAGUE INFO
-    #
-    if "league" in parts or parts[-1] in [
-        "info",
-        "leagueinfo",
-        "standings"
-    ]:
-
-        save_json(
-            "league_info.json",
-            data
-        )
-
-        update_latest(
-            "league_info",
-            subpath,
-            data
-        )
-
-        print("Saved: LEAGUE INFO")
-
-        return jsonify({
-            "success": True,
-            "type": "league_info"
-        }), 200
-
-    #
-    # UNKNOWN EXPORT
-    #
+    # UNKNOWN DATA
     safe_path = subpath.replace("/", "_")
 
     save_json(
@@ -294,8 +245,9 @@ def analytics_status():
 
     for root, dirs, filenames in os.walk(DATA_DIR):
         for filename in filenames:
-            full_path = os.path.join(root, filename)
-            files.append(full_path)
+            files.append(
+                os.path.join(root, filename)
+            )
 
     return jsonify({
         "service": "Project Madden Analytics",
@@ -304,26 +256,14 @@ def analytics_status():
     })
 
 
-#
-# VIEW WEEKLY DATA
-#
-@app.route("/analytics/week/<season_type>/<week_number>/<stat_type>")
-def view_weekly_data(season_type, week_number, stat_type):
-
-    allowed_types = [
-        "schedules",
-        "teamstats",
-        "passing",
-        "rushing",
-        "receiving",
-        "defense",
-        "kicking"
-    ]
-
-    if stat_type not in allowed_types:
-        return jsonify({
-            "error": "Invalid stat type"
-        }), 400
+@app.route(
+    "/analytics/week/<season_type>/<week_number>/<stat_type>"
+)
+def view_weekly_data(
+    season_type,
+    week_number,
+    stat_type
+):
 
     filename = os.path.join(
         DATA_DIR,
@@ -334,6 +274,7 @@ def view_weekly_data(season_type, week_number, stat_type):
     )
 
     if not os.path.exists(filename):
+
         return jsonify({
             "error": "Data not found",
             "file": filename
@@ -343,6 +284,108 @@ def view_weekly_data(season_type, week_number, stat_type):
         data = json.load(f)
 
     return jsonify(data)
+
+
+#
+# INSPECT SNALLABOT DATA
+#
+@app.route(
+    "/analytics/inspect/<season_type>/<week_number>/<stat_type>"
+)
+def inspect_weekly_data(
+    season_type,
+    week_number,
+    stat_type
+):
+
+    filename = os.path.join(
+        DATA_DIR,
+        "weekly",
+        season_type,
+        f"week_{week_number}",
+        f"{stat_type}.json"
+    )
+
+    if not os.path.exists(filename):
+
+        return jsonify({
+            "error": "Data not found",
+            "file": filename
+        }), 404
+
+    with open(filename, "r") as f:
+        data = json.load(f)
+
+    result = {
+        "season_type": season_type,
+        "week": week_number,
+        "stat_type": stat_type,
+        "top_level_type": type(data).__name__
+    }
+
+    #
+    # If Snallabot sends a dictionary
+    #
+    if isinstance(data, dict):
+
+        result["top_level_keys"] = list(data.keys())
+
+        lists_found = {}
+
+        for key, value in data.items():
+
+            if isinstance(value, list):
+
+                lists_found[key] = {
+                    "count": len(value)
+                }
+
+                if len(value) > 0:
+
+                    first = value[0]
+
+                    if isinstance(first, dict):
+
+                        lists_found[key][
+                            "first_record_keys"
+                        ] = list(first.keys())
+
+                        lists_found[key][
+                            "first_record"
+                        ] = first
+
+                    else:
+
+                        lists_found[key][
+                            "first_record"
+                        ] = first
+
+        result["lists_found"] = lists_found
+
+    #
+    # If Snallabot sends a list directly
+    #
+    elif isinstance(data, list):
+
+        result["count"] = len(data)
+
+        if len(data) > 0:
+
+            first = data[0]
+
+            if isinstance(first, dict):
+
+                result["first_record_keys"] = list(
+                    first.keys()
+                )
+
+                result["first_record"] = first
+
+            else:
+
+                result["first_record"] = first
+
+    return jsonify(result)
 
 
 if __name__ == "__main__":
