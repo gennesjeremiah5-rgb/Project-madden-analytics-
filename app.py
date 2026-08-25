@@ -4,14 +4,13 @@ import json
 
 app = Flask(__name__)
 
-def handle_export(platform=None, league_id=None, data_type=None):
+def handle_export(path=""):
     print("\n==============================")
     print("MADDEN EXPORT RECEIVED")
     print("Time:", datetime.utcnow().isoformat())
     print("Method:", request.method)
-    print("Platform:", platform)
-    print("League ID:", league_id)
-    print("Data Type:", data_type)
+    print("Path:", path)
+    print("Full URL:", request.url)
     print("Content-Type:", request.content_type)
 
     raw_data = request.get_data(as_text=True)
@@ -20,42 +19,38 @@ def handle_export(platform=None, league_id=None, data_type=None):
     print(raw_data)
 
     if request.is_json:
-        print("JSON:")
-        print(json.dumps(request.get_json(silent=True), indent=2))
+        try:
+            data = request.get_json()
+            print("JSON DATA:")
+            print(json.dumps(data, indent=2))
+        except Exception as e:
+            print("JSON ERROR:", e)
 
     print("==============================\n")
 
     return jsonify({
         "success": True,
-        "platform": platform,
-        "league_id": league_id,
-        "data_type": data_type,
-        "message": "Project Madden received the export"
+        "received": True,
+        "path": path
     }), 200
 
 
-@app.route("/", methods=["GET", "POST"])
+@app.route("/", methods=["GET"])
 def home():
+    return "Project Madden endpoint is online."
+
+
+@app.route("/snallabot", methods=["GET", "POST", "PUT"])
+def snallabot_root():
     if request.method == "GET":
-        return "Project Madden endpoint is online."
+        return "Snallabot receiver is online."
 
-    return handle_export()
-
-
-@app.route("/snallabot", methods=["GET", "POST"])
-def snallabot():
-    if request.method == "GET":
-        return "Snallabot endpoint is online."
-
-    return handle_export()
+    return handle_export("")
 
 
-@app.route(
-    "/snallabot/<platform>/<league_id>/<data_type>",
-    methods=["POST", "PUT"]
-)
-def snallabot_export(platform, league_id, data_type):
-    return handle_export(platform, league_id, data_type)
+@app.route("/snallabot/<path:subpath>", methods=["GET", "POST", "PUT"])
+def snallabot_catch_all(subpath):
+    return handle_export(subpath)
 
 
 if __name__ == "__main__":
