@@ -3747,7 +3747,7 @@ def build_weekly_panel_takes(
 
 
 def build_super_bowl_favorites():
-    standings = extract_standings()
+    standings = normalize_standings()
 
     if not standings:
         return []
