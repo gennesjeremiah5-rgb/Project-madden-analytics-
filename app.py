@@ -3312,6 +3312,439 @@ def weekly_show_post_key(
     )
 
 
+
+def build_weekly_game_predictions(
+    season_type,
+    week_number
+):
+    schedule_data = load_weekly_data(
+        season_type,
+        week_number,
+        "schedules"
+    )
+
+    if not schedule_data:
+        return []
+
+    predictions = []
+
+    for game in schedule_data.get(
+        "gameScheduleInfoList",
+        []
+    ):
+        if game_looks_completed(game):
+            continue
+
+        away_id = game.get(
+            "awayTeamId"
+        )
+        home_id = game.get(
+            "homeTeamId"
+        )
+
+        away = safe_team_name(
+            away_id
+        )
+        home = safe_team_name(
+            home_id
+        )
+
+        away_ovr = safe_team_overall(
+            away_id
+        )
+        home_ovr = safe_team_overall(
+            home_id
+        )
+
+        if (
+            away_ovr is None
+            or home_ovr is None
+        ):
+            favorite = None
+            underdog = None
+            edge = None
+        elif away_ovr > home_ovr:
+            favorite = away
+            underdog = home
+            edge = away_ovr - home_ovr
+        elif home_ovr > away_ovr:
+            favorite = home
+            underdog = away
+            edge = home_ovr - away_ovr
+        else:
+            favorite = "TOSS-UP"
+            underdog = None
+            edge = 0
+
+        key = (
+            f"weekly-pick-{season_type}-"
+            f"{week_number}-"
+            f"{game.get('scheduleId')}"
+        )
+
+        if favorite == "TOSS-UP":
+            confidence = "TOSS-UP"
+            reason = (
+                "The teams are even by current OVR, "
+                "so execution and user play should decide it."
+            )
+        elif edge is not None and edge >= 5:
+            confidence = "STRONG LEAN"
+            reason = (
+                f"{favorite} has the larger roster-rating edge "
+                f"by {edge} OVR points."
+            )
+        elif edge is not None and edge >= 2:
+            confidence = "LEAN"
+            reason = (
+                f"{favorite} is higher-rated by {edge} OVR points, "
+                "but this is still very playable."
+            )
+        else:
+            confidence = "SLIGHT LEAN"
+            reason = (
+                f"{favorite} has only a small OVR advantage. "
+                "This matchup can swing on turnovers and execution."
+            )
+
+        predictions.append({
+            "schedule_id":
+                game.get("scheduleId"),
+            "away":
+                away,
+            "home":
+                home,
+            "away_ovr":
+                away_ovr,
+            "home_ovr":
+                home_ovr,
+            "favorite":
+                favorite,
+            "underdog":
+                underdog,
+            "ovr_edge":
+                edge,
+            "confidence":
+                confidence,
+            "reason":
+                reason,
+            "matchup":
+                f"{away} @ {home}",
+            "key":
+                key
+        })
+
+    return predictions
+
+
+def weekly_trade_proposals():
+    proposals = load_json_file(
+        "trade_proposals.json"
+    )
+
+    if not isinstance(
+        proposals,
+        list
+    ):
+        return []
+
+    # The trade file currently has timestamps, but not Madden week metadata.
+    # Use the most recent proposals as the weekly trade-desk segment.
+    def sort_key(item):
+        return str(
+            item.get(
+                "created_at",
+                ""
+            )
+        )
+
+    proposals = sorted(
+        proposals,
+        key=sort_key,
+        reverse=True
+    )
+
+    return proposals[:5]
+
+
+def format_trade_show_line(
+    trade
+):
+    team_a = trade.get(
+        "team_a",
+        "Team A"
+    )
+    team_b = trade.get(
+        "team_b",
+        "Team B"
+    )
+
+    grade_a = (
+        trade.get(
+            "team_a_grade",
+            {}
+        ).get(
+            "grade",
+            "—"
+        )
+        if isinstance(
+            trade.get("team_a_grade"),
+            dict
+        )
+        else "—"
+    )
+
+    grade_b = (
+        trade.get(
+            "team_b_grade",
+            {}
+        ).get(
+            "grade",
+            "—"
+        )
+        if isinstance(
+            trade.get("team_b_grade"),
+            dict
+        )
+        else "—"
+    )
+
+    decision = (
+        trade.get(
+            "trade_committee",
+            {}
+        ).get(
+            "decision",
+            "LEAGUE OFFICE REVIEW"
+        )
+        if isinstance(
+            trade.get("trade_committee"),
+            dict
+        )
+        else "LEAGUE OFFICE REVIEW"
+    )
+
+    return (
+        f"**{team_a} ↔ {team_b}** — "
+        f"{team_a}: {grade_a} | "
+        f"{team_b}: {grade_b} | "
+        f"{decision}"
+    )
+
+
+def build_weekly_panel_takes(
+    show,
+    season_type,
+    week_number
+):
+    completed = show.get(
+        "top_games",
+        []
+    )
+
+    players = show.get(
+        "top_players",
+        []
+    )
+
+    predictions = show.get(
+        "game_predictions",
+        []
+    )
+
+    trades = show.get(
+        "trade_proposals",
+        []
+    )
+
+    key = (
+        f"weekly-panel-{season_type}-"
+        f"{week_number}"
+    )
+
+    marcus_parts = []
+    stephen_parts = []
+    pat_parts = []
+
+    if completed:
+        game = completed[0]
+
+        winner = game.get(
+            "winner",
+            "the winner"
+        )
+        loser = game.get(
+            "loser",
+            "the loser"
+        )
+
+        marcus_parts.append(
+            f"{winner} earned the result. "
+            f"{loser} has to explain what failed."
+        )
+
+        stephen_parts.append(
+            f"I am looking directly at {loser}. "
+            "A bad result is one thing; repeating the same mistakes "
+            "is where I start questioning the entire approach."
+        )
+
+        pat_parts.append(
+            f"{winner} made the winning plays. "
+            "That is the stuff the locker room can build on."
+        )
+
+    if players:
+        player = players[0]
+
+        player_name = player.get(
+            "player",
+            "the standout player"
+        )
+
+        stats = player.get(
+            "stats",
+            {}
+        )
+
+        stat_text = ", ".join(
+            f"{str(k).replace('_', ' ').title()}: {v}"
+            for k, v in stats.items()
+        )
+
+        marcus_parts.append(
+            f"{player_name} deserves the spotlight: {stat_text}."
+        )
+
+        stephen_parts.append(
+            f"If {player_name} is producing like that, "
+            "the opponent has no excuse for failing to adjust."
+        )
+
+        pat_parts.append(
+            f"{player_name} was a dude this week. "
+            "Production like that changes how the next defense prepares."
+        )
+
+    if trades:
+        trade = trades[0]
+
+        team_a = trade.get(
+            "team_a",
+            "Team A"
+        )
+        team_b = trade.get(
+            "team_b",
+            "Team B"
+        )
+
+        decision = (
+            trade.get(
+                "trade_committee",
+                {}
+            ).get(
+                "decision",
+                ""
+            )
+            if isinstance(
+                trade.get("trade_committee"),
+                dict
+            )
+            else ""
+        )
+
+        marcus_parts.append(
+            f"Trade desk: {team_a} and {team_b} put a deal on the table. "
+            f"The League Office call is {decision}."
+        )
+
+        stephen_parts.append(
+            f"I do not care how exciting a trade looks. "
+            f"If {team_a} or {team_b} is giving away too much value, "
+            "I am going to say it."
+        )
+
+        pat_parts.append(
+            "Trades are about fit as much as ratings. "
+            "The question is whether the move actually fixes a weakness."
+        )
+
+    if predictions:
+        pick = predictions[0]
+
+        favorite = pick.get(
+            "favorite"
+        )
+
+        matchup = pick.get(
+            "matchup"
+        )
+
+        reason = pick.get(
+            "reason",
+            ""
+        )
+
+        if favorite == "TOSS-UP":
+            marcus_parts.append(
+                f"Game pick: {matchup} is a toss-up for me. {reason}"
+            )
+            stephen_parts.append(
+                f"I am not giving either side a pass in {matchup}. "
+                "The team that protects the football should win."
+            )
+            pat_parts.append(
+                f"{matchup} feels like the game where one weird turnover "
+                "or special-teams play can flip everything."
+            )
+        else:
+            marcus_parts.append(
+                f"My early favorite in {matchup}: **{favorite}**. {reason}"
+            )
+            stephen_parts.append(
+                f"I have **{favorite}** in {matchup}, "
+                "but if the higher-rated roster plays sloppy, "
+                "I will be the first one criticizing them afterward."
+            )
+            pat_parts.append(
+                f"I lean **{favorite}** in {matchup}. "
+                "But this is Madden — user execution can erase an OVR edge fast."
+            )
+
+    if not marcus_parts:
+        marcus_parts.append(
+            "There is not enough completed league data yet for me to fake a take. "
+            "Once the games and stats hit Snallabot, we will break them down."
+        )
+
+    if not stephen_parts:
+        stephen_parts.append(
+            "No fake outrage from me. Give me actual results, stats, "
+            "or a real matchup and then we can debate it."
+        )
+
+    if not pat_parts:
+        pat_parts.append(
+            "We are waiting on real league data. Once it lands, "
+            "we will have plenty to talk about."
+        )
+
+    return {
+        "marcus":
+            " ".join(
+                marcus_parts[:4]
+            ),
+        "stephen":
+            " ".join(
+                stephen_parts[:4]
+            ),
+        "pat":
+            " ".join(
+                pat_parts[:4]
+            )
+    }
+
+
 def build_weekly_show_summary(
     season_type,
     week_number
@@ -3327,6 +3760,17 @@ def build_weekly_show_summary(
     )
 
     rankings = build_power_rankings()
+
+    game_predictions = (
+        build_weekly_game_predictions(
+            season_type,
+            week_number
+        )
+    )
+
+    trade_proposals = (
+        weekly_trade_proposals()
+    )
 
     top_games = sorted(
         game_reactions,
@@ -3407,7 +3851,7 @@ def build_weekly_show_summary(
         )
     )
 
-    return {
+    show = {
         "season_type":
             season_type,
         "week":
@@ -3420,6 +3864,10 @@ def build_weekly_show_summary(
             top_players,
         "power_rankings":
             rankings[:5],
+        "game_predictions":
+            game_predictions,
+        "trade_proposals":
+            trade_proposals,
         "stephen_a_parody_segment":
             stephen_segment[:2],
         "pat_mcafee_parody_segment":
@@ -3427,6 +3875,16 @@ def build_weekly_show_summary(
         "closer":
             closer
     }
+
+    show["panel_takes"] = (
+        build_weekly_panel_takes(
+            show,
+            season_type,
+            week_number
+        )
+    )
+
+    return show
 
 
 def weekly_show_embed_fields(
@@ -3442,24 +3900,19 @@ def weekly_show_embed_fields(
     if top_games:
         lines = []
 
-        for game in top_games:
-            game_line = (
-                game.get("game")
-                or (
-                    f"{game.get('winner')} "
-                    f"over {game.get('loser')}"
-                )
-            )
-
+        for game in top_games[:3]:
             lines.append(
-                f"• {game_line}"
+                (
+                    f"**{game.get('game', '')}**\n"
+                    f"{game.get('analyst_take', '')}"
+                )
             )
 
         fields.append({
             "name":
-                "🔥 Games of the Week",
+                "🏈 Game Reactions",
             "value":
-                "\n".join(lines),
+                "\n\n".join(lines)[:1024],
             "inline":
                 False
         })
@@ -3472,15 +3925,10 @@ def weekly_show_embed_fields(
     if top_players:
         lines = []
 
-        for player in top_players:
+        for player in top_players[:5]:
             name = player.get(
                 "player",
                 "Player"
-            )
-
-            category = player.get(
-                "category",
-                ""
             )
 
             stats = player.get(
@@ -3488,113 +3936,129 @@ def weekly_show_embed_fields(
                 {}
             )
 
-            stat_parts = []
-
-            if category == "passing":
-                stat_parts = [
-                    f"{stats.get('yards', 0)} YDS",
-                    f"{stats.get('touchdowns', 0)} TD",
-                    f"{stats.get('interceptions', 0)} INT"
-                ]
-            elif category in [
-                "rushing",
-                "receiving"
-            ]:
-                stat_parts = [
-                    f"{stats.get('yards', 0)} YDS",
-                    f"{stats.get('touchdowns', 0)} TD"
-                ]
-            elif category == "defense":
-                stat_parts = [
-                    f"{stats.get('sacks', 0)} SACK",
-                    f"{stats.get('interceptions', 0)} INT",
-                    f"{stats.get('forced_fumbles', 0)} FF"
-                ]
+            stat_parts = [
+                f"{str(key).replace('_', ' ').title()}: {value}"
+                for key, value in stats.items()
+            ]
 
             lines.append(
-                f"• **{name}** — "
+                f"**{name}** — "
                 + ", ".join(stat_parts)
             )
 
         fields.append({
             "name":
-                "⭐ Players of the Week",
+                "📊 Stat Leaders & Performances",
             "value":
-                "\n".join(lines),
+                "\n".join(lines)[:1024],
             "inline":
                 False
         })
 
-    stephen_segment = show.get(
-        "stephen_a_parody_segment",
+    trades = show.get(
+        "trade_proposals",
         []
     )
 
-    if stephen_segment:
-        lines = []
-
-        for item in stephen_segment[:2]:
-            headline = item.get(
-                "headline",
-                "Project Madden Debate"
+    if trades:
+        lines = [
+            format_trade_show_line(
+                trade
             )
-
-            take = item.get(
-                "take",
-                ""
-            )
-
-            lines.append(
-                f"**{headline}**\n{take}"
-            )
+            for trade in trades[:4]
+        ]
 
         fields.append({
-            "name": (
-                "🎙️ Stephen A. Smith — "
-                "AI Parody Segment"
-            ),
-            "value": (
-                "\n\n".join(lines)
-                + "\n\n*Fictional AI parody — "
-                "not a real Stephen A. Smith statement.*"
-            ),
-            "inline": False
+            "name":
+                "🔄 Trade Desk",
+            "value":
+                "\n".join(lines)[:1024],
+            "inline":
+                False
         })
 
-    pat_segment = show.get(
-        "pat_mcafee_parody_segment",
+    predictions = show.get(
+        "game_predictions",
         []
     )
 
-    if pat_segment:
+    if predictions:
         lines = []
 
-        for item in pat_segment[:2]:
-            headline = item.get(
-                "headline",
-                "Project Madden Breakdown"
+        for pick in predictions[:8]:
+            favorite = pick.get(
+                "favorite"
             )
 
-            take = item.get(
-                "take",
-                ""
-            )
+            if favorite == "TOSS-UP":
+                pick_text = "TOSS-UP"
+            else:
+                pick_text = (
+                    f"{favorite} "
+                    f"({pick.get('confidence')})"
+                )
 
             lines.append(
-                f"**{headline}**\n{take}"
+                f"**{pick.get('matchup')}**\n"
+                f"Pick: **{pick_text}** — "
+                f"{pick.get('reason')}"
             )
 
         fields.append({
-            "name": (
-                "🎙️ Pat McAfee — "
-                "AI Parody Segment"
-            ),
+            "name":
+                "🎯 Weekly Picks & Favorites",
+            "value":
+                "\n\n".join(lines)[:1024],
+            "inline":
+                False
+        })
+
+    panel = show.get(
+        "panel_takes",
+        {}
+    )
+
+    if panel:
+        fields.append({
+            "name":
+                "🎙️ Marcus Hayes",
+            "value":
+                panel.get(
+                    "marcus",
+                    ""
+                )[:1024],
+            "inline":
+                False
+        })
+
+        fields.append({
+            "name":
+                "🎙️ Stephen A. Smith — AI Parody",
             "value": (
-                "\n\n".join(lines)
-                + "\n\n*Fictional AI parody — "
-                "not a real Pat McAfee statement.*"
-            ),
-            "inline": False
+                panel.get(
+                    "stephen",
+                    ""
+                )
+                + "\n\n*Fictional AI parody — not a real "
+                "Stephen A. Smith statement.*"
+            )[:1024],
+            "inline":
+                False
+        })
+
+        fields.append({
+            "name":
+                "🎙️ Pat McAfee — AI Parody",
+            "value": (
+                panel.get(
+                    "pat",
+                    ""
+                )
+                + "\n\n*Fictional AI parody — not a real "
+                "Pat McAfee statement.*"
+            )[:1024],
+            "inline":
+                False
         })
 
     rankings = show.get(
@@ -3606,7 +4070,7 @@ def weekly_show_embed_fields(
         lines = []
 
         for index, team in enumerate(
-            rankings,
+            rankings[:5],
             start=1
         ):
             lines.append(
@@ -3625,62 +4089,6 @@ def weekly_show_embed_fields(
         })
 
     return fields
-
-
-
-WEEKLY_SHOW_TEST_MARCUS_LINES = [
-    "I am not handing out praise just because a roster looks good on paper. If your team has talent and still looks disorganized, that is a coaching problem.",
-    "Some owners are going to learn quickly that overall rating does not excuse bad decisions. You still have to manage the game.",
-    "If you keep making the same mistakes every week, eventually it stops being bad luck and starts becoming your identity.",
-    "I want to see discipline. Talent matters, but bad clock management and careless turnovers will get exposed in this league.",
-    "There are teams with enough talent to win right now, but they are going to waste it if they keep playing reckless football.",
-]
-
-WEEKLY_SHOW_TEST_STEPHEN_LINES = [
-    "I am sorry, but I am not buying the excuses. If you have a loaded roster and you still cannot execute, somebody has to answer for that.",
-    "This is exactly what I mean when I say reputation cannot carry you. At some point, you have to actually perform.",
-    "You cannot keep calling yourself a contender while making losing decisions. That is not how championship teams operate.",
-    "If the game plan is failing and you refuse to adjust, then the problem is no longer the matchup — it is you.",
-    "Somebody in that locker room needs to demand better, because sloppy football is not going to survive against serious competition.",
-]
-
-WEEKLY_SHOW_TEST_PAT_LINES = [
-    "There is a difference between aggressive and reckless, and some teams are going to find that line the hard way.",
-    "If your offense is predictable, everybody in the league is going to smell it by the second quarter.",
-    "I love confidence, but if you are talking big and then giving the ball away, people are going to come for you.",
-    "Special teams, field position, clock management — the boring stuff becomes real important when the flashy stuff stops working.",
-    "You can have all the stars you want. If nobody is doing the little things right, the whole thing can fall apart fast.",
-]
-
-
-def build_weekly_show_test_panel(
-    headline
-):
-    key = (
-        f"weekly-show-test-{headline}-"
-        f"{datetime.now().strftime('%Y%m%d%H')}"
-    )
-
-    marcus = stable_choice(
-        WEEKLY_SHOW_TEST_MARCUS_LINES,
-        key + "-marcus"
-    )
-
-    stephen = stable_choice(
-        WEEKLY_SHOW_TEST_STEPHEN_LINES,
-        key + "-stephen"
-    )
-
-    pat = stable_choice(
-        WEEKLY_SHOW_TEST_PAT_LINES,
-        key + "-pat"
-    )
-
-    return {
-        "marcus": marcus,
-        "stephen": stephen,
-        "pat": pat
-    }
 
 
 def send_weekly_show_embed(
@@ -3790,12 +4198,13 @@ def send_weekly_show_to_discord(
 
     description = (
         f"{show['opener']}\n\n"
-        "🎙️ **Marcus Hayes** leads the weekly breakdown.\n"
-        "🎙️ **Stephen A. Smith — AI Parody** joins for a special debate segment.\n"
-        "🎙️ **Pat McAfee — AI Parody** joins for an energetic reaction segment.\n\n"
+        "This week's desk covers completed games, player stats, "
+        "recent trade proposals, power rankings, and picks for "
+        "the unplayed matchups on the schedule.\n\n"
         f"**Marcus Hayes closes:** {show['closer']}\n\n"
         "*Stephen A. Smith and Pat McAfee content in this show is fictional AI parody "
-        "and not real statements from either person.*"
+        "and not real statements from either person. Picks are Project Madden analysis "
+        "based on available league data and current OVR, not betting odds.*"
     )
 
     result = send_weekly_show_embed(
