@@ -1,4 +1,5 @@
-from flask import Flask, request, jsonify, render_template_string
+from pathlib import Path
+from flask import Flask, request, jsonify, render_template_string, send_file
 import json
 import os
 import hashlib
@@ -1082,6 +1083,11 @@ def post_trade_to_discord(analysis):
     )
 
     payload = {
+        "username": "Project Madden League Office",
+        "avatar_url": (
+            "https://project-madden-analytics.onrender.com/"
+            "assets/project-madden-league-office.jpeg"
+        ),
         "content": (
             f"{analysis['team_a_mention']} "
             f"{analysis['team_b_mention']}"
@@ -4171,6 +4177,19 @@ def discord_status():
                 )
             )
     })
+
+
+
+@app.route(
+    "/assets/project-madden-league-office.jpeg",
+    methods=["GET"]
+)
+def project_madden_league_office_avatar():
+    return send_file(
+        Path(__file__).resolve().parent
+        / "project_madden_league_office.jpeg",
+        mimetype="image/jpeg"
+    )
 
 
 # =========================================================
