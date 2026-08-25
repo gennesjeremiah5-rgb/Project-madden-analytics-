@@ -3362,6 +3362,34 @@ def register_trade_slash_command():
     }
 
     if guild_id:
+        # Remove any older GLOBAL command first. Discord can otherwise
+        # keep showing the stale global /trade UI alongside the new
+        # guild-specific command.
+        global_url = (
+            f"{DISCORD_API_BASE}/applications/"
+            f"{app_id}/commands"
+        )
+
+        global_cleanup = requests.put(
+            global_url,
+            headers=headers,
+            json=[],
+            timeout=15
+        )
+
+        if global_cleanup.status_code not in [
+            200,
+            201
+        ]:
+            return {
+                "success": False,
+                "status_code":
+                    global_cleanup.status_code,
+                "scope": "global_cleanup",
+                "error":
+                    global_cleanup.text[:500]
+            }
+
         url = (
             f"{DISCORD_API_BASE}/applications/"
             f"{app_id}/guilds/{guild_id}/commands"
@@ -3402,6 +3430,7 @@ def register_trade_slash_command():
         ],
         "scope": scope,
         "guild_id_configured": bool(guild_id),
+        "old_global_command_removed": bool(guild_id),
         "trade_ui": (
             "5 clean player/pick asset slots per team"
         ),
