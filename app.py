@@ -4702,6 +4702,53 @@ def analyst_super_bowl_favorites():
 
 
 @app.route(
+    "/weekly-show/debug/"
+    "<season_type>/<int:week_number>"
+)
+def weekly_show_debug(
+    season_type,
+    week_number
+):
+    try:
+        show = build_weekly_show_summary(
+            season_type,
+            week_number
+        )
+
+        return jsonify({
+            "success": True,
+            "season_type": season_type,
+            "week": week_number,
+            "has_games": bool(
+                show.get("top_games")
+            ),
+            "has_players": bool(
+                show.get("top_players")
+            ),
+            "has_predictions": bool(
+                show.get("game_predictions")
+            ),
+            "has_trades": bool(
+                show.get("trade_proposals")
+            ),
+            "has_super_bowl_favorites": bool(
+                show.get("super_bowl_favorites")
+            ),
+            "weekly_show_webhook_configured": (
+                weekly_show_webhook_configured()
+            ),
+            "show": show
+        })
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "error_type": type(e).__name__
+        }), 500
+
+
+@app.route(
     "/analyst/weekly-show/"
     "<season_type>/<int:week_number>"
 )
@@ -7355,53 +7402,64 @@ def process_test_weekly_show_background(
 def process_weekly_show_background(
     interaction
 ):
-    options = discord_option_map(
-        interaction
-    )
-
-    season_type = str(
-        options.get(
-            "season_type",
-            "reg"
+    try:
+        options = discord_option_map(
+            interaction
         )
-    ).strip().lower()
 
-    week_number = int(
-        options.get(
-            "week",
-            1
-        )
-    )
+        season_type = str(
+            options.get(
+                "season_type",
+                "reg"
+            )
+        ).strip().lower()
 
-    result = send_weekly_show_to_discord(
-        season_type,
-        week_number
-    )
+        week_number = int(
+            options.get(
+                "week",
+                1
+            )
+        )
 
-    if result.get("skipped"):
-        content = (
-            "ℹ️ That weekly show was already posted."
+        result = send_weekly_show_to_discord(
+            season_type,
+            week_number
         )
-    elif result.get("success"):
-        content = (
-            "✅ Project Madden Weekly Show posted "
-            f"for {season_type.upper()} Week {week_number}."
-        )
-    else:
-        content = (
-            "❌ Weekly Show failed: "
-            + str(
-                result.get(
-                    "error",
+
+        if result.get("skipped"):
+            content = (
+                "ℹ️ That weekly show was already posted."
+            )
+        elif result.get("success"):
+            content = (
+                "✅ Project Madden Weekly Show posted "
+                f"for {season_type.upper()} Week {week_number}."
+            )
+        else:
+            content = (
+                "❌ Weekly Show failed: "
+                + str(
                     result.get(
-                        "result",
-                        {}
-                    ).get(
                         "error",
-                        "Unknown error"
+                        result.get(
+                            "result",
+                            {}
+                        ).get(
+                            "error",
+                            "Unknown error"
+                        )
                     )
-                )
-            )[:1000]
+                )[:1000]
+            )
+
+    except Exception as e:
+        print(
+            "WEEKLY SHOW BACKGROUND ERROR:",
+            repr(e)
+        )
+        content = (
+            "❌ Weekly Show crashed while building the show: "
+            f"{str(e)[:1000]}"
         )
 
     edit_discord_deferred_response(
