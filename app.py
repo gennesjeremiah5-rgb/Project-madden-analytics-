@@ -7,6 +7,7 @@ import uuid
 import re
 import requests
 import threading
+import time
 from nacl.signing import VerifyKey
 from nacl.exceptions import BadSignatureError
 from datetime import datetime, timezone
@@ -1185,6 +1186,8 @@ def analyst_webhook_configured():
     )
 
 
+
+
 def send_analyst_embed(
     title,
     description,
@@ -2292,11 +2295,434 @@ def analyst_post_key(
 
 
 
+
+# =========================================================
+# STEPHEN A. SMITH - AI PARODY SPECIAL SEGMENT
+# =========================================================
+
+STEPHEN_A_PARODY_OPENERS = [
+    "Now hold on! We need to talk about what just happened here.",
+    "Ladies and gentlemen, this cannot simply be ignored.",
+    "I have seen enough. Somebody needs to explain this immediately.",
+    "Excuse me, but are we really going to act like that performance was normal?",
+    "This is exactly the kind of result that gets everybody in the league talking.",
+    "I am not letting this one slide. There is too much to discuss.",
+]
+
+STEPHEN_A_PARODY_GAME_LINES = [
+    "{winner} handled business, and {loser} has to answer for it. You can dress it up however you want, but the scoreboard is the scoreboard.",
+    "{winner} made the statement. {loser} now has to prove this was an exception and not the beginning of a problem.",
+    "When {winner} walks away with that result, the conversation changes immediately. {loser} cannot just shrug this off.",
+    "There are wins, and then there are wins that put pressure on everybody else. {winner} just delivered one of those.",
+]
+
+STEPHEN_A_PARODY_PLAYER_LINES = [
+    "{player} put up a performance that demands attention. If you are building a game plan next week, that name is now circled.",
+    "I do not care what anybody expected coming in — {player} showed up and made the entire league notice.",
+    "{player} just gave us the kind of performance that changes how opponents prepare.",
+    "That was not background production from {player}. That was a headline performance.",
+]
+
+
+def get_stephen_a_parody_webhook():
+    return os.environ.get(
+        "STEPHEN_A_PARODY_WEBHOOK_URL",
+        ""
+    ).strip()
+
+
+def stephen_a_parody_webhook_configured():
+    return bool(
+        get_stephen_a_parody_webhook()
+    )
+
+
+def load_stephen_a_parody_history():
+    history = load_json_file(
+        STEPHEN_A_PARODY_HISTORY_FILE
+    )
+
+    if not isinstance(history, list):
+        history = []
+
+    return history
+
+
+def save_stephen_a_parody_history(history):
+    save_json_file(
+        STEPHEN_A_PARODY_HISTORY_FILE,
+        history[-300:]
+    )
+
+
+def stephen_a_parody_post_key(
+    season_type,
+    week_number,
+    story
+):
+    raw = (
+        f"{season_type}|{week_number}|"
+        f"{story.get('story_type')}|"
+        f"{story.get('source_key')}"
+    )
+
+    return hashlib.sha256(
+        raw.encode("utf-8")
+    ).hexdigest()[:20]
+
+
+def build_stephen_a_parody_segment(
+    season_type,
+    week_number
+):
+    stories = []
+
+    game_reactions = build_week_game_reactions(
+        season_type,
+        week_number
+    )
+
+    player_reactions = build_week_player_reactions(
+        season_type,
+        week_number
+    )
+
+    # Pick the single strongest game story to keep this segment special.
+    if game_reactions:
+        def game_priority(item):
+            return (
+                3 if item.get("upset") else 0,
+                int(item.get("margin", 0) or 0),
+            )
+
+        top_game = sorted(
+            game_reactions,
+            key=game_priority,
+            reverse=True
+        )[0]
+
+        winner = top_game.get(
+            "winner",
+            "the winner"
+        )
+
+        loser = top_game.get(
+            "loser",
+            "the opponent"
+        )
+
+        source_key = str(
+            top_game.get(
+                "schedule_id",
+                top_game.get("game", "")
+            )
+        )
+
+        opener = stable_choice(
+            STEPHEN_A_PARODY_OPENERS,
+            f"stephen-game-open-{season_type}-{week_number}-{source_key}"
+        )
+
+        body = stable_choice(
+            STEPHEN_A_PARODY_GAME_LINES,
+            f"stephen-game-body-{season_type}-{week_number}-{source_key}"
+        ).format(
+            winner=winner,
+            loser=loser
+        )
+
+        stories.append({
+            "story_type": "game",
+            "source_key": source_key,
+            "headline": (
+                f"{winner} vs {loser}"
+            ),
+            "take": (
+                f"{opener} {body}"
+            ),
+            "details": top_game
+        })
+
+    # Pick one standout player story.
+    if player_reactions:
+        def player_priority(item):
+            stats = item.get("stats", {})
+            category = item.get("category", "")
+
+            if category == "passing":
+                return (
+                    int(stats.get("touchdowns", 0) or 0) * 100
+                    + int(stats.get("yards", 0) or 0)
+                )
+
+            if category in [
+                "rushing",
+                "receiving"
+            ]:
+                return (
+                    int(stats.get("touchdowns", 0) or 0) * 100
+                    + int(stats.get("yards", 0) or 0)
+                )
+
+            if category == "defense":
+                return (
+                    int(stats.get("sacks", 0) or 0) * 120
+                    + int(stats.get("interceptions", 0) or 0) * 150
+                    + int(stats.get("forced_fumbles", 0) or 0) * 100
+                )
+
+            return 0
+
+        top_player = sorted(
+            player_reactions,
+            key=player_priority,
+            reverse=True
+        )[0]
+
+        player = top_player.get(
+            "player",
+            "This player"
+        )
+
+        source_key = (
+            f"{player}-"
+            f"{top_player.get('category', '')}-"
+            f"{top_player.get('story_type', '')}"
+        )
+
+        opener = stable_choice(
+            STEPHEN_A_PARODY_OPENERS,
+            f"stephen-player-open-{season_type}-{week_number}-{source_key}"
+        )
+
+        body = stable_choice(
+            STEPHEN_A_PARODY_PLAYER_LINES,
+            f"stephen-player-body-{season_type}-{week_number}-{source_key}"
+        ).format(
+            player=player
+        )
+
+        stories.append({
+            "story_type": "player",
+            "source_key": source_key,
+            "headline": player,
+            "take": (
+                f"{opener} {body}"
+            ),
+            "details": top_player
+        })
+
+    return stories
+
+
+def send_stephen_a_parody_embed(
+    title,
+    description
+):
+    webhook_url = (
+        get_stephen_a_parody_webhook()
+    )
+
+    if not webhook_url:
+        return {
+            "sent": False,
+            "error": (
+                "STEPHEN_A_PARODY_WEBHOOK_URL "
+                "is not configured."
+            )
+        }
+
+    payload = {
+        "username":
+            "Stephen A. Smith | AI Parody",
+        "embeds": [
+            {
+                "title": title,
+                "description": description,
+                "footer": {
+                    "text": (
+                        "AI parody segment • "
+                        "Not real Stephen A. Smith statements"
+                    )
+                }
+            }
+        ]
+    }
+
+    try:
+        response = requests.post(
+            webhook_url,
+            json=payload,
+            timeout=15
+        )
+
+        if response.status_code not in [
+            200,
+            204
+        ]:
+            return {
+                "sent": False,
+                "error": (
+                    f"Discord returned "
+                    f"{response.status_code}: "
+                    f"{response.text[:500]}"
+                )
+            }
+
+        return {"sent": True}
+
+    except Exception as e:
+        return {
+            "sent": False,
+            "error": str(e)
+        }
+
+
+def process_stephen_a_parody_posts(
+    season_type,
+    week_number
+):
+    if not stephen_a_parody_webhook_configured():
+        return {
+            "success": False,
+            "error": (
+                "STEPHEN_A_PARODY_WEBHOOK_URL "
+                "is not configured."
+            ),
+            "sent_count": 0
+        }
+
+    stories = build_stephen_a_parody_segment(
+        season_type,
+        week_number
+    )
+
+    history = load_stephen_a_parody_history()
+
+    sent = []
+    skipped = []
+    failed = []
+
+    for story in stories:
+        key = stephen_a_parody_post_key(
+            season_type,
+            week_number,
+            story
+        )
+
+        if key in history:
+            skipped.append(
+                story.get("headline")
+            )
+            continue
+
+        result = send_stephen_a_parody_embed(
+            (
+                "🎙️ STEPHEN A. SMITH "
+                "— AI PARODY SEGMENT"
+            ),
+            (
+                f"## {story.get('headline')}\n"
+                f"{story.get('take')}\n\n"
+                "⚠️ *Fictional AI parody for Project Madden. "
+                "This is not a real Stephen A. Smith quote or statement.*"
+            )
+        )
+
+        if result.get("sent"):
+            history.append(key)
+            sent.append(
+                story.get("headline")
+            )
+        else:
+            failed.append({
+                "headline":
+                    story.get("headline"),
+                "error":
+                    result.get("error")
+            })
+
+    save_stephen_a_parody_history(
+        history
+    )
+
+    return {
+        "success": len(failed) == 0,
+        "segment":
+            "Stephen A. Smith — AI Parody",
+        "season_type":
+            season_type,
+        "week":
+            week_number,
+        "stories_found":
+            len(stories),
+        "sent_count":
+            len(sent),
+        "skipped_count":
+            len(skipped),
+        "failed_count":
+            len(failed),
+        "sent":
+            sent,
+        "failed":
+            failed
+    }
+
+
+@app.route(
+    "/analyst/stephen-a/"
+    "<season_type>/<int:week_number>"
+)
+def analyst_stephen_a(
+    season_type,
+    week_number
+):
+    return jsonify({
+        "segment":
+            "Stephen A. Smith — AI Parody",
+        "disclaimer": (
+            "Fictional AI parody. "
+            "Not real Stephen A. Smith statements."
+        ),
+        "season_type":
+            season_type,
+        "week":
+            week_number,
+        "stories":
+            build_stephen_a_parody_segment(
+                season_type,
+                week_number
+            )
+    })
+
+
+@app.route(
+    "/analyst/post-stephen-a/"
+    "<season_type>/<int:week_number>",
+    methods=["GET", "POST"]
+)
+def analyst_post_stephen_a(
+    season_type,
+    week_number
+):
+    result = process_stephen_a_parody_posts(
+        season_type,
+        week_number
+    )
+
+    return jsonify(result), (
+        200
+        if result.get("success")
+        else 400
+    )
+
+
 # =========================================================
 # MARCUS HAYES - STANDINGS / POWER RANKINGS / STORYLINES
 # =========================================================
 
 STANDINGS_STORY_HISTORY_FILE = "standings_story_posts.json"
+STEPHEN_A_PARODY_HISTORY_FILE = "stephen_a_parody_posts.json"
 
 
 def standing_records():
@@ -4745,6 +5171,7 @@ def process_analyst_week_posts(
 
     post_history = load_analyst_post_history()
 
+
     game_reactions = build_week_game_reactions(
         season_type,
         week_number
@@ -5828,6 +6255,7 @@ def trade_proposals_api():
 # =========================================================
 # START APP - MUST STAY LAST
 # =========================================================
+
 
 if __name__ == "__main__":
     app.run(
