@@ -58,24 +58,37 @@ def get_schedule_file(season_type, week_number):
     )
 
 
+def get_weekly_file(season_type, week_number, stat_type):
+    return os.path.join(
+        DATA_DIR,
+        "weekly",
+        season_type,
+        f"week_{week_number}",
+        f"{stat_type}.json"
+    )
+
+
 def team_phrase(team):
-    """
-    Converts:
-    Ravens -> the Ravens
-    Texans -> the Texans
-    49ers -> the 49ers
-    """
     if not team:
         return "the team"
 
     return f"the {team}"
 
 
+def team_phrase_start(team):
+    """
+    Correct sentence-start version:
+    Lions -> The Lions
+    49ers -> The 49ers
+    Buccaneers -> The Buccaneers
+    """
+    if not team:
+        return "The team"
+
+    return f"The {team}"
+
+
 def stable_choice(options, key):
-    """
-    Gives the same reaction every time for the same
-    matchup/story/week instead of changing on refresh.
-    """
     digest = hashlib.sha256(
         key.encode("utf-8")
     ).hexdigest()
@@ -96,95 +109,54 @@ def stable_choice(options, key):
 
 def classify_game_story(game, team_map):
 
-    home_id = str(
-        game.get("homeTeamId")
-    )
+    home_id = str(game.get("homeTeamId"))
+    away_id = str(game.get("awayTeamId"))
 
-    away_id = str(
-        game.get("awayTeamId")
-    )
+    home = team_map.get(home_id, {})
+    away = team_map.get(away_id, {})
 
-    home = team_map.get(
-        home_id,
-        {}
-    )
+    home_score = game.get("homeScore", 0)
+    away_score = game.get("awayScore", 0)
 
-    away = team_map.get(
-        away_id,
-        {}
-    )
-
-    home_score = game.get(
-        "homeScore",
-        0
-    )
-
-    away_score = game.get(
-        "awayScore",
-        0
-    )
-
-    home_ovr = home.get(
-        "overall"
-    )
-
-    away_ovr = away.get(
-        "overall"
-    )
+    home_ovr = home.get("overall")
+    away_ovr = away.get("overall")
 
     result = {
-        "schedule_id":
-            game.get("scheduleId"),
+        "schedule_id": game.get("scheduleId"),
 
-        "away_team":
-            away.get(
-                "name",
-                "Unknown"
-            ),
+        "away_team": away.get(
+            "name",
+            "Unknown"
+        ),
 
-        "home_team":
-            home.get(
-                "name",
-                "Unknown"
-            ),
+        "home_team": home.get(
+            "name",
+            "Unknown"
+        ),
 
-        "away_abbr":
-            away.get("abbr"),
+        "away_abbr": away.get("abbr"),
+        "home_abbr": home.get("abbr"),
 
-        "home_abbr":
-            home.get("abbr"),
+        "away_score": away_score,
+        "home_score": home_score,
 
-        "away_score":
-            away_score,
+        "away_overall": away_ovr,
+        "home_overall": home_ovr,
 
-        "home_score":
-            home_score,
+        "away_user": away.get(
+            "user",
+            ""
+        ),
 
-        "away_overall":
-            away_ovr,
+        "home_user": home.get(
+            "user",
+            ""
+        ),
 
-        "home_overall":
-            home_ovr,
-
-        "away_user":
-            away.get(
-                "user",
-                ""
-            ),
-
-        "home_user":
-            home.get(
-                "user",
-                ""
-            ),
-
-        "stories":
-            []
+        "stories": []
     }
 
-    stories = result[
-        "stories"
-    ]
+    stories = result["stories"]
 
     # =====================================================
     # PREGAME
@@ -201,47 +173,31 @@ def classify_game_story(game, team_map):
         ):
 
             gap = abs(
-                home_ovr
-                - away_ovr
+                home_ovr - away_ovr
             )
 
             if gap == 0:
 
                 stories.append({
-                    "type":
-                        "even_matchup",
-
-                    "severity":
-                        "medium",
-
-                    "headline":
-                        "Evenly matched teams"
+                    "type": "even_matchup",
+                    "severity": "medium",
+                    "headline": "Evenly matched teams"
                 })
 
             elif gap >= 6:
 
                 stories.append({
-                    "type":
-                        "major_mismatch",
-
-                    "severity":
-                        "high",
-
-                    "headline":
-                        "Major overall mismatch"
+                    "type": "major_mismatch",
+                    "severity": "high",
+                    "headline": "Major overall mismatch"
                 })
 
             elif gap >= 4:
 
                 stories.append({
-                    "type":
-                        "clear_favorite",
-
-                    "severity":
-                        "medium",
-
-                    "headline":
-                        "Clear favorite by overall"
+                    "type": "clear_favorite",
+                    "severity": "medium",
+                    "headline": "Clear favorite by overall"
                 })
 
         if game.get(
@@ -250,14 +206,9 @@ def classify_game_story(game, team_map):
         ):
 
             stories.append({
-                "type":
-                    "game_of_the_week",
-
-                "severity":
-                    "high",
-
-                "headline":
-                    "Game of the Week"
+                "type": "game_of_the_week",
+                "severity": "high",
+                "headline": "Game of the Week"
             })
 
         if (
@@ -266,14 +217,9 @@ def classify_game_story(game, team_map):
         ):
 
             stories.append({
-                "type":
-                    "user_game",
-
-                "severity":
-                    "medium",
-
-                "headline":
-                    "User-controlled matchup"
+                "type": "user_game",
+                "severity": "medium",
+                "headline": "User-controlled matchup"
             })
 
         return result
@@ -283,8 +229,7 @@ def classify_game_story(game, team_map):
     # =====================================================
 
     margin = abs(
-        home_score
-        - away_score
+        home_score - away_score
     )
 
     result["margin"] = margin
@@ -293,18 +238,14 @@ def classify_game_story(game, team_map):
 
         winner = home
         loser = away
-
         winner_location = "home"
-
         loser_score = away_score
 
     elif away_score > home_score:
 
         winner = away
         loser = home
-
         winner_location = "away"
-
         loser_score = home_score
 
     else:
@@ -312,14 +253,9 @@ def classify_game_story(game, team_map):
         result["winner"] = "Tie"
 
         stories.append({
-            "type":
-                "tie",
-
-            "severity":
-                "medium",
-
-            "headline":
-                "Game ended in a tie"
+            "type": "tie",
+            "severity": "medium",
+            "headline": "Game ended in a tie"
         })
 
         return result
@@ -346,74 +282,46 @@ def classify_game_story(game, team_map):
         "overall"
     )
 
-    # Blowout
     if margin >= 30:
 
         stories.append({
-            "type":
-                "embarrassing_blowout",
-
-            "severity":
-                "critical",
-
-            "headline":
-                "Embarrassing blowout"
+            "type": "embarrassing_blowout",
+            "severity": "critical",
+            "headline": "Embarrassing blowout"
         })
 
     elif margin >= 20:
 
         stories.append({
-            "type":
-                "blowout",
-
-            "severity":
-                "high",
-
-            "headline":
-                "Lopsided loss"
+            "type": "blowout",
+            "severity": "high",
+            "headline": "Lopsided loss"
         })
 
     elif margin <= 3:
 
         stories.append({
-            "type":
-                "nail_biter",
-
-            "severity":
-                "high",
-
-            "headline":
-                "Nail-biter"
+            "type": "nail_biter",
+            "severity": "high",
+            "headline": "Nail-biter"
         })
 
     elif margin <= 7:
 
         stories.append({
-            "type":
-                "close_game",
-
-            "severity":
-                "medium",
-
-            "headline":
-                "One-score game"
+            "type": "close_game",
+            "severity": "medium",
+            "headline": "One-score game"
         })
 
-    # Road victory
     if winner_location == "away":
 
         stories.append({
-            "type":
-                "road_win",
-
-            "severity":
-                "medium",
-
-            "headline":
-                "Road victory"
+            "type": "road_win",
+            "severity": "medium",
+            "headline": "Road victory"
         })
 
-    # Upset
     if (
         winner_ovr is not None
         and loser_ovr is not None
@@ -421,8 +329,7 @@ def classify_game_story(game, team_map):
     ):
 
         difference = (
-            loser_ovr
-            - winner_ovr
+            loser_ovr - winner_ovr
         )
 
         if difference >= 8:
@@ -435,20 +342,12 @@ def classify_game_story(game, team_map):
             severity = "medium"
 
         stories.append({
-            "type":
-                "upset",
-
-            "severity":
-                severity,
-
-            "headline":
-                "Upset victory",
-
-            "overall_difference":
-                difference
+            "type": "upset",
+            "severity": severity,
+            "headline": "Upset victory",
+            "overall_difference": difference
         })
 
-    # Favorite failed badly
     if (
         winner_ovr is not None
         and loser_ovr is not None
@@ -457,35 +356,24 @@ def classify_game_story(game, team_map):
     ):
 
         stories.append({
-            "type":
-                "favorite_disappointment",
-
-            "severity":
-                "high",
-
-            "headline":
-                "Favorite failed to deliver"
+            "type": "favorite_disappointment",
+            "severity": "high",
+            "headline": "Favorite failed to deliver"
         })
 
-    # Shutout
     if loser_score == 0:
 
         stories.append({
-            "type":
-                "shutout",
-
-            "severity":
-                "high",
-
-            "headline":
-                "Shutout"
+            "type": "shutout",
+            "severity": "high",
+            "headline": "Shutout"
         })
 
     return result
 
 
 # =========================================================
-# HUMAN ANALYST REACTION ENGINE
+# HUMAN ANALYST ENGINE
 # =========================================================
 
 def generate_reaction(
@@ -495,13 +383,8 @@ def generate_reaction(
     week_number
 ):
 
-    away = game_data[
-        "away_team"
-    ]
-
-    home = game_data[
-        "home_team"
-    ]
+    away = game_data["away_team"]
+    home = game_data["home_team"]
 
     away_ovr = game_data.get(
         "away_overall"
@@ -511,9 +394,7 @@ def generate_reaction(
         "home_overall"
     )
 
-    story_type = story.get(
-        "type"
-    )
+    story_type = story.get("type")
 
     schedule_id = game_data.get(
         "schedule_id"
@@ -524,14 +405,6 @@ def generate_reaction(
         f"{week_number}-"
         f"{schedule_id}-"
         f"{story_type}"
-    )
-
-    away_the = team_phrase(
-        away
-    )
-
-    home_the = team_phrase(
-        home
     )
 
     # =====================================================
@@ -547,33 +420,25 @@ def generate_reaction(
             favorite = home
             underdog = away
 
-        favorite_the = team_phrase(
-            favorite
-        )
-
-        underdog_the = team_phrase(
-            underdog
-        )
-
         choices = [
             (
-                f"{favorite_the} should win this game. "
+                f"{team_phrase_start(favorite)} should win this game. "
                 f"They've got the better roster and the talent edge. "
-                f"If they struggle with {underdog_the}, "
+                f"If they struggle with {team_phrase(underdog)}, "
                 f"we're going to have some serious questions afterward."
             ),
 
             (
                 f"I look at this matchup and I see a clear advantage "
-                f"for {favorite_the}. No excuses. "
+                f"for {team_phrase(favorite)}. No excuses. "
                 f"They're supposed to be the better football team. "
                 f"Now go prove it."
             ),
 
             (
-                f"This is one of those games where {favorite_the} "
+                f"This is one of those games where {team_phrase(favorite)} "
                 f"cannot afford to play around. "
-                f"{underdog_the.capitalize()} would love nothing more "
+                f"{team_phrase_start(underdog)} would love nothing more "
                 f"than to embarrass them."
             )
         ]
@@ -596,32 +461,24 @@ def generate_reaction(
             favorite = home
             underdog = away
 
-        favorite_the = team_phrase(
-            favorite
-        )
-
-        underdog_the = team_phrase(
-            underdog
-        )
-
         choices = [
             (
-                f"I'm leaning toward {favorite_the} here. "
-                f"They've got the roster edge, but they're still "
-                f"going to have to earn it. "
-                f"{underdog_the.capitalize()} aren't handing anybody a win."
+                f"I'm leaning toward {team_phrase(favorite)} here. "
+                f"They've got the roster edge, but they're still going "
+                f"to have to earn it. "
+                f"{team_phrase_start(underdog)} aren't handing anybody a win."
             ),
 
             (
-                f"{favorite_the.capitalize()} have the advantage on paper. "
+                f"{team_phrase_start(favorite)} have the advantage on paper. "
                 f"That's fine. Now show me it actually matters "
                 f"once the game starts."
             ),
 
             (
-                f"This feels like a game {favorite_the} should control. "
+                f"This feels like a game {team_phrase(favorite)} should control. "
                 f"But if they come out sloppy, "
-                f"{underdog_the} can absolutely make them pay."
+                f"{team_phrase(underdog)} can absolutely make them pay."
             )
         ]
 
@@ -638,15 +495,17 @@ def generate_reaction(
 
         choices = [
             (
-                f"I don't see much separating {away_the} and {home_the}. "
+                f"I don't see much separating {team_phrase(away)} "
+                f"and {team_phrase(home)}. "
                 f"This is going to come down to turnovers, execution "
                 f"and who makes the plays late."
             ),
 
             (
                 f"This is a legitimate toss-up. "
-                f"{away_the.capitalize()} and {home_the} are basically "
-                f"even on paper. Somebody has to separate themselves."
+                f"{team_phrase_start(away)} and {team_phrase(home)} "
+                f"are basically even on paper. "
+                f"Somebody has to separate themselves."
             ),
 
             (
@@ -661,7 +520,7 @@ def generate_reaction(
         )
 
     # =====================================================
-    # USER-CONTROLLED MATCHUP
+    # USER GAME
     # =====================================================
 
     if story_type == "user_game":
@@ -669,52 +528,41 @@ def generate_reaction(
         if game_data.get(
             "away_user"
         ):
+
             user_team = away
             opponent = home
+
             user_name = game_data.get(
                 "away_user"
             )
 
         else:
+
             user_team = home
             opponent = away
+
             user_name = game_data.get(
                 "home_user"
             )
 
-        user_the = team_phrase(
-            user_team
-        )
-
-        opponent_the = team_phrase(
-            opponent
-        )
-
         choices = [
             (
-                f"I'm keeping a close eye on {user_the}. "
+                f"I'm keeping a close eye on {team_phrase(user_team)}. "
                 f"{user_name} is on the sticks, so I'm not just looking "
                 f"at the ratings screen. A good user can erase a lot "
                 f"of advantages on paper."
             ),
 
             (
-                f"Don't dismiss {user_the} because of the ratings. "
-                f"{user_name} is controlling Baltimore's side of this matchup, "
-                f"and that makes things much more interesting against "
-                f"{opponent_the}."
-                if user_team == "Ravens"
-                else
-                f"Don't dismiss {user_the} because of the ratings. "
+                f"Don't dismiss {team_phrase(user_team)} because of the ratings. "
                 f"{user_name} is controlling this team, and that makes "
-                f"things much more interesting against {opponent_the}."
+                f"things much more interesting against {team_phrase(opponent)}."
             ),
 
             (
                 f"This is where the ratings only tell part of the story. "
-                f"{user_the.capitalize()} have an active user behind them. "
-                f"Now I want to see whether that translates into an advantage "
-                f"once the game starts."
+                f"{team_phrase_start(user_team)} have an active user behind them. "
+                f"Now I want to see whether that translates once the game starts."
             )
         ]
 
@@ -732,7 +580,7 @@ def generate_reaction(
         choices = [
             (
                 f"This is the game I'm circling. "
-                f"{away_the.capitalize()} against {home_the} "
+                f"{team_phrase_start(away)} against {team_phrase(home)} "
                 f"has my full attention."
             ),
 
@@ -753,43 +601,29 @@ def generate_reaction(
 
     if story_type == "embarrassing_blowout":
 
-        loser = game_data.get(
-            "loser"
-        )
-
-        winner = game_data.get(
-            "winner"
-        )
-
-        margin = game_data.get(
-            "margin"
-        )
-
-        loser_the = team_phrase(
-            loser
-        )
-
-        winner_the = team_phrase(
-            winner
-        )
+        loser = game_data.get("loser")
+        winner = game_data.get("winner")
+        margin = game_data.get("margin")
 
         choices = [
             (
                 f"No. Absolutely not. "
-                f"{loser_the.capitalize()} just lost by {margin} points. "
-                f"That's not one bad bounce. That's a complete breakdown."
+                f"{team_phrase_start(loser)} just lost by {margin} points. "
+                f"That's not one bad bounce. "
+                f"That's a complete breakdown."
             ),
 
             (
-                f"{loser_the.capitalize()} got embarrassed. "
+                f"{team_phrase_start(loser)} got embarrassed. "
                 f"There's no softer way to put it. "
-                f"{winner_the.capitalize()} controlled that game from start to finish."
+                f"{team_phrase_start(winner)} controlled that game "
+                f"from start to finish."
             ),
 
             (
                 f"You can lose a football game. "
                 f"What you cannot do is get run out of the building like that. "
-                f"{loser_the.capitalize()} have a lot to answer for."
+                f"{team_phrase_start(loser)} have a lot to answer for."
             )
         ]
 
@@ -804,23 +638,18 @@ def generate_reaction(
 
     if story_type == "blowout":
 
-        loser = game_data.get(
-            "loser"
-        )
-
-        winner = game_data.get(
-            "winner"
-        )
+        loser = game_data.get("loser")
+        winner = game_data.get("winner")
 
         choices = [
             (
-                f"The {loser} got handled. "
+                f"{team_phrase_start(loser)} got handled. "
                 f"This wasn't one or two plays going wrong. "
-                f"The {winner} were simply better."
+                f"{team_phrase_start(winner)} were simply better."
             ),
 
             (
-                f"I expected more from the {loser}. "
+                f"I expected more from {team_phrase(loser)}. "
                 f"That was a one-sided performance, and they have to own it."
             )
         ]
@@ -836,25 +665,23 @@ def generate_reaction(
 
     if story_type == "favorite_disappointment":
 
-        loser = game_data.get(
-            "loser"
-        )
+        loser = game_data.get("loser")
 
         choices = [
             (
                 f"This is exactly the kind of loss that gets people talking. "
-                f"The {loser} came in with the talent advantage "
+                f"{team_phrase_start(loser)} came in with the talent advantage "
                 f"and still couldn't get it done."
             ),
 
             (
                 f"I don't want to hear about ratings after that. "
-                f"The {loser} were supposed to be the better team. "
+                f"{team_phrase_start(loser)} were supposed to be the better team. "
                 f"They didn't look like it."
             ),
 
             (
-                f"That's a disappointing loss for the {loser}. "
+                f"That's a disappointing loss for {team_phrase(loser)}. "
                 f"When you have the better roster, expectations come with it."
             )
         ]
@@ -870,29 +697,25 @@ def generate_reaction(
 
     if story_type == "upset":
 
-        winner = game_data.get(
-            "winner"
-        )
-
-        loser = game_data.get(
-            "loser"
-        )
+        winner = game_data.get("winner")
+        loser = game_data.get("loser")
 
         choices = [
             (
                 f"Now THAT is a statement. "
-                f"The {winner} just beat a team everybody thought "
-                f"was better on paper."
+                f"{team_phrase_start(winner)} just beat a team "
+                f"that was supposed to be better on paper."
             ),
 
             (
                 f"Everybody looked at the ratings and leaned toward "
-                f"the {loser}. The {winner} didn't care. "
+                f"{team_phrase(loser)}. "
+                f"{team_phrase_start(winner)} didn't care. "
                 f"They went out there and took the game."
             ),
 
             (
-                f"The {winner} just flipped the script. "
+                f"{team_phrase_start(winner)} just flipped the script. "
                 f"That's the kind of upset that gets the whole league talking."
             )
         ]
@@ -908,21 +731,19 @@ def generate_reaction(
 
     if story_type == "shutout":
 
-        loser = game_data.get(
-            "loser"
-        )
+        loser = game_data.get("loser")
 
         choices = [
             (
                 f"Zero points? That's unacceptable. "
                 f"I don't care how good the defense was. "
-                f"The {loser} have to find something offensively."
+                f"{team_phrase_start(loser)} have to find something offensively."
             ),
 
             (
                 f"You cannot walk off the field with a zero "
                 f"on the scoreboard and shrug your shoulders. "
-                f"Something failed for the {loser}."
+                f"Something failed for {team_phrase(loser)}."
             )
         ]
 
@@ -932,24 +753,23 @@ def generate_reaction(
         )
 
     # =====================================================
-    # NAIL-BITER
+    # NAIL BITER
     # =====================================================
 
     if story_type == "nail_biter":
 
-        winner = game_data.get(
-            "winner"
-        )
+        winner = game_data.get("winner")
 
         choices = [
             (
                 f"That was a fight. "
-                f"The {winner} had to earn every bit of that win."
+                f"{team_phrase_start(winner)} had to earn "
+                f"every bit of that win."
             ),
 
             (
                 f"That's the kind of close game that tells you something. "
-                f"The {winner} found a way when it got tight."
+                f"{team_phrase_start(winner)} found a way when it got tight."
             )
         ]
 
@@ -969,8 +789,8 @@ def generate_reaction(
         )
 
         return (
-            f"It wasn't pretty, but the {winner} did enough "
-            f"to finish the job."
+            f"It wasn't pretty, but {team_phrase(winner)} "
+            f"did enough to finish the job."
         )
 
     # =====================================================
@@ -986,12 +806,12 @@ def generate_reaction(
         choices = [
             (
                 f"Winning on the road matters. "
-                f"The {winner} went into somebody else's building "
-                f"and handled business."
+                f"{team_phrase_start(winner)} went into somebody else's "
+                f"building and handled business."
             ),
 
             (
-                f"I give the {winner} credit for this one. "
+                f"I give {team_phrase(winner)} credit for this one. "
                 f"Road wins are never automatic."
             )
         ]
@@ -1002,7 +822,7 @@ def generate_reaction(
         )
 
     return (
-        f"{away_the.capitalize()} against {home_the} "
+        f"{team_phrase_start(away)} against {team_phrase(home)} "
         f"is one of the stories I'm watching around Project Madden."
     )
 
@@ -1013,23 +833,19 @@ def generate_reaction(
 
 @app.route("/")
 def home():
+
     return jsonify({
-        "status":
-            "online",
-
-        "service":
-            "Project Madden Analytics",
-
-        "analyst_system":
-            "online",
-
-        "analyst_version":
-            "2.0"
+        "status": "online",
+        "service": "Project Madden Analytics",
+        "analyst_system": "online",
+        "analyst_version": "2.1",
+        "player_system": "waiting_for_completed_game_data"
     })
 
 
 @app.route("/health")
 def health():
+
     return jsonify({
         "online": True
     })
@@ -1048,11 +864,8 @@ def snallabot_receiver(subpath):
     if request.method == "GET":
 
         return jsonify({
-            "working":
-                True,
-
-            "path":
-                subpath
+            "working": True,
+            "path": subpath
         })
 
     data = request.get_json(
@@ -1062,23 +875,17 @@ def snallabot_receiver(subpath):
     if data is None:
 
         return jsonify({
-            "success":
-                False,
-
-            "error":
-                "No JSON received"
+            "success": False,
+            "error": "No JSON received"
         }), 400
 
-    parts = subpath.split(
-        "/"
-    )
+    parts = subpath.split("/")
 
     print(
         "PROJECT MADDEN EXPORT:",
         subpath
     )
 
-    # League teams
     if parts[-1] == "leagueteams":
 
         with open(
@@ -1096,14 +903,10 @@ def snallabot_receiver(subpath):
             )
 
         return jsonify({
-            "success":
-                True,
-
-            "type":
-                "leagueteams"
+            "success": True,
+            "type": "leagueteams"
         }), 200
 
-    # Standings
     if parts[-1] == "standings":
 
         with open(
@@ -1121,14 +924,10 @@ def snallabot_receiver(subpath):
             )
 
         return jsonify({
-            "success":
-                True,
-
-            "type":
-                "standings"
+            "success": True,
+            "type": "standings"
         }), 200
 
-    # Extra
     if parts[-1] == "extra":
 
         with open(
@@ -1146,14 +945,10 @@ def snallabot_receiver(subpath):
             )
 
         return jsonify({
-            "success":
-                True,
-
-            "type":
-                "extra"
+            "success": True,
+            "type": "extra"
         }), 200
 
-    # Free agents
     if (
         "freeagents" in parts
         and parts[-1] == "roster"
@@ -1174,14 +969,10 @@ def snallabot_receiver(subpath):
             )
 
         return jsonify({
-            "success":
-                True,
-
-            "type":
-                "freeagents"
+            "success": True,
+            "type": "freeagents"
         }), 200
 
-    # Team roster
     if (
         "team" in parts
         and parts[-1] == "roster"
@@ -1210,17 +1001,11 @@ def snallabot_receiver(subpath):
             )
 
         return jsonify({
-            "success":
-                True,
-
-            "type":
-                "roster",
-
-            "team_id":
-                team_id
+            "success": True,
+            "type": "roster",
+            "team_id": team_id
         }), 200
 
-    # Weekly exports
     if "week" in parts:
 
         try:
@@ -1244,11 +1029,8 @@ def snallabot_receiver(subpath):
         except Exception:
 
             return jsonify({
-                "success":
-                    False,
-
-                "error":
-                    "Invalid weekly export path"
+                "success": False,
+                "error": "Invalid weekly export path"
             }), 400
 
         weekly_dir = os.path.join(
@@ -1278,32 +1060,252 @@ def snallabot_receiver(subpath):
             )
 
         return jsonify({
-            "success":
-                True,
-
-            "type":
-                "weekly",
-
-            "season_type":
-                season_type,
-
-            "week":
-                week_number,
-
-            "stat_type":
-                stat_type
+            "success": True,
+            "type": "weekly",
+            "season_type": season_type,
+            "week": week_number,
+            "stat_type": stat_type
         }), 200
 
     return jsonify({
-        "success":
-            True,
-
-        "type":
-            "unknown",
-
-        "path":
-            subpath
+        "success": True,
+        "type": "unknown",
+        "path": subpath
     }), 200
+
+
+# =========================================================
+# RAW WEEKLY DATA
+# =========================================================
+
+@app.route(
+    "/analytics/week/<season_type>/<week_number>/<stat_type>"
+)
+def weekly_data(
+    season_type,
+    week_number,
+    stat_type
+):
+
+    filename = get_weekly_file(
+        season_type,
+        week_number,
+        stat_type
+    )
+
+    if not os.path.exists(filename):
+
+        return jsonify({
+            "error": "Weekly data not found",
+            "stat_type": stat_type
+        }), 404
+
+    with open(filename, "r") as f:
+        data = json.load(f)
+
+    return jsonify(data)
+
+
+# =========================================================
+# PLAYER STAT SCHEMA INSPECTOR
+# =========================================================
+
+@app.route(
+    "/analytics/player-schema/<season_type>/<week_number>/<stat_type>"
+)
+def player_schema(
+    season_type,
+    week_number,
+    stat_type
+):
+
+    allowed = [
+        "passing",
+        "rushing",
+        "receiving",
+        "defense",
+        "kicking",
+        "punting"
+    ]
+
+    if stat_type not in allowed:
+
+        return jsonify({
+            "error": "Unsupported player stat type",
+            "allowed": allowed
+        }), 400
+
+    filename = get_weekly_file(
+        season_type,
+        week_number,
+        stat_type
+    )
+
+    if not os.path.exists(filename):
+
+        return jsonify({
+            "error": "Stat file not found",
+            "stat_type": stat_type
+        }), 404
+
+    with open(filename, "r") as f:
+        data = json.load(f)
+
+    if not isinstance(data, dict):
+
+        return jsonify({
+            "stat_type": stat_type,
+            "top_level_type":
+                type(data).__name__
+        })
+
+    lists_found = {}
+
+    first_record = None
+    first_list_name = None
+
+    for key, value in data.items():
+
+        if isinstance(value, list):
+
+            lists_found[key] = {
+                "count": len(value)
+            }
+
+            if (
+                len(value) > 0
+                and first_record is None
+            ):
+                first_record = value[0]
+                first_list_name = key
+
+    response = {
+        "season_type": season_type,
+        "week": week_number,
+        "stat_type": stat_type,
+        "top_level_keys": list(
+            data.keys()
+        ),
+        "lists_found": lists_found
+    }
+
+    if first_record is None:
+
+        response["ready_for_player_mapping"] = False
+
+        response["message"] = (
+            "No completed player stat records yet. "
+            "Run Snallabot export after a game is played."
+        )
+
+    else:
+
+        response["ready_for_player_mapping"] = True
+
+        response["player_list_name"] = (
+            first_list_name
+        )
+
+        response["first_record_keys"] = (
+            list(first_record.keys())
+            if isinstance(first_record, dict)
+            else []
+        )
+
+        response["first_record"] = (
+            first_record
+        )
+
+    return jsonify(response)
+
+
+# =========================================================
+# PLAYER ANALYST STATUS
+# =========================================================
+
+@app.route(
+    "/analyst/players/<season_type>/<week_number>"
+)
+def player_analyst_status(
+    season_type,
+    week_number
+):
+
+    stat_types = [
+        "passing",
+        "rushing",
+        "receiving",
+        "defense"
+    ]
+
+    status = {}
+
+    ready_count = 0
+
+    for stat_type in stat_types:
+
+        filename = get_weekly_file(
+            season_type,
+            week_number,
+            stat_type
+        )
+
+        if not os.path.exists(filename):
+
+            status[stat_type] = {
+                "file_received": False,
+                "records_found": 0
+            }
+
+            continue
+
+        with open(filename, "r") as f:
+            data = json.load(f)
+
+        records = 0
+
+        if isinstance(data, dict):
+
+            for value in data.values():
+
+                if isinstance(value, list):
+                    records += len(value)
+
+        status[stat_type] = {
+            "file_received": True,
+            "records_found": records
+        }
+
+        if records > 0:
+            ready_count += 1
+
+    return jsonify({
+        "analyst": "Project Madden First Take",
+
+        "season_type": season_type,
+
+        "week": week_number,
+
+        "player_reaction_engine":
+            (
+                "data_available"
+                if ready_count > 0
+                else "waiting_for_completed_game"
+            ),
+
+        "stat_categories_ready":
+            ready_count,
+
+        "categories": status,
+
+        "next_step":
+            (
+                "Inspect the player schema and map real Snallabot fields."
+                if ready_count > 0
+                else
+                "Play a game, export Snallabot stats, then inspect the schema."
+            )
+    })
 
 
 # =========================================================
@@ -1311,9 +1313,7 @@ def snallabot_receiver(subpath):
 # =========================================================
 
 @app.route(
-    "/analyst/reactions/"
-    "<season_type>/"
-    "<week_number>"
+    "/analyst/reactions/<season_type>/<week_number>"
 )
 def analyst_reactions(
     season_type,
@@ -1325,23 +1325,14 @@ def analyst_reactions(
         week_number
     )
 
-    if not os.path.exists(
-        filename
-    ):
+    if not os.path.exists(filename):
 
         return jsonify({
-            "error":
-                "Schedule data not found"
+            "error": "Schedule data not found"
         }), 404
 
-    with open(
-        filename,
-        "r"
-    ) as f:
-
-        schedule_data = json.load(
-            f
-        )
+    with open(filename, "r") as f:
+        schedule_data = json.load(f)
 
     team_map = get_team_map()
 
@@ -1409,13 +1400,11 @@ def analyst_reactions(
 
 
 # =========================================================
-# DISCORD / DISCOHOOK EMBED
+# DISCORD EMBED PREVIEW
 # =========================================================
 
 @app.route(
-    "/analyst/embed/"
-    "<season_type>/"
-    "<week_number>"
+    "/analyst/embed/<season_type>/<week_number>"
 )
 def analyst_embed(
     season_type,
@@ -1427,23 +1416,14 @@ def analyst_embed(
         week_number
     )
 
-    if not os.path.exists(
-        filename
-    ):
+    if not os.path.exists(filename):
 
         return jsonify({
-            "error":
-                "Schedule data not found"
+            "error": "Schedule data not found"
         }), 404
 
-    with open(
-        filename,
-        "r"
-    ) as f:
-
-        schedule_data = json.load(
-            f
-        )
+    with open(filename, "r") as f:
+        schedule_data = json.load(f)
 
     team_map = get_team_map()
 
@@ -1475,8 +1455,7 @@ def analyst_embed(
             fields.append({
                 "name":
                     (
-                        f"🏈 "
-                        f"{game_data['away_team']} "
+                        f"🏈 {game_data['away_team']} "
                         f"@ {game_data['home_team']}"
                     ),
 
@@ -1513,13 +1492,134 @@ def analyst_embed(
 
                 "footer": {
                     "text":
-                        (
-                            "Project Madden • "
-                            "Around The League"
-                        )
+                        "Project Madden • Around The League"
                 }
             }
         ]
+    })
+
+
+# =========================================================
+# MATCHUPS
+# =========================================================
+
+@app.route(
+    "/analytics/matchups/<season_type>/<week_number>"
+)
+def weekly_matchups(
+    season_type,
+    week_number
+):
+
+    filename = get_schedule_file(
+        season_type,
+        week_number
+    )
+
+    if not os.path.exists(filename):
+
+        return jsonify({
+            "error": "Schedule data not found"
+        }), 404
+
+    with open(filename, "r") as f:
+        schedule_data = json.load(f)
+
+    team_map = get_team_map()
+
+    games = schedule_data.get(
+        "gameScheduleInfoList",
+        []
+    )
+
+    matchups = []
+
+    for game in games:
+
+        away = team_map.get(
+            str(
+                game.get(
+                    "awayTeamId"
+                )
+            ),
+            {}
+        )
+
+        home = team_map.get(
+            str(
+                game.get(
+                    "homeTeamId"
+                )
+            ),
+            {}
+        )
+
+        matchups.append({
+            "schedule_id":
+                game.get("scheduleId"),
+
+            "away": {
+                "team":
+                    away.get(
+                        "name",
+                        "Unknown"
+                    ),
+
+                "overall":
+                    away.get("overall"),
+
+                "score":
+                    game.get(
+                        "awayScore",
+                        0
+                    ),
+
+                "user":
+                    away.get(
+                        "user",
+                        ""
+                    )
+            },
+
+            "home": {
+                "team":
+                    home.get(
+                        "name",
+                        "Unknown"
+                    ),
+
+                "overall":
+                    home.get("overall"),
+
+                "score":
+                    game.get(
+                        "homeScore",
+                        0
+                    ),
+
+                "user":
+                    home.get(
+                        "user",
+                        ""
+                    )
+            },
+
+            "status":
+                game.get("status")
+        })
+
+    return jsonify({
+        "season_type":
+            season_type,
+
+        "week":
+            week_number,
+
+        "game_count":
+            len(matchups),
+
+        "games":
+            matchups
     })
 
 
