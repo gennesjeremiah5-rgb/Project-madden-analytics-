@@ -2265,6 +2265,778 @@ def analyst_post_key(
     )
 
 
+
+# =========================================================
+# MARCUS HAYES - STANDINGS / POWER RANKINGS / STORYLINES
+# =========================================================
+
+STANDINGS_STORY_HISTORY_FILE = "standings_story_posts.json"
+
+
+def standing_records():
+    data = load_json_file("standings.json")
+
+    if not data:
+        return []
+
+    records = recursive_records(data)
+    useful = []
+
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+
+        team_id = first_value(
+            record,
+            [
+                "teamId",
+                "teamID",
+                "team_id",
+                "clubId",
+                "clubID"
+            ]
+        )
+
+        team_name = first_value(
+            record,
+            [
+                "teamName",
+                "displayName",
+                "name",
+                "team"
+            ]
+        )
+
+        wins = first_value(
+            record,
+            [
+                "wins",
+                "win",
+                "totalWins",
+                "seasonWins",
+                "w"
+            ]
+        )
+
+        losses = first_value(
+            record,
+            [
+                "losses",
+                "loss",
+                "totalLosses",
+                "seasonLosses",
+                "l"
+            ]
+        )
+
+        # Only treat a record as a standings record if it looks team-based
+        # and has at least wins/losses information.
+        if team_id is None and not team_name:
+            continue
+
+        if wins is None and losses is None:
+            continue
+
+        useful.append(record)
+
+    return useful
+
+
+def standing_int(record, keys, default=None):
+    value = first_value(record, keys)
+
+    if value is None:
+        return default
+
+    try:
+        return int(value)
+    except Exception:
+        try:
+            return int(float(value))
+        except Exception:
+            return default
+
+
+def standing_float(record, keys, default=None):
+    value = first_value(record, keys)
+
+    if value is None:
+        return default
+
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def standing_team_info(record):
+    team_id = first_value(
+        record,
+        [
+            "teamId",
+            "teamID",
+            "team_id",
+            "clubId",
+            "clubID"
+        ]
+    )
+
+    team = team_by_id(team_id) if team_id is not None else None
+
+    name = (
+        (team or {}).get("name")
+        or first_value(
+            record,
+            [
+                "teamName",
+                "displayName",
+                "name",
+                "team"
+            ]
+        )
+        or (
+            f"Team {team_id}"
+            if team_id is not None
+            else "Unknown Team"
+        )
+    )
+
+    return {
+        "team_id": team_id,
+        "name": str(name),
+        "abbr": (team or {}).get("abbr"),
+        "overall": (team or {}).get("overall"),
+        "logo": (team or {}).get("logo")
+    }
+
+
+def normalize_standings():
+    standings = []
+
+    for record in standing_records():
+        info = standing_team_info(record)
+
+        wins = standing_int(
+            record,
+            [
+                "wins",
+                "win",
+                "totalWins",
+                "seasonWins",
+                "w"
+            ],
+            0
+        ) or 0
+
+        losses = standing_int(
+            record,
+            [
+                "losses",
+                "loss",
+                "totalLosses",
+                "seasonLosses",
+                "l"
+            ],
+            0
+        ) or 0
+
+        ties = standing_int(
+            record,
+            [
+                "ties",
+                "tie",
+                "totalTies",
+                "seasonTies",
+                "t"
+            ],
+            0
+        ) or 0
+
+        points_for = standing_int(
+            record,
+            [
+                "ptsFor",
+                "pointsFor",
+                "pf",
+                "scoreFor",
+                "totalPointsFor"
+            ],
+            None
+        )
+
+        points_against = standing_int(
+            record,
+            [
+                "ptsAgainst",
+                "pointsAgainst",
+                "pa",
+                "scoreAgainst",
+                "totalPointsAgainst"
+            ],
+            None
+        )
+
+        playoff_seed = standing_int(
+            record,
+            [
+                "playoffSeed",
+                "seed",
+                "conferenceSeed",
+                "playoffRank"
+            ],
+            None
+        )
+
+        division_rank = standing_int(
+            record,
+            [
+                "divisionRank",
+                "divRank",
+                "divisionStanding"
+            ],
+            None
+        )
+
+        conference_rank = standing_int(
+            record,
+            [
+                "conferenceRank",
+                "confRank",
+                "conferenceStanding"
+            ],
+            None
+        )
+
+        streak_raw = first_value(
+            record,
+            [
+                "streak",
+                "winLossStreak",
+                "currentStreak",
+                "streakType"
+            ]
+        )
+
+        games = wins + losses + ties
+
+        if games > 0:
+            win_pct = (
+                wins + (ties * 0.5)
+            ) / games
+        else:
+            win_pct = 0.0
+
+        point_diff = None
+
+        if (
+            points_for is not None
+            and points_against is not None
+        ):
+            point_diff = points_for - points_against
+
+        standings.append({
+            "team_id": info["team_id"],
+            "team": info["name"],
+            "abbr": info["abbr"],
+            "logo": info["logo"],
+            "overall": info["overall"],
+            "wins": wins,
+            "losses": losses,
+            "ties": ties,
+            "games": games,
+            "win_pct": round(win_pct, 4),
+            "points_for": points_for,
+            "points_against": points_against,
+            "point_diff": point_diff,
+            "playoff_seed": playoff_seed,
+            "division_rank": division_rank,
+            "conference_rank": conference_rank,
+            "streak": (
+                str(streak_raw)
+                if streak_raw is not None
+                else None
+            )
+        })
+
+    # De-duplicate by team id/name because recursive scans may encounter
+    # the same standings object through nested structures.
+    deduped = {}
+    for team in standings:
+        key = (
+            str(team.get("team_id"))
+            if team.get("team_id") is not None
+            else team.get("team", "").lower()
+        )
+        deduped[key] = team
+
+    standings = list(deduped.values())
+
+    standings.sort(
+        key=lambda x: (
+            -x.get("win_pct", 0),
+            -(x.get("wins", 0)),
+            -(x.get("point_diff") or -9999)
+        )
+    )
+
+    return standings
+
+
+def parse_streak(streak):
+    if not streak:
+        return None, 0
+
+    text = str(streak).strip().upper()
+
+    # Supports strings like W5, W 5, WIN5, L3, LOSS 3.
+    match = re.search(
+        r"\b(W|L|WIN|LOSS)[\s\-:]*(\d+)\b",
+        text
+    )
+
+    if not match:
+        return None, 0
+
+    raw_type = match.group(1)
+    count = int(match.group(2))
+
+    streak_type = (
+        "W"
+        if raw_type in ["W", "WIN"]
+        else "L"
+    )
+
+    return streak_type, count
+
+
+POWER_RANKING_INTROS = [
+    "The standings are starting to separate the serious teams from everybody else.",
+    "We have enough information now to start talking about who actually deserves respect.",
+    "Records matter, but the way teams are winning matters too.",
+    "This is where reputation stops carrying you and production starts deciding the conversation.",
+    "The league table is giving us some real storylines now.",
+    "You can argue all you want, but eventually the standings force the conversation."
+]
+
+HOT_STREAK_LINES = [
+    "{team} is rolling right now. A {count}-game winning streak gets my attention.",
+    "Do not look now, but {team} has won {count} straight and confidence is building.",
+    "{team} has stacked {count} consecutive wins. That is how you create momentum.",
+    "A {count}-game heater from {team} means the rest of the league better stop sleeping.",
+    "{team} keeps winning, and after {count} straight victories this is no longer a fluke."
+]
+
+COLD_STREAK_LINES = [
+    "{team} has dropped {count} straight, and at some point the excuses have to stop.",
+    "A {count}-game losing streak is a problem. {team} needs answers immediately.",
+    "{team} is going the wrong direction with {count} consecutive losses.",
+    "When you lose {count} in a row, everybody gets questioned. {team} is officially under pressure.",
+    "{team} has lost {count} straight and the margin for error is disappearing fast."
+]
+
+FRAUD_WATCH_LINES = [
+    "{team} is officially on fraud watch. The rating says one thing, but a {wins}-{losses} record says something else.",
+    "I am looking at {team} and asking a very simple question: where are the results? This roster is too talented to be {wins}-{losses}.",
+    "{team} has the talent on paper, but the record is not matching the reputation. That is fraud-watch territory.",
+    "At {wins}-{losses}, {team} cannot keep hiding behind overall rating and preseason expectations.",
+    "The name and the rating might scare people, but {team}'s {wins}-{losses} record does not."
+]
+
+OVERACHIEVER_LINES = [
+    "{team} deserves credit. They are winning more than the roster rating suggested they would.",
+    "{team} is outperforming the numbers beside its name, and that deserves respect.",
+    "The ratings did not hand {team} anything. They are earning their record on the field.",
+    "{team} is one of the best examples of coaching and execution beating raw roster rating.",
+    "If you only looked at overall rating, you would have missed what {team} is doing."
+]
+
+PLAYOFF_RACE_LINES = [
+    "{team} is sitting in a playoff position, but nothing about this race looks comfortable yet.",
+    "{team} has itself in the postseason picture. Now the challenge is staying there.",
+    "The playoff race is tightening, and {team} currently owns one of those valuable spots.",
+    "{team} has a seat at the playoff table right now. Every game from here gets bigger.",
+    "A playoff seed is nice, but {team} still has work to do before anybody should feel safe."
+]
+
+
+def build_power_rankings():
+    standings = normalize_standings()
+
+    rankings = []
+
+    for index, team in enumerate(standings, start=1):
+        score = team["win_pct"] * 100
+
+        if team.get("point_diff") is not None:
+            score += max(
+                -20,
+                min(
+                    20,
+                    team["point_diff"] / 10
+                )
+            )
+
+        overall = team.get("overall")
+        if overall is not None:
+            try:
+                score += (
+                    int(overall) - 80
+                ) * 0.35
+            except Exception:
+                pass
+
+        rankings.append({
+            **team,
+            "power_score": round(score, 2),
+            "standing_rank": index
+        })
+
+    rankings.sort(
+        key=lambda x: (
+            -x["power_score"],
+            -x["wins"],
+            x["losses"]
+        )
+    )
+
+    for index, team in enumerate(rankings, start=1):
+        team["power_rank"] = index
+
+    return rankings
+
+
+def build_standings_storylines():
+    rankings = build_power_rankings()
+    stories = []
+
+    if not rankings:
+        return stories
+
+    intro_key = "-".join(
+        f"{x['team']}:{x['wins']}-{x['losses']}"
+        for x in rankings[:8]
+    )
+
+    stories.append({
+        "story_type": "power_rankings_intro",
+        "headline": "Marcus Hayes checks the league hierarchy",
+        "analyst_take": unique_analyst_choice(
+            "power_ranking_intro",
+            POWER_RANKING_INTROS,
+            intro_key
+        )
+    })
+
+    for team in rankings:
+        streak_type, streak_count = parse_streak(
+            team.get("streak")
+        )
+
+        key = (
+            f"{team['team']}-"
+            f"{team['wins']}-"
+            f"{team['losses']}-"
+            f"{team.get('streak')}-"
+            f"{team.get('overall')}"
+        )
+
+        if streak_type == "W" and streak_count >= 3:
+            template = unique_analyst_choice(
+                "hot_streak",
+                HOT_STREAK_LINES,
+                key
+            )
+
+            stories.append({
+                "story_type": "hot_streak",
+                "team": team["team"],
+                "headline": (
+                    f"{team['team']} is heating up"
+                ),
+                "analyst_take": template.format(
+                    team=team["team"],
+                    count=streak_count
+                )
+            })
+
+        if streak_type == "L" and streak_count >= 3:
+            template = unique_analyst_choice(
+                "cold_streak",
+                COLD_STREAK_LINES,
+                key
+            )
+
+            stories.append({
+                "story_type": "cold_streak",
+                "team": team["team"],
+                "headline": (
+                    f"Pressure rising on {team['team']}"
+                ),
+                "analyst_take": template.format(
+                    team=team["team"],
+                    count=streak_count
+                )
+            })
+
+        overall = team.get("overall")
+
+        try:
+            overall_num = int(overall)
+        except Exception:
+            overall_num = None
+
+        # Fraud watch:
+        # high-rated roster + enough games played + losing record.
+        if (
+            overall_num is not None
+            and overall_num >= 84
+            and team["games"] >= 4
+            and team["wins"] < team["losses"]
+        ):
+            template = unique_analyst_choice(
+                "fraud_watch",
+                FRAUD_WATCH_LINES,
+                key
+            )
+
+            stories.append({
+                "story_type": "fraud_watch",
+                "team": team["team"],
+                "headline": (
+                    f"Fraud Watch: {team['team']}"
+                ),
+                "analyst_take": template.format(
+                    team=team["team"],
+                    wins=team["wins"],
+                    losses=team["losses"]
+                )
+            })
+
+        # Overachiever:
+        # lower-rated team with at least 4 games and a .667+ record.
+        if (
+            overall_num is not None
+            and overall_num <= 81
+            and team["games"] >= 4
+            and team["win_pct"] >= 0.667
+        ):
+            template = unique_analyst_choice(
+                "overachiever",
+                OVERACHIEVER_LINES,
+                key
+            )
+
+            stories.append({
+                "story_type": "overachiever",
+                "team": team["team"],
+                "headline": (
+                    f"{team['team']} is outperforming expectations"
+                ),
+                "analyst_take": template.format(
+                    team=team["team"]
+                )
+            })
+
+        # Playoff race:
+        # only when Snallabot actually provides a seed.
+        playoff_seed = team.get("playoff_seed")
+
+        if (
+            playoff_seed is not None
+            and 1 <= playoff_seed <= 7
+        ):
+            template = unique_analyst_choice(
+                "playoff_race",
+                PLAYOFF_RACE_LINES,
+                key
+            )
+
+            stories.append({
+                "story_type": "playoff_race",
+                "team": team["team"],
+                "seed": playoff_seed,
+                "headline": (
+                    f"{team['team']} holds the No. {playoff_seed} seed"
+                ),
+                "analyst_take": template.format(
+                    team=team["team"]
+                )
+            })
+
+    return stories
+
+
+def standings_post_key(story):
+    return hashlib.sha256(
+        json.dumps(
+            story,
+            sort_keys=True
+        ).encode("utf-8")
+    ).hexdigest()[:16]
+
+
+def load_standings_story_history():
+    history = load_json_file(
+        STANDINGS_STORY_HISTORY_FILE
+    )
+
+    if not isinstance(history, list):
+        history = []
+
+    return history
+
+
+def post_standings_storyline_to_discord(story):
+    story_type = story.get(
+        "story_type",
+        "standings"
+    )
+
+    labels = {
+        "power_rankings_intro": "📊 LEAGUE CHECK",
+        "hot_streak": "🔥 HOT STREAK",
+        "cold_streak": "🧊 COLD STREAK",
+        "fraud_watch": "🚨 FRAUD WATCH",
+        "overachiever": "👀 OVERACHIEVER",
+        "playoff_race": "🏆 PLAYOFF RACE"
+    }
+
+    label = labels.get(
+        story_type,
+        "📊 STANDINGS"
+    )
+
+    return send_analyst_embed(
+        (
+            f"{label} • "
+            f"{story.get('headline', 'Marcus Hayes reacts')}"
+        ),
+        (
+            f"🎙️ **Marcus Hayes:**\n"
+            f"{story.get('analyst_take', '')}"
+        )
+    )
+
+
+def process_standings_posts():
+    if not analyst_webhook_configured():
+        return {
+            "success": False,
+            "error": (
+                "ANALYST_DISCORD_WEBHOOK_URL "
+                "is not configured in Render."
+            ),
+            "sent_count": 0,
+            "skipped_count": 0,
+            "failed_count": 0
+        }
+
+    stories = build_standings_storylines()
+    history = load_standings_story_history()
+
+    sent = []
+    skipped = []
+    failed = []
+
+    for story in stories:
+        key = standings_post_key(story)
+
+        if key in history:
+            skipped.append({
+                "headline": story.get("headline"),
+                "reason": "already_posted"
+            })
+            continue
+
+        result = post_standings_storyline_to_discord(
+            story
+        )
+
+        if result.get("sent"):
+            history.append(key)
+
+            sent.append({
+                "headline": story.get("headline"),
+                "story_type": story.get(
+                    "story_type"
+                )
+            })
+        else:
+            failed.append({
+                "headline": story.get("headline"),
+                "error": result.get("error")
+            })
+
+    save_json_file(
+        STANDINGS_STORY_HISTORY_FILE,
+        history[-500:]
+    )
+
+    return {
+        "success": len(failed) == 0,
+        "analyst": PROJECT_MADDEN_ANALYST,
+        "destination": "Project Madden Media",
+        "story_count": len(stories),
+        "sent_count": len(sent),
+        "skipped_count": len(skipped),
+        "failed_count": len(failed),
+        "sent": sent,
+        "skipped": skipped,
+        "failed": failed
+    }
+
+
+@app.route("/analyst/standings")
+def analyst_standings():
+    standings = normalize_standings()
+
+    return jsonify({
+        "analyst": PROJECT_MADDEN_ANALYST,
+        "team_count": len(standings),
+        "standings": standings
+    })
+
+
+@app.route("/analyst/power-rankings")
+def analyst_power_rankings():
+    rankings = build_power_rankings()
+
+    return jsonify({
+        "analyst": PROJECT_MADDEN_ANALYST,
+        "ranking_count": len(rankings),
+        "rankings": rankings
+    })
+
+
+@app.route("/analyst/storylines")
+def analyst_storylines():
+    stories = build_standings_storylines()
+
+    return jsonify({
+        "analyst": PROJECT_MADDEN_ANALYST,
+        "story_count": len(stories),
+        "storylines": stories
+    })
+
+
+@app.route(
+    "/analyst/post-standings",
+    methods=["GET", "POST"]
+)
+def analyst_post_standings():
+    result = process_standings_posts()
+
+    status_code = 200
+
+    if (
+        not result.get("success")
+        and result.get("error")
+    ):
+        status_code = 400
+
+    return jsonify(result), status_code
+
+
 # =========================================================
 # HOME / HEALTH
 # =========================================================
@@ -2362,9 +3134,26 @@ def snallabot_receiver(subpath):
             data
         )
 
+        marcus_standings = None
+
+        try:
+            marcus_standings = (
+                process_standings_posts()
+            )
+        except Exception as e:
+            # Do not fail a valid Snallabot standings export
+            # just because Discord/storyline processing had an issue.
+            marcus_standings = {
+                "success": False,
+                "error": str(e)
+            }
+
         return jsonify({
             "success": True,
-            "type": "standings"
+            "type": "standings",
+            "marcus_auto_post": (
+                marcus_standings
+            )
         })
 
     if parts[-1] == "extra":
@@ -2906,8 +3695,12 @@ def analyst_status():
         "automatic_posting": True,
         "automatic_trigger": (
             "Snallabot weekly schedules, passing, "
-            "rushing, receiving, or defense export"
-        )
+            "rushing, receiving, defense, or standings export"
+        ),
+        "standings": "/analyst/standings",
+        "power_rankings": "/analyst/power-rankings",
+        "storylines": "/analyst/storylines",
+        "post_standings_to_discord": "/analyst/post-standings"
     })
 
 
