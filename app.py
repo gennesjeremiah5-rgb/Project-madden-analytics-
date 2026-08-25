@@ -1,3 +1,4 @@
+
 from flask import Flask, request, jsonify, render_template_string
 import json
 import os
@@ -197,7 +198,6 @@ def detect_player_name(record):
     )
 
     if first and last:
-
         return (
             f"{first} {last}"
         ).strip()
@@ -226,18 +226,26 @@ def detect_position(record):
     ).upper()
 
 
+# =========================================================
+# FIXED SNALLABOT OVR DETECTOR
+# =========================================================
+
 def detect_overall(record):
 
     value = first_value(
         record,
         [
+            # Actual Snallabot / Madden roster fields
+            "playerBestOvr",
+            "playerSchemeOvr",
+            "teamSchemeOvr",
+
+            # Fallback formats
             "ovrRating",
             "overallRating",
             "overall",
             "ovr",
             "overall_rating",
-
-            # extra common Madden/API possibilities
             "playerOverall",
             "overallPlayerRating",
             "overallPlayer",
@@ -587,12 +595,6 @@ def parse_easy_pick(line):
         .replace(",", " ")
     )
 
-    # examples:
-    # 2027 round 2
-    # 2027 2nd
-    # 2027 2
-    # pick 2027 round 2
-
     year_match = re.search(
         r"\b(20\d{2})\b",
         clean
@@ -649,11 +651,6 @@ def parse_trade_assets(
 
         if not line:
             continue
-
-        # ---------------------------------------------
-        # Old format still supported:
-        # player|Lamar Jackson
-        # ---------------------------------------------
 
         if "|" in line:
 
@@ -724,11 +721,6 @@ def parse_trade_assets(
 
                 continue
 
-        # ---------------------------------------------
-        # Easy pick detection
-        # 2027 Round 2
-        # ---------------------------------------------
-
         pick = parse_easy_pick(
             line
         )
@@ -740,11 +732,6 @@ def parse_trade_assets(
             )
 
             continue
-
-        # ---------------------------------------------
-        # Otherwise assume player name
-        # Lamar Jackson
-        # ---------------------------------------------
 
         player = (
             find_player_on_team(
@@ -1456,7 +1443,8 @@ def home():
         "service": "Project Madden Analytics",
         "snallabot": "connected",
         "trade_center": "/proposetrade",
-        "raw_player_inspector": "/api/player-raw"
+        "raw_player_inspector": "/api/player-raw",
+        "snallabot_ovr_field": "playerBestOvr"
     })
 
 
@@ -2171,7 +2159,7 @@ Pick:
 
 <br><br>
 
-You can still use the old format too.
+OVR, age, position and dev are pulled automatically from Snallabot.
 
 </div>
 
