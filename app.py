@@ -1275,158 +1275,279 @@ def draw_trade_side(
     grade,
     logo
 ):
-    panel_fill = (18, 20, 27)
-    header_fill = (30, 33, 44)
-    border = (90, 54, 180)
-    white = (242, 242, 245)
-    muted = (182, 184, 192)
-    accent = (139, 76, 255)
+    # Franchise-mode inspired presentation without copying the exact game UI.
+    panel_fill = (8, 17, 30)
+    header_fill = (16, 74, 118)
+    slot_fill = (13, 23, 36)
+    slot_border = (55, 83, 109)
+    white = (245, 247, 250)
+    muted = (174, 189, 203)
+    accent = (74, 192, 255)
+    grade_bg = (18, 30, 44)
 
     draw.rounded_rectangle(
         (x, y, x + width, y + height),
-        radius=24,
+        radius=18,
         fill=panel_fill,
-        outline=border,
+        outline=(38, 112, 164),
         width=3
     )
 
-    draw.rounded_rectangle(
-        (x, y, x + width, y + 110),
-        radius=24,
+    draw.rectangle(
+        (x, y, x + width, y + 108),
         fill=header_fill
     )
 
     title_font = trade_card_font(
-        34,
+        31,
         bold=True
     )
 
-    body_font = trade_card_font(
-        25,
+    label_font = trade_card_font(
+        18,
+        bold=True
+    )
+
+    asset_font = trade_card_font(
+        23,
         bold=True
     )
 
     meta_font = trade_card_font(
-        20,
+        17,
         bold=False
     )
 
+    ovr_font = trade_card_font(
+        27,
+        bold=True
+    )
+
     grade_font = trade_card_font(
-        42,
+        38,
         bold=True
     )
 
     if logo:
         logo_copy = logo.copy()
         logo_copy.thumbnail(
-            (72, 72)
+            (76, 76)
         )
 
         canvas.alpha_composite(
             logo_copy,
             (
-                x + 22,
-                y + 19
+                x + 18,
+                y + 15
             )
         )
 
-        title_x = x + 112
+        title_x = x + 108
     else:
-        title_x = x + 28
+        title_x = x + 24
 
     draw.text(
-        (title_x, y + 29),
+        (title_x, y + 23),
         str(team_name).upper(),
         font=title_font,
         fill=white
     )
 
-    current_y = y + 135
+    draw.text(
+        (title_x, y + 66),
+        "TRADE ASSETS",
+        font=label_font,
+        fill=(205, 230, 245)
+    )
 
-    if not assets:
-        draw.text(
-            (x + 28, current_y),
-            "NO ASSETS",
-            font=body_font,
-            fill=muted
+    slot_y = y + 132
+    slot_h = 78
+    slot_gap = 12
+
+    for slot_index in range(5):
+        sy = (
+            slot_y
+            + slot_index
+            * (slot_h + slot_gap)
         )
-    else:
-        for asset in assets[:5]:
+
+        draw.rounded_rectangle(
+            (
+                x + 22,
+                sy,
+                x + width - 22,
+                sy + slot_h
+            ),
+            radius=10,
+            fill=slot_fill,
+            outline=slot_border,
+            width=2
+        )
+
+        if slot_index < len(assets):
+            asset = assets[
+                slot_index
+            ]
+
             formatted = (
                 format_trade_card_asset(
                     asset
                 )
             )
 
-            lines = wrap_card_text(
-                draw,
-                formatted,
-                body_font,
-                width - 56
-            )
+            if isinstance(
+                asset,
+                dict
+            ):
+                overall = (
+                    asset.get("overall")
+                    or asset.get("ovr")
+                )
 
-            draw.text(
-                (
-                    x + 28,
-                    current_y
-                ),
-                "•",
-                font=body_font,
-                fill=accent
-            )
+                name = (
+                    asset.get("name")
+                    or asset.get("player")
+                    or formatted
+                )
 
-            text_y = current_y
+                position = (
+                    asset.get("position")
+                    or ""
+                )
 
-            for line in lines[:2]:
+                if asset.get(
+                    "type"
+                ) == "pick":
+                    draw.text(
+                        (
+                            x + 42,
+                            sy + 18
+                        ),
+                        "NFL DRAFT",
+                        font=label_font,
+                        fill=accent
+                    )
+
+                    draw.text(
+                        (
+                            x + 165,
+                            sy + 16
+                        ),
+                        formatted,
+                        font=asset_font,
+                        fill=white
+                    )
+                else:
+                    draw.text(
+                        (
+                            x + 42,
+                            sy + 14
+                        ),
+                        str(name),
+                        font=asset_font,
+                        fill=white
+                    )
+
+                    meta = (
+                        str(position)
+                        if position
+                        else "PLAYER"
+                    )
+
+                    draw.text(
+                        (
+                            x + 42,
+                            sy + 47
+                        ),
+                        meta,
+                        font=meta_font,
+                        fill=muted
+                    )
+
+                    if overall is not None:
+                        badge_x = (
+                            x + width - 88
+                        )
+
+                        draw.ellipse(
+                            (
+                                badge_x,
+                                sy + 11,
+                                badge_x + 54,
+                                sy + 65
+                            ),
+                            fill=(18, 85, 49),
+                            outline=(115, 242, 155),
+                            width=2
+                        )
+
+                        draw.text(
+                            (
+                                badge_x + 27,
+                                sy + 37
+                            ),
+                            str(overall),
+                            font=ovr_font,
+                            fill=white,
+                            anchor="mm"
+                        )
+            else:
                 draw.text(
                     (
-                        x + 52,
-                        text_y
+                        x + 42,
+                        sy + 24
                     ),
-                    line,
-                    font=body_font,
+                    formatted,
+                    font=asset_font,
                     fill=white
                 )
-                text_y += 31
 
-            current_y = (
-                text_y + 18
-            )
-
-            draw.line(
+        else:
+            draw.text(
                 (
-                    x + 28,
-                    current_y - 6,
-                    x + width - 28,
-                    current_y - 6
+                    x + width / 2,
+                    sy + slot_h / 2
                 ),
-                fill=(48, 51, 61),
-                width=2
+                "ADD PLAYER OR DRAFT PICK",
+                font=label_font,
+                fill=(90, 113, 133),
+                anchor="mm"
             )
 
-            if current_y > (
-                y + height - 125
-            ):
-                break
+    grade_y = (
+        y + height - 88
+    )
+
+    draw.rounded_rectangle(
+        (
+            x + 22,
+            grade_y,
+            x + width - 22,
+            y + height - 20
+        ),
+        radius=10,
+        fill=grade_bg
+    )
 
     draw.text(
         (
-            x + 28,
-            y + height - 82
+            x + 42,
+            grade_y + 18
         ),
         "TRADE GRADE",
-        font=meta_font,
+        font=label_font,
         fill=muted
     )
 
     draw.text(
         (
-            x + width - 110,
-            y + height - 94
+            x + width - 58,
+            grade_y + 34
         ),
         str(grade or "—"),
         font=grade_font,
-        fill=white
+        fill=white,
+        anchor="mm"
     )
 
 
@@ -1434,46 +1555,99 @@ def generate_trade_card(
     analysis
 ):
     width = 1600
-    height = 980
+    height = 1000
 
     canvas = Image.new(
         "RGBA",
         (width, height),
-        (10, 11, 16, 255)
+        (4, 11, 19, 255)
     )
 
     draw = ImageDraw.Draw(
         canvas
     )
 
-    white = (244, 244, 247)
-    muted = (178, 180, 190)
-    accent = (139, 76, 255)
+    white = (245, 247, 250)
+    muted = (167, 184, 198)
+    accent = (58, 169, 234)
 
-    # Header.
-    draw.rounded_rectangle(
-        (42, 36, width - 42, 160),
-        radius=30,
-        fill=(22, 24, 31),
-        outline=accent,
-        width=3
-    )
+    # Blue franchise-mode style backdrop.
+    for stripe_x in range(
+        -200,
+        width + 200,
+        90
+    ):
+        draw.polygon(
+            [
+                (
+                    stripe_x,
+                    0
+                ),
+                (
+                    stripe_x + 50,
+                    0
+                ),
+                (
+                    stripe_x + 420,
+                    height
+                ),
+                (
+                    stripe_x + 360,
+                    height
+                )
+            ],
+            fill=(5, 20, 34)
+        )
 
     header_font = trade_card_font(
-        45,
+        42,
+        bold=True
+    )
+
+    sub_font = trade_card_font(
+        20,
         bold=True
     )
 
     small_font = trade_card_font(
-        22,
+        18,
         bold=False
     )
 
+    review_font = trade_card_font(
+        29,
+        bold=True
+    )
+
+    # Top title bar.
+    draw.rectangle(
+        (
+            0,
+            0,
+            width,
+            118
+        ),
+        fill=(6, 13, 22)
+    )
+
     draw.text(
-        (84, 67),
-        "PROJECT MADDEN TRADE PROPOSAL",
+        (
+            55,
+            30
+        ),
+        "REQUEST A TRADE",
         font=header_font,
         fill=white
+    )
+
+    draw.text(
+        (
+            55,
+            82
+        ),
+        "PROJECT MADDEN • LEAGUE OFFICE TRADE CENTER V2",
+        font=sub_font,
+        fill=accent
     )
 
     trade_id = str(
@@ -1485,10 +1659,14 @@ def generate_trade_card(
 
     if trade_id:
         draw.text(
-            (84, 125),
-            f"Trade ID: {trade_id}",
+            (
+                width - 55,
+                50
+            ),
+            f"TRADE ID {trade_id}",
             font=small_font,
-            fill=muted
+            fill=muted,
+            anchor="ra"
         )
 
     team_a = analysis.get(
@@ -1557,14 +1735,14 @@ def generate_trade_card(
         )
     )
 
-    panel_y = 195
-    panel_h = 590
-    panel_w = 680
+    panel_y = 150
+    panel_h = 690
+    panel_w = 675
 
     draw_trade_side(
         canvas,
         draw,
-        65,
+        55,
         panel_y,
         panel_w,
         panel_h,
@@ -1577,7 +1755,7 @@ def generate_trade_card(
     draw_trade_side(
         canvas,
         draw,
-        855,
+        870,
         panel_y,
         panel_w,
         panel_h,
@@ -1587,16 +1765,31 @@ def generate_trade_card(
         logo_b
     )
 
-    versus_font = trade_card_font(
-        52,
+    # Center exchange indicator.
+    arrow_font = trade_card_font(
+        62,
         bold=True
     )
 
     draw.text(
-        (775, 455),
+        (
+            800,
+            470
+        ),
         "⇄",
-        font=versus_font,
+        font=arrow_font,
         fill=accent,
+        anchor="mm"
+    )
+
+    draw.text(
+        (
+            800,
+            535
+        ),
+        "TRADE",
+        font=sub_font,
+        fill=muted,
         anchor="mm"
     )
 
@@ -1628,48 +1821,59 @@ def generate_trade_card(
         else None
     )
 
-    draw.rounded_rectangle(
+    # Bottom command/review bar inspired by franchise UI.
+    draw.rectangle(
         (
-            65,
-            820,
-            width - 65,
-            930
+            0,
+            865,
+            width,
+            height
         ),
-        radius=22,
-        fill=(22, 24, 31),
-        outline=(74, 77, 88),
-        width=2
-    )
-
-    decision_font = trade_card_font(
-        30,
-        bold=True
+        fill=(7, 14, 22)
     )
 
     draw.text(
-        (95, 846),
+        (
+            55,
+            890
+        ),
         "LEAGUE OFFICE REVIEW",
-        font=small_font,
+        font=sub_font,
         fill=muted
     )
 
     draw.text(
-        (95, 878),
+        (
+            55,
+            925
+        ),
         str(decision),
-        font=decision_font,
+        font=review_font,
         fill=white
     )
 
     if gap is not None:
         draw.text(
             (
-                width - 330,
-                878
+                width - 55,
+                925
             ),
-            f"Value Gap: {gap}%",
-            font=small_font,
-            fill=muted
+            f"VALUE GAP {gap}%",
+            font=sub_font,
+            fill=muted,
+            anchor="ra"
         )
+
+    draw.text(
+        (
+            width / 2,
+            975
+        ),
+        "Project Madden • Trade Center V2",
+        font=small_font,
+        fill=(100, 120, 137),
+        anchor="mm"
+    )
 
     out_dir = (
         Path(__file__).resolve().parent
@@ -3746,6 +3950,197 @@ def build_weekly_panel_takes(
 
 
 
+
+def build_hot_seat_rankings():
+    standings = normalize_standings()
+
+    if not standings:
+        return []
+
+    rankings = []
+
+    for team in standings:
+        games = int(
+            team.get("games", 0) or 0
+        )
+
+        wins = int(
+            team.get("wins", 0) or 0
+        )
+
+        losses = int(
+            team.get("losses", 0) or 0
+        )
+
+        point_diff = float(
+            team.get("point_diff", 0) or 0
+        )
+
+        overall = int(
+            team.get("overall", 80) or 80
+        )
+
+        streak = str(
+            team.get("streak", "") or ""
+        ).upper()
+
+        team_info = team_by_id(
+            team.get("team_id")
+        ) or {}
+
+        user_name = (
+            team_info.get("user")
+            or "CPU / Unassigned"
+        )
+
+        if games == 0:
+            continue
+
+        loss_pct = (
+            losses / games
+            if games
+            else 0
+        )
+
+        # Pressure rises when a strong roster underperforms,
+        # loses repeatedly, or has a poor point differential.
+        pressure = (
+            loss_pct * 50
+            + max(
+                0,
+                overall - 80
+            ) * 2.0
+            + max(
+                0,
+                -point_diff / max(
+                    games,
+                    1
+                )
+            ) * 2.25
+        )
+
+        if streak.startswith("L"):
+            try:
+                streak_count = int(
+                    streak[1:]
+                )
+            except Exception:
+                streak_count = 0
+
+            pressure += min(
+                streak_count,
+                6
+            ) * 4.5
+
+        # Winning teams should almost never appear.
+        if wins > losses:
+            pressure -= 20
+
+        if wins >= losses and point_diff >= 0:
+            pressure -= 15
+
+        reasons = []
+
+        if overall >= 84 and losses > wins:
+            reasons.append(
+                f"{overall} OVR roster is under .500"
+            )
+
+        if point_diff <= -25:
+            reasons.append(
+                f"{int(point_diff)} point differential"
+            )
+
+        if streak.startswith("L"):
+            reasons.append(
+                f"current {streak} losing streak"
+            )
+
+        if loss_pct >= 0.65:
+            reasons.append(
+                "losing most of their games"
+            )
+
+        if not reasons:
+            reasons.append(
+                "results are not matching expectations"
+            )
+
+        rankings.append({
+            "team":
+                team.get("team"),
+            "team_id":
+                team.get("team_id"),
+            "user":
+                user_name,
+            "record":
+                f"{wins}-{losses}",
+            "wins":
+                wins,
+            "losses":
+                losses,
+            "games":
+                games,
+            "overall":
+                overall,
+            "point_diff":
+                int(point_diff),
+            "streak":
+                streak,
+            "pressure_score":
+                round(
+                    pressure,
+                    1
+                ),
+            "reasons":
+                reasons[:4]
+        })
+
+    rankings.sort(
+        key=lambda item:
+            item["pressure_score"],
+        reverse=True
+    )
+
+    # Only surface teams that actually have meaningful pressure.
+    return [
+        item
+        for item in rankings
+        if item["pressure_score"] >= 32
+    ][:5]
+
+
+def build_hot_seat_panel_take(
+    hot_seat
+):
+    if not hot_seat:
+        return {}
+
+    top = hot_seat[0]
+
+    team = top["team"]
+    user = top["user"]
+    record = top["record"]
+    overall = top["overall"]
+
+    return {
+        "marcus": (
+            f"**{user} ({team})** is sitting on my hottest seat right now. "
+            f"A {record} record with a {overall} OVR roster means the results "
+            "are not matching the talent. At some point, execution has to improve."
+        ),
+        "stephen": (
+            f"**{team}** cannot hide behind roster talent. "
+            f"If you are rated {overall} OVR and still sitting at {record}, "
+            "I am questioning the decisions, the adjustments, and the consistency."
+        ),
+        "pat": (
+            f"**{team}** needs a get-right week. When the losses start stacking, "
+            "every turnover, fourth-down call, and clock decision gets magnified."
+        )
+    }
+
+
 def build_super_bowl_favorites():
     standings = normalize_standings()
 
@@ -4154,6 +4549,10 @@ def build_weekly_show_summary(
         build_super_bowl_favorites()
     )
 
+    hot_seat = (
+        build_hot_seat_rankings()
+    )
+
     top_games = sorted(
         game_reactions,
         key=lambda item: (
@@ -4252,6 +4651,12 @@ def build_weekly_show_summary(
             trade_proposals,
         "super_bowl_favorites":
             super_bowl_favorites,
+        "hot_seat":
+            hot_seat,
+        "hot_seat_panel_take":
+            build_hot_seat_panel_take(
+                hot_seat
+            ),
         "stephen_a_parody_segment":
             stephen_segment[:2],
         "pat_mcafee_parody_segment":
@@ -4401,6 +4806,61 @@ def weekly_show_embed_fields(
                 "🎯 Weekly Picks & Favorites",
             "value":
                 "\n\n".join(lines)[:1024],
+            "inline":
+                False
+        })
+
+    hot_seat = show.get(
+        "hot_seat",
+        []
+    )
+
+    if hot_seat:
+        lines = []
+
+        for index, item in enumerate(
+            hot_seat,
+            start=1
+        ):
+            reasons = "; ".join(
+                item.get(
+                    "reasons",
+                    []
+                )
+            )
+
+            lines.append(
+                f"{index}. **{item.get('user')} — {item.get('team')}**\n"
+                f"{item.get('record')} | {item.get('overall')} OVR | "
+                f"Point Diff {item.get('point_diff')}\n"
+                f"{reasons}"
+            )
+
+        fields.append({
+            "name":
+                "🔥 Hot Seat",
+            "value":
+                "\n\n".join(lines)[:1024],
+            "inline":
+                False
+        })
+
+    hot_takes = show.get(
+        "hot_seat_panel_take",
+        {}
+    )
+
+    if hot_takes:
+        fields.append({
+            "name":
+                "🔥 Hot Seat — Panel Reaction",
+            "value": (
+                f"**Marcus Hayes:** {hot_takes.get('marcus', '')}\n\n"
+                f"**Stephen A. Smith — AI Parody:** {hot_takes.get('stephen', '')}\n\n"
+                f"**Pat McAfee — AI Parody:** {hot_takes.get('pat', '')}\n\n"
+                "*Stephen A. Smith and Pat McAfee content is fictional AI parody "
+                "and not real statements from either person.*"
+            )[:1024],
             "inline":
                 False
         })
@@ -4678,6 +5138,24 @@ def send_weekly_show_to_discord(
 
 
 @app.route(
+    "/analyst/hot-seat"
+)
+def analyst_hot_seat():
+    hot_seat = build_hot_seat_rankings()
+
+    return jsonify({
+        "brand":
+            "Project Madden Media",
+        "hot_seat":
+            hot_seat,
+        "panel_take":
+            build_hot_seat_panel_take(
+                hot_seat
+            )
+    })
+
+
+@app.route(
     "/analyst/super-bowl-favorites"
 )
 def analyst_super_bowl_favorites():
@@ -4733,6 +5211,9 @@ def weekly_show_debug(
             ),
             "has_super_bowl_favorites": bool(
                 show.get("super_bowl_favorites")
+            ),
+            "has_hot_seat": bool(
+                show.get("hot_seat")
             ),
             "weekly_show_webhook_configured": (
                 weekly_show_webhook_configured()
