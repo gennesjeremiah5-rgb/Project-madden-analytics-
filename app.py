@@ -1087,11 +1087,6 @@ def post_trade_to_discord(analysis):
             f"{analysis['team_b_mention']}"
         ),
 
-        "allowed_mentions": {
-            "parse": [],
-            "users": mention_ids
-        },
-
         "embeds": [
             {
                 "title": "🚨 PROJECT MADDEN TRADE PROPOSAL",
