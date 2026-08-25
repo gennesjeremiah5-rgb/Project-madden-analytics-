@@ -3645,7 +3645,7 @@ def send_weekly_show_embed(
 
     weekly_show_logo_url = (
         "https://project-madden-analytics.onrender.com/"
-        "assets/weekly-show-logo.jpeg"
+        "assets/weekly-show-logo.jpg"
     )
 
     embed = {
@@ -3775,7 +3775,7 @@ def send_weekly_show_to_discord(
     "/analyst/weekly-show/"
     "<season_type>/<int:week_number>"
 )
-def analyst_weekly_show(
+def analyst_weekly_show_summary(
     season_type,
     week_number
 ):
@@ -6756,13 +6756,13 @@ def stephen_a_smith_parody_avatar():
 
 
 @app.route(
-    "/assets/weekly-show-logo.jpeg",
+    "/assets/weekly-show-logo.jpg",
     methods=["GET"]
 )
 def weekly_show_logo():
     return send_file(
         Path(__file__).resolve().parent
-        / "weekly_show_logo.jpeg",
+        / "weekly_show_logo.jpg",
         mimetype="image/jpeg"
     )
 
