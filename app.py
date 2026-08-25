@@ -220,14 +220,20 @@ def detect_position(record):
     ).upper()
 
 
+# =========================================================
+# SNALLABOT OVR DETECTOR
+# =========================================================
+
 def detect_overall(record):
     value = first_value(
         record,
         [
+            # Actual Snallabot Madden fields
             "playerBestOvr",
             "playerSchemeOvr",
             "teamSchemeOvr",
 
+            # Fallbacks
             "ovrRating",
             "overallRating",
             "overall",
@@ -414,6 +420,54 @@ def build_roster_index(team_name):
     return team, players
 
 
+# =========================================================
+# RAW PLAYER LOOKUP
+# =========================================================
+
+def find_raw_player_records(
+    team_name,
+    player_name
+):
+
+    team, roster = get_team_roster(
+        team_name
+    )
+
+    target = (
+        player_name
+        .strip()
+        .lower()
+    )
+
+    records = recursive_records(
+        roster
+    )
+
+    matches = []
+
+    for record in records:
+
+        name = detect_player_name(
+            record
+        )
+
+        if not name:
+            continue
+
+        if target in name.lower():
+
+            matches.append({
+                "detected_name": name,
+                "raw_record": record
+            })
+
+    return team, matches
+
+
+# =========================================================
+# PLAYER LOOKUP
+# =========================================================
+
 def find_player_on_team(
     team_name,
     player_name
@@ -502,7 +556,7 @@ def find_player_on_team(
 
 
 # =========================================================
-# PICK / ASSET PARSER
+# PICK PARSER
 # =========================================================
 
 def parse_easy_pick(line):
@@ -550,6 +604,10 @@ def parse_easy_pick(line):
         "years_away": years_away
     }
 
+
+# =========================================================
+# TRADE ASSET PARSER
+# =========================================================
 
 def parse_trade_assets(
     text,
@@ -769,7 +827,7 @@ def calculate_package_value(assets):
 
 
 # =========================================================
-# GRADES + COMMITTEE
+# TRADE GRADES
 # =========================================================
 
 def trade_grade(
@@ -824,6 +882,10 @@ def trade_grade(
         )
     }
 
+
+# =========================================================
+# TRADE COMMITTEE
+# =========================================================
 
 def committee_review(
     team_a,
@@ -1136,7 +1198,7 @@ def analyze_trade(data):
 
 
 # =========================================================
-# DISPLAY
+# DISPLAY ASSETS
 # =========================================================
 
 def summarize_asset(asset):
@@ -1189,7 +1251,7 @@ def post_trade_to_discord(
         return {
             "sent": False,
             "error":
-                "DISCORD_WEBHOOK_URL not configured"
+                "DISCORD_WEBHOOK_URL is not configured in Render."
         }
 
     team_a_assets = "\n".join(
@@ -1329,7 +1391,8 @@ def post_trade_to_discord(
             "error":
                 (
                     f"Discord returned "
-                    f"{response.status_code}"
+                    f"{response.status_code}: "
+                    f"{response.text[:200]}"
                 )
         }
 
@@ -1351,19 +1414,25 @@ def home():
         "service": "Project Madden Analytics",
         "snallabot": "connected",
         "trade_center": "/proposetrade",
-        "discord_webhook_configured":
-            bool(
-                os.environ.get(
-                    "DISCORD_WEBHOOK_URL"
-                )
+        "player_search": "/api/players",
+        "raw_player_inspector": "/api/player-raw",
+        "discord_webhook_configured": bool(
+            os.environ.get(
+                "DISCORD_WEBHOOK_URL"
             )
+        )
     })
 
 
 @app.route("/health")
 def health():
     return jsonify({
-        "online": True
+        "online": True,
+        "discord_webhook_configured": bool(
+            os.environ.get(
+                "DISCORD_WEBHOOK_URL"
+            )
+        )
     })
 
 
@@ -1380,6 +1449,7 @@ def health():
     ]
 )
 def snallabot_receiver(subpath):
+
     if request.method == "GET":
         return jsonify({
             "working": True,
@@ -1400,53 +1470,67 @@ def snallabot_receiver(subpath):
         "/"
     )
 
+    print(
+        "PROJECT MADDEN EXPORT:",
+        subpath
+    )
+
     if parts[-1] == "leagueteams":
+
         save_json_file(
             "leagueteams.json",
             data
         )
 
         return jsonify({
-            "success": True
+            "success": True,
+            "type": "leagueteams"
         })
 
     if parts[-1] == "standings":
+
         save_json_file(
             "standings.json",
             data
         )
 
         return jsonify({
-            "success": True
+            "success": True,
+            "type": "standings"
         })
 
     if parts[-1] == "extra":
+
         save_json_file(
             "extra.json",
             data
         )
 
         return jsonify({
-            "success": True
+            "success": True,
+            "type": "extra"
         })
 
     if (
         "freeagents" in parts
         and parts[-1] == "roster"
     ):
+
         save_json_file(
             "freeagents_roster.json",
             data
         )
 
         return jsonify({
-            "success": True
+            "success": True,
+            "type": "freeagents"
         })
 
     if (
         "team" in parts
         and parts[-1] == "roster"
     ):
+
         team_index = parts.index(
             "team"
         )
@@ -1461,25 +1545,36 @@ def snallabot_receiver(subpath):
         )
 
         return jsonify({
-            "success": True
+            "success": True,
+            "type": "roster",
+            "team_id": team_id
         })
 
     if "week" in parts:
-        week_index = parts.index(
-            "week"
-        )
 
-        season_type = parts[
-            week_index + 1
-        ]
+        try:
+            week_index = parts.index(
+                "week"
+            )
 
-        week_number = parts[
-            week_index + 2
-        ]
+            season_type = parts[
+                week_index + 1
+            ]
 
-        stat_type = parts[
-            week_index + 3
-        ]
+            week_number = parts[
+                week_index + 2
+            ]
+
+            stat_type = parts[
+                week_index + 3
+            ]
+
+        except Exception:
+            return jsonify({
+                "success": False,
+                "error":
+                    "Invalid weekly export path"
+            }), 400
 
         weekly_dir = os.path.join(
             DATA_DIR,
@@ -1508,11 +1603,114 @@ def snallabot_receiver(subpath):
             )
 
         return jsonify({
-            "success": True
+            "success": True,
+            "type": "weekly",
+            "season_type": season_type,
+            "week": week_number,
+            "stat_type": stat_type
         })
 
     return jsonify({
-        "success": True
+        "success": True,
+        "type": "unknown",
+        "path": subpath
+    })
+
+
+# =========================================================
+# PLAYER API
+# =========================================================
+
+@app.route("/api/players")
+def players_api():
+
+    team_name = request.args.get(
+        "team",
+        ""
+    )
+
+    query = request.args.get(
+        "q",
+        ""
+    ).lower()
+
+    try:
+        team, players = build_roster_index(
+            team_name
+        )
+
+    except Exception as e:
+        return jsonify({
+            "error": str(e)
+        }), 400
+
+    if query:
+
+        players = [
+            player
+            for player in players
+            if query
+            in player["name"].lower()
+        ]
+
+    return jsonify({
+        "team":
+            team.get("name"),
+
+        "player_count":
+            len(players),
+
+        "players":
+            players[:100]
+    })
+
+
+# =========================================================
+# RAW PLAYER API
+# =========================================================
+
+@app.route("/api/player-raw")
+def player_raw():
+
+    team_name = request.args.get(
+        "team",
+        ""
+    )
+
+    query = request.args.get(
+        "q",
+        ""
+    )
+
+    if not team_name or not query:
+        return jsonify({
+            "error":
+                "Use ?team=TEAM&q=PLAYER"
+        }), 400
+
+    try:
+        team, matches = find_raw_player_records(
+            team_name,
+            query
+        )
+
+    except Exception as e:
+        return jsonify({
+            "error": str(e)
+        }), 400
+
+    return jsonify({
+        "team":
+            team.get("name"),
+
+        "query":
+            query,
+
+        "match_count":
+            len(matches),
+
+        "matches":
+            matches[:10]
     })
 
 
@@ -1598,14 +1796,24 @@ button {
 
 .error {
     background: #43191c;
+    border: 1px solid #98343b;
     padding: 15px;
     border-radius: 10px;
+    margin-bottom: 20px;
 }
 
 .success {
     background: #14351b;
+    border: 1px solid #2d7c3c;
     padding: 15px;
     border-radius: 10px;
+    margin-bottom: 20px;
+}
+
+.help {
+    color: #aaa;
+    font-size: 14px;
+    line-height: 1.5;
 }
 
 </style>
@@ -1621,12 +1829,14 @@ button {
 </div>
 
 <div class="subtitle">
-Trade Proposal Center
+Trade Proposal & Committee Center
 </div>
 
 {% if error %}
 
 <div class="error">
+<strong>Trade Error</strong>
+<br><br>
 {{ error }}
 </div>
 
@@ -1637,7 +1847,13 @@ Trade Proposal Center
 
 <div class="result">
 
-<h2>🚨 Trade Proposed</h2>
+<h2>🚨 TRADE PROPOSED</h2>
+
+<p>
+{{ analysis.team_a_mention }}
+↔
+{{ analysis.team_b_mention }}
+</p>
 
 <h3>{{ analysis.team_a }} Sends</h3>
 
@@ -1645,13 +1861,29 @@ Trade Proposal Center
 <p>• {{ summarize(asset) }}</p>
 {% endfor %}
 
+<p>
+<strong>
+Package Value:
+{{ analysis.team_a_value_sent }}
+</strong>
+</p>
+
 <h3>{{ analysis.team_b }} Sends</h3>
 
 {% for asset in analysis.team_b_sends %}
 <p>• {{ summarize(asset) }}</p>
 {% endfor %}
 
-<h3>📊 Grades</h3>
+<p>
+<strong>
+Package Value:
+{{ analysis.team_b_value_sent }}
+</strong>
+</p>
+
+<hr>
+
+<h3>📊 Trade Grades</h3>
 
 <p>
 {{ analysis.team_a }}:
@@ -1667,7 +1899,13 @@ Trade Proposal Center
 </strong>
 </p>
 
-<h3>🎙️ First Take</h3>
+<h3>🎙️ Project Madden First Take</h3>
+
+<p>
+<strong>
+{{ analysis.verdict }}
+</strong>
+</p>
 
 <p>
 {{ analysis.reaction }}
@@ -1678,9 +1916,7 @@ Trade Proposal Center
 
 <div class="committee">
 
-<h2>
-🏛️ Trade Committee
-</h2>
+<h2>🏛️ Trade Committee</h2>
 
 <h2>
 {{ analysis.trade_committee.emoji }}
@@ -1688,7 +1924,12 @@ Trade Proposal Center
 </h2>
 
 <p>
-Value Gap:
+<strong>Quality:</strong>
+{{ analysis.trade_committee.level }}
+</p>
+
+<p>
+<strong>Value Gap:</strong>
 {{ analysis.trade_committee.value_gap_percent }}%
 </p>
 
@@ -1708,13 +1949,12 @@ Value Gap:
 {% else %}
 
 <div class="error">
-⚠️ Trade saved, but Discord post failed:
+⚠️ Trade was analyzed, but Discord post failed.
+<br><br>
 {{ discord.error }}
 </div>
 
 {% endif %}
-
-<br>
 
 <a href="/proposetrade">
 <button>
@@ -1724,7 +1964,6 @@ Propose Another Trade
 
 
 {% else %}
-
 
 <form method="POST">
 
@@ -1746,7 +1985,7 @@ name="team_a_mention"
 placeholder="@RavensOwner"
 required>
 
-<label>Assets</label>
+<label>Assets Being Sent</label>
 
 <textarea
 name="team_a_assets"
@@ -1754,6 +1993,20 @@ placeholder="Lamar Jackson
 Zay Flowers
 2027 Round 2"
 required></textarea>
+
+<p class="help">
+Type one asset per line.
+<br><br>
+Example player:
+<br>
+Lamar Jackson
+<br><br>
+Example pick:
+<br>
+2027 Round 2
+<br><br>
+Player OVR, age, position and dev are pulled automatically from Snallabot.
+</p>
 
 </div>
 
@@ -1776,13 +2029,32 @@ name="team_b_mention"
 placeholder="@ChiefsOwner"
 required>
 
-<label>Assets</label>
+<label>Assets Being Sent</label>
 
 <textarea
 name="team_b_assets"
 placeholder="Patrick Mahomes
 2027 Round 1"
 required></textarea>
+
+</div>
+
+
+<div class="card">
+
+<h3>🏛️ Automatic Trade Committee</h3>
+
+<p class="help">
+
+✅ 0–10% = AUTO APPROVE
+<br>
+🟡 10–20% = COMMITTEE REVIEW
+<br>
+🟠 20–35% = STRONG REVIEW
+<br>
+❌ 35%+ = AUTO DENY
+
+</p>
 
 </div>
 
@@ -1810,6 +2082,7 @@ required></textarea>
     ]
 )
 def propose_trade():
+
     if request.method == "GET":
         return render_template_string(
             TRADE_PAGE,
@@ -1843,7 +2116,8 @@ def propose_trade():
         return render_template_string(
             TRADE_PAGE,
             analysis=None,
-            error="Team A must include a Discord @.",
+            error=
+                "Team A must include a Discord @.",
             discord=None,
             summarize=summarize_asset
         )
@@ -1852,7 +2126,18 @@ def propose_trade():
         return render_template_string(
             TRADE_PAGE,
             analysis=None,
-            error="Team B must include a Discord @.",
+            error=
+                "Team B must include a Discord @.",
+            discord=None,
+            summarize=summarize_asset
+        )
+
+    if team_a.lower() == team_b.lower():
+        return render_template_string(
+            TRADE_PAGE,
+            analysis=None,
+            error=
+                "A team cannot trade with itself.",
             discord=None,
             summarize=summarize_asset
         )
@@ -1911,10 +2196,8 @@ def propose_trade():
         proposals
     )
 
-    discord_result = (
-        post_trade_to_discord(
-            analysis
-        )
+    discord_result = post_trade_to_discord(
+        analysis
     )
 
     return render_template_string(
@@ -1924,6 +2207,29 @@ def propose_trade():
         discord=discord_result,
         summarize=summarize_asset
     )
+
+
+# =========================================================
+# TRADE PROPOSAL API
+# =========================================================
+
+@app.route("/analyst/trade-proposals")
+def trade_proposals_api():
+
+    proposals = load_json_file(
+        "trade_proposals.json"
+    )
+
+    if not isinstance(
+        proposals,
+        list
+    ):
+        proposals = []
+
+    return jsonify({
+        "count": len(proposals),
+        "proposals": proposals
+    })
 
 
 # =========================================================
