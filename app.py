@@ -3488,13 +3488,23 @@ def send_stephen_a_parody_embed(
             )
         }
 
+    stephen_avatar_url = (
+        "https://project-madden-analytics.onrender.com/"
+        "assets/stephen-a-smith.png"
+    )
+
     payload = {
         "username":
             "Stephen A. Smith | AI Parody",
+        "avatar_url":
+            stephen_avatar_url,
         "embeds": [
             {
                 "title": title,
                 "description": description,
+                "thumbnail": {
+                    "url": stephen_avatar_url
+                },
                 "footer": {
                     "text": (
                         "AI parody segment • "
@@ -4801,6 +4811,54 @@ def register_trade_slash_command():
         ]
     }
 
+    test_marcus_command = {
+        "name": "testmarcus",
+        "description": "Send a Marcus Hayes test post to Project Madden Media",
+        "options": [
+            {
+                "type": 3,
+                "name": "headline",
+                "description": "Test headline",
+                "required": True,
+                "max_length": 100
+            },
+            {
+                "type": 3,
+                "name": "take",
+                "description": "Marcus Hayes test commentary",
+                "required": True,
+                "max_length": 1000
+            }
+        ]
+    }
+
+    test_stephen_command = {
+        "name": "teststephena",
+        "description": "Send a Stephen A. Smith AI parody test segment",
+        "options": [
+            {
+                "type": 3,
+                "name": "headline",
+                "description": "Test headline",
+                "required": True,
+                "max_length": 100
+            },
+            {
+                "type": 3,
+                "name": "take",
+                "description": "AI parody test commentary",
+                "required": True,
+                "max_length": 1000
+            }
+        ]
+    }
+
+    commands = [
+        command,
+        test_marcus_command,
+        test_stephen_command
+    ]
+
     headers = {
         "Authorization": f"Bot {token}",
         "Content-Type": "application/json"
@@ -4850,7 +4908,7 @@ def register_trade_slash_command():
     response = requests.put(
         url,
         headers=headers,
-        json=[command],
+        json=commands,
         timeout=15
     )
 
@@ -5608,6 +5666,93 @@ def discord_interactions():
                 }
             })
 
+        if command_name == "testmarcus":
+            options = discord_option_map(
+                interaction
+            )
+
+            headline = str(
+                options.get(
+                    "headline",
+                    "League Test Segment"
+                )
+            ).strip()
+
+            take = str(
+                options.get(
+                    "take",
+                    "Marcus Hayes test."
+                )
+            ).strip()
+
+            result = send_analyst_embed(
+                "🧪 TEST • Marcus Hayes",
+                (
+                    f"## {headline}\n"
+                    f"{take}\n\n"
+                    "*Test message from Discord.*"
+                )
+            )
+
+            if result.get("sent"):
+                return discord_ephemeral(
+                    "✅ Marcus Hayes test post sent to Project Madden Media."
+                )
+
+            return discord_ephemeral(
+                "❌ Marcus Hayes test failed: "
+                + str(
+                    result.get(
+                        "error",
+                        "Unknown error"
+                    )
+                )[:1000]
+            )
+
+        if command_name == "teststephena":
+            options = discord_option_map(
+                interaction
+            )
+
+            headline = str(
+                options.get(
+                    "headline",
+                    "Project Madden Test Debate"
+                )
+            ).strip()
+
+            take = str(
+                options.get(
+                    "take",
+                    "AI parody test."
+                )
+            ).strip()
+
+            result = send_stephen_a_parody_embed(
+                "🧪 TEST • Stephen A. Smith — AI Parody",
+                (
+                    f"## {headline}\n"
+                    f"{take}\n\n"
+                    "⚠️ *Fictional AI parody for Project Madden. "
+                    "This is not a real Stephen A. Smith quote or statement.*"
+                )
+            )
+
+            if result.get("sent"):
+                return discord_ephemeral(
+                    "✅ Stephen A. Smith AI parody test sent."
+                )
+
+            return discord_ephemeral(
+                "❌ Stephen A. parody test failed: "
+                + str(
+                    result.get(
+                        "error",
+                        "Unknown error"
+                    )
+                )[:1000]
+            )
+
         return jsonify({
             "type": 4,
             "data": {
@@ -5665,6 +5810,10 @@ def discord_status():
             discord_interactions_url(),
         "slash_command":
             "/trade",
+        "test_commands": [
+            "/testmarcus",
+            "/teststephena"
+        ],
         "trade_webhook_configured":
             bool(
                 os.environ.get(
@@ -5695,6 +5844,18 @@ def marcus_hayes_avatar():
     return send_file(
         Path(__file__).resolve().parent
         / "marcus_hayes.png",
+        mimetype="image/png"
+    )
+
+
+@app.route(
+    "/assets/stephen-a-smith.png",
+    methods=["GET"]
+)
+def stephen_a_smith_parody_avatar():
+    return send_file(
+        Path(__file__).resolve().parent
+        / "stephen_a_smith.png",
         mimetype="image/png"
     )
 
