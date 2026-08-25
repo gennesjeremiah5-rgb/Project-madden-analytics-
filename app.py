@@ -1,4 +1,5 @@
 from pathlib import Path
+import math
 from io import BytesIO
 from flask import Flask, request, jsonify, render_template_string, send_file
 import json
@@ -4518,6 +4519,266 @@ def format_trade_show_line(
     )
 
 
+
+WEEKLY_REACTION_CONTEXT_LINES = {
+    "blowout": [
+        "This was not a one-possession coin flip. The winner imposed itself for long stretches.",
+        "The margin matters because this game stopped being competitive before the final whistle.",
+        "A blowout creates a different conversation because the losing side never found a stable answer.",
+        "This result is going to linger because the separation between the teams was obvious.",
+    ],
+    "close": [
+        "This came down to details, situational football, and who handled the final possessions better.",
+        "A close game says both teams had answers, but one side executed the final critical moments better.",
+        "There was almost nothing separating these teams, so the small mistakes became the entire story.",
+        "One third down, one turnover, or one clock-management decision could have flipped this result.",
+    ],
+    "upset": [
+        "The lower-rated team forced everybody to reevaluate what they thought they knew.",
+        "OVR is not destiny. Execution erased the paper advantage.",
+        "The upset shifts the conversation from ratings to coaching, preparation, and user execution.",
+        "This was not the expected script on paper, which is exactly why the result matters.",
+    ],
+    "shootout": [
+        "Both offenses kept answering, so every empty possession became a major problem.",
+        "This turned into a scoring race where punts started feeling like turnovers.",
+        "The pressure stayed on the quarterbacks and play callers from start to finish.",
+        "One stalled drive could change the entire game because neither offense wanted to blink first.",
+    ],
+    "defensive": [
+        "This was a defense-first game where every scoring opportunity carried extra weight.",
+        "Field position and patience mattered more than raw yardage.",
+        "The defenses controlled the pace and made offensive possessions expensive.",
+        "The winning side handled a low-scoring environment better.",
+    ],
+    "normal": [
+        "This result fits into the larger weekly picture, but the details still matter.",
+        "There were enough meaningful swings to learn something about both teams.",
+        "The final score tells part of the story; the weekly trend tells the rest.",
+        "This was another useful checkpoint for where both teams currently stand.",
+    ],
+}
+
+MARCUS_WEEKLY_ADAPTIVE_LINES = {
+    "blowout": [
+        "That was domination, not just a win. The losing side has a rough film session coming.",
+        "There is losing, and then there is getting controlled in every phase. This was the second one.",
+        "The winner did not leave room for excuses. The loser has to explain why the game got away so quickly.",
+        "If that team calls itself a contender, a margin like this demands answers immediately.",
+    ],
+    "close": [
+        "This came down to discipline and late-game decisions. One mistake was always going to decide it.",
+        "Neither team could separate, so clock management, fourth downs, and red-zone execution became the story.",
+        "This was a pressure game. The side that stayed cleaner late earned it.",
+        "A game this close tells me the rematch would be must-watch.",
+    ],
+    "upset": [
+        "Everybody who picked off OVR alone just got reminded that users still have to play the game.",
+        "The lower-rated roster made the favorite look ordinary. That is a statement.",
+        "This upset changes how the league should look at both teams next week.",
+        "The underdog just earned respect; the favorite just earned questions.",
+    ],
+    "shootout": [
+        "The defenses basically asked the offenses to win it every drive.",
+        "If your offense stalled once, you were in trouble. That is what this game became.",
+        "This was a quarterback-and-play-caller game from start to finish.",
+        "When both sides are scoring like that, every possession becomes pressure.",
+    ],
+    "defensive": [
+        "Every first down mattered because points were hard to find.",
+        "This was about patience, field position, and not giving the other team a short field.",
+        "Defense dictated the game, and the offense that stayed composed longest survived it.",
+        "That was a grind, and the winner handled the ugly parts better.",
+    ],
+    "normal": [
+        "The result matters, but I am watching whether the habits behind it are repeatable.",
+        "One week does not define anybody, but this is a real data point.",
+        "The league is starting to separate teams with identity from teams still searching for one.",
+        "This was not season-defining, but it absolutely belongs in the weekly conversation.",
+    ],
+}
+
+STEPHEN_A_WEEKLY_CONTEXT_LINES = {
+    "blowout": [
+        "I do not want to hear about potential after a performance like that. A contender cannot get pushed around for four quarters and hide behind talent.",
+        "That was embarrassing because the game stopped being competitive. High expectations require a higher standard.",
+        "The losing team was exposed in areas every opponent is going to test again next week.",
+        "If you have championship expectations, a blowout loss demands accountability from the user, quarterback, and roster.",
+    ],
+    "close": [
+        "This is where I look at decision-making: final possessions, ball security, and who understood the moment.",
+        "Close games expose discipline. One bad fourth-down decision can erase three quarters of good football.",
+        "I am not overreacting to a close loss, but I am absolutely judging the late-game execution.",
+        "Both teams can leave with confidence, but only one handled the pressure correctly.",
+    ],
+    "upset": [
+        "Do not tell me about OVR anymore. The lower-rated team outplayed the supposed favorite, and the conversation has changed.",
+        "This is why I refuse to crown teams from roster screens. You still have to execute under pressure.",
+        "If you are the higher-rated team and lose this game, I am questioning preparation before talent.",
+        "The upset is not only about the winner; it is also about what the favorite failed to prove.",
+    ],
+    "shootout": [
+        "When both offenses are scoring like this, the quarterback has to treat every possession like it may be the last one.",
+        "This became basketball on grass: possessions, efficiency, and who could survive one empty trip.",
+        "In a shootout, the offense cannot disappear for two drives and expect the defense to rescue it.",
+        "This was about star players carrying the burden because neither defense could slow the game down.",
+    ],
+    "defensive": [
+        "This was not pretty offense, but that does not mean it was bad football. Somebody had to stay patient.",
+        "When points are this scarce, one turnover can feel like giving away ten points.",
+        "This was a game for disciplined users because forcing the issue was the fastest way to lose.",
+        "The winner understood the environment better and did not panic because the offense was not explosive.",
+    ],
+    "normal": [
+        "I am evaluating whether this team looked like what its roster says it should be.",
+        "The result is one thing. The standard is another, and I am judging both.",
+        "I want to see whether the good parts of this performance survive against better competition.",
+        "Consistency matters more than one impressive box score.",
+    ],
+}
+
+STEPHEN_A_WEEKLY_PLAYER_COMPARISONS = [
+    "{player} is giving me a **LeBron James** type of control — the entire operation changes when he is on.",
+    "{player} has **Stephen Curry** type gravity because the opponent is thinking about him before the snap.",
+    "{player} is playing with a **Jimmy Butler** kind of edge — the impact gets louder when the pressure rises.",
+    "{player} is giving me **Nikola Jokic** efficiency: calm, productive, and always finding the right answer.",
+    "{player} has **Anthony Edwards** energy — aggressive, fearless, and constantly attacking.",
+    "{player} is giving me **Jayson Tatum** consistency — polished production without needing chaos.",
+    "{player} is having a **Shai Gilgeous-Alexander** kind of week — controlled, efficient, and difficult to knock off rhythm.",
+    "{player} is bringing **Giannis Antetokounmpo** force — once the momentum starts downhill, the opponent has a serious problem.",
+]
+
+PAT_MCAFEE_WEEKLY_CONTEXT_LINES = {
+    "blowout": [
+        "That thing got sideways fast. Once the momentum turned, everybody knew where it was going.",
+        "That was a full-on avalanche. One team kept stacking plays and the other never found the emergency brake.",
+        "When a game gets that lopsided, every little mistake starts feeling ten times bigger.",
+        "That was one of those games where the Discord probably stopped being polite by halftime.",
+    ],
+    "close": [
+        "That was chaos in the best way. Every drive felt like it could decide the whole thing.",
+        "That is the kind of game where everybody is checking the score every two minutes.",
+        "One snap here, one fourth down there, and the whole result flips.",
+        "That game had the exact kind of late drama this league needs.",
+    ],
+    "upset": [
+        "OVR got thrown out the window. The underdog showed up and made the whole league pay attention.",
+        "That is why you play the games. Ratings are cute until somebody starts making plays.",
+        "The upset just made next week way more interesting because everybody sees both teams differently now.",
+        "The favorite just learned the hard way that Madden does not care about reputation.",
+    ],
+    "shootout": [
+        "That game was absolute fireworks. Nobody could afford to waste a possession.",
+        "Every drive felt like a two-minute drill. That is a wild way to live for four quarters.",
+        "If you like offense, that was your game of the week.",
+        "Nobody wanted to punt, and honestly after watching that game I understand why.",
+    ],
+    "defensive": [
+        "That was a rock fight. Every yard looked like somebody had to pay for it.",
+        "That was old-school football energy — field position, pressure, and one mistake deciding everything.",
+        "Not every game needs 70 points to be entertaining. That was tense the whole way.",
+        "That was ugly, physical, stressful football — which means it was awesome.",
+    ],
+    "normal": [
+        "That game gave us enough to argue about all week.",
+        "There is definitely something there, but I want to see it again next week.",
+        "That result added another storyline to the league instead of ending one.",
+        "That was exactly the kind of weekly result that keeps everybody talking.",
+    ],
+}
+
+JOSH_PATE_WEEKLY_CONTEXT_LINES = {
+    "blowout": [
+        "A blowout usually tells you more about structural differences than one lucky bounce. The losing side has to decide whether the problem was matchup-specific or reproducible.",
+        "When the margin gets this large, I start looking at roster depth, adjustment quality, and whether there was a second plan after the first one failed.",
+        "The question next week is whether this was an outlier or the first sign of a real ceiling problem.",
+        "This kind of margin makes me less interested in one bad play and more interested in the entire operation.",
+    ],
+    "close": [
+        "Close games expose operational quality: clock management, fourth-down logic, red-zone decisions, and turnover avoidance.",
+        "There is value in a close game because you learn how a team handles stress without the scoreboard hiding the details.",
+        "This is a result that should be studied for process, not just outcome.",
+        "The score says close; the film should tell us which team actually had the more sustainable formula.",
+    ],
+    "upset": [
+        "An upset is usually where preparation, matchup understanding, and user execution overcome the roster gap.",
+        "The lower-rated team found something repeatable enough to neutralize the paper advantage, and that deserves attention.",
+        "This is a reminder that team quality and roster rating are related, but they are not identical.",
+        "The underdog just showed a better formula for this matchup than the favorite did.",
+    ],
+    "shootout": [
+        "A shootout tests offensive sustainability because every empty possession becomes expensive.",
+        "When both teams can score, the differentiator usually becomes situational efficiency rather than raw yardage.",
+        "This type of game tells you a lot about quarterback stability and play-caller confidence.",
+        "The key question is whether either offense can reproduce this against a defense that controls possessions better.",
+    ],
+    "defensive": [
+        "Low-scoring games tell you whether a team can win without its preferred script.",
+        "This was an environment where field position, patience, and avoiding negative plays mattered more than explosive offense.",
+        "The winning team showed it could survive when the game did not look comfortable.",
+        "This is the kind of game that tests roster depth and user discipline more than highlight ability.",
+    ],
+    "normal": [
+        "I am less interested in one result than in whether the process behind it can survive the next month.",
+        "The useful question is whether this performance raised the team’s floor or just created one good Sunday.",
+        "This week added evidence, but the trend still needs another data point.",
+        "The result matters, but sustainability is the real story I want to track.",
+    ],
+}
+
+
+def classify_weekly_game_context(game):
+    if not isinstance(game, dict):
+        return "normal"
+
+    margin = int(game.get("margin", 0) or 0)
+
+    if bool(game.get("upset")):
+        return "upset"
+
+    if margin >= 21:
+        return "blowout"
+
+    if margin <= 3:
+        return "close"
+
+    winner_score = int(
+        game.get(
+            "winner_score",
+            game.get("score_winner", 0)
+        ) or 0
+    )
+    loser_score = int(
+        game.get(
+            "loser_score",
+            game.get("score_loser", 0)
+        ) or 0
+    )
+
+    total = winner_score + loser_score
+
+    if total >= 65:
+        return "shootout"
+
+    if total and total <= 34:
+        return "defensive"
+
+    return "normal"
+
+
+def weekly_tone_seed(
+    analyst,
+    season_type,
+    week_number,
+    topic,
+    source_key=""
+):
+    return (
+        f"{analyst}-{season_type}-{week_number}-"
+        f"{topic}-{source_key}"
+    )
+
+
 def build_weekly_panel_takes(
     show,
     season_type,
@@ -4527,34 +4788,111 @@ def build_weekly_panel_takes(
         "top_games",
         []
     )
-
     players = show.get(
         "top_players",
         []
     )
-
     predictions = show.get(
         "game_predictions",
         []
     )
-
     trades = show.get(
         "trade_proposals",
         []
     )
 
-    key = (
-        f"weekly-panel-{season_type}-"
-        f"{week_number}"
+    top_game = (
+        completed[0]
+        if completed
+        else None
     )
 
-    marcus_parts = []
-    stephen_parts = []
-    pat_parts = []
+    context_type = (
+        classify_weekly_game_context(
+            top_game
+        )
+    )
+
+    source_key = (
+        str(
+            top_game.get(
+                "game",
+                ""
+            )
+        )
+        if isinstance(
+            top_game,
+            dict
+        )
+        else "no-game"
+    )
+
+    marcus_parts = [
+        stable_choice(
+            MARCUS_WEEKLY_ADAPTIVE_LINES.get(
+                context_type,
+                MARCUS_WEEKLY_ADAPTIVE_LINES["normal"]
+            ),
+            weekly_tone_seed(
+                "marcus",
+                season_type,
+                week_number,
+                context_type,
+                source_key
+            )
+        )
+    ]
+
+    stephen_parts = [
+        stable_choice(
+            STEPHEN_A_WEEKLY_CONTEXT_LINES.get(
+                context_type,
+                STEPHEN_A_WEEKLY_CONTEXT_LINES["normal"]
+            ),
+            weekly_tone_seed(
+                "stephen",
+                season_type,
+                week_number,
+                context_type,
+                source_key
+            )
+        )
+    ]
+
+    pat_parts = [
+        stable_choice(
+            PAT_MCAFEE_WEEKLY_CONTEXT_LINES.get(
+                context_type,
+                PAT_MCAFEE_WEEKLY_CONTEXT_LINES["normal"]
+            ),
+            weekly_tone_seed(
+                "pat",
+                season_type,
+                week_number,
+                context_type,
+                source_key
+            )
+        )
+    ]
+
+    josh_parts = [
+        stable_choice(
+            JOSH_PATE_WEEKLY_CONTEXT_LINES.get(
+                context_type,
+                JOSH_PATE_WEEKLY_CONTEXT_LINES["normal"]
+            ),
+            weekly_tone_seed(
+                "josh-pate",
+                season_type,
+                week_number,
+                context_type,
+                source_key
+            )
+        )
+    ]
 
     if completed:
         game = completed[0]
-
         winner = game.get(
             "winner",
             "the winner"
@@ -4566,7 +4904,7 @@ def build_weekly_panel_takes(
 
         marcus_parts.append(
             f"{winner} earned the result. "
-            f"{loser} has to explain what failed."
+            f"{loser} has to explain what failed and whether it can be fixed before next week."
         )
 
         stephen_parts.append(
@@ -4576,18 +4914,21 @@ def build_weekly_panel_takes(
         )
 
         pat_parts.append(
-            f"{winner} made the winning plays. "
-            "That is the stuff the locker room can build on."
+            f"{winner} made the winning plays, and that is the stuff "
+            "the locker room can carry into the next matchup."
+        )
+
+        josh_parts.append(
+            f"The useful question after {winner} over {loser} is whether "
+            "the winning formula is sustainable against a different matchup next week."
         )
 
     if players:
         player = players[0]
-
         player_name = player.get(
             "player",
             "the standout player"
         )
-
         stats = player.get(
             "stats",
             {}
@@ -4599,12 +4940,27 @@ def build_weekly_panel_takes(
         )
 
         marcus_parts.append(
-            f"{player_name} deserves the spotlight: {stat_text}."
+            f"{player_name} deserves the spotlight: {stat_text}. "
+            "Now the question is whether that level of production becomes a trend."
+        )
+
+        stephen_compare = stable_choice(
+            STEPHEN_A_WEEKLY_PLAYER_COMPARISONS,
+            weekly_tone_seed(
+                "stephen",
+                season_type,
+                week_number,
+                "player-comparison",
+                player_name
+            )
+        ).format(
+            player=player_name
         )
 
         stephen_parts.append(
             f"If {player_name} is producing like that, "
-            "the opponent has no excuse for failing to adjust."
+            "the opponent has no excuse for failing to adjust. "
+            f"{stephen_compare}"
         )
 
         pat_parts.append(
@@ -4612,9 +4968,13 @@ def build_weekly_panel_takes(
             "Production like that changes how the next defense prepares."
         )
 
+        josh_parts.append(
+            f"{player_name} is becoming the kind of piece that can raise "
+            "the weekly floor of an entire unit, not just fill a stat sheet."
+        )
+
     if trades:
         trade = trades[0]
-
         team_a = trade.get(
             "team_a",
             "Team A"
@@ -4623,49 +4983,57 @@ def build_weekly_panel_takes(
             "team_b",
             "Team B"
         )
-
-        decision = (
+        review = (
             trade.get(
                 "trade_committee",
                 {}
-            ).get(
-                "decision",
-                ""
             )
             if isinstance(
-                trade.get("trade_committee"),
+                trade.get(
+                    "trade_committee"
+                ),
                 dict
             )
-            else ""
+            else {}
+        )
+        decision = review.get(
+            "decision",
+            ""
+        )
+        gap = review.get(
+            "value_gap_percent",
+            "—"
         )
 
         marcus_parts.append(
             f"Trade desk: {team_a} and {team_b} put a deal on the table. "
-            f"The League Office call is {decision}."
+            f"The League Office call is {decision}, with a {gap}% value gap."
         )
 
         stephen_parts.append(
-            f"I do not care how exciting a trade looks. "
-            f"If {team_a} or {team_b} is giving away too much value, "
-            "I am going to say it."
+            f"I do not care how exciting {team_a} and {team_b} look on the graphic. "
+            "If one side is giving away premium value without a real roster reason, "
+            "I am going to challenge the move."
         )
 
         pat_parts.append(
-            "Trades are about fit as much as ratings. "
-            "The question is whether the move actually fixes a weakness."
+            f"{team_a} and {team_b} just gave the league something to argue about. "
+            "Trades are about fit as much as ratings."
+        )
+
+        josh_parts.append(
+            f"For {team_a} and {team_b}, I want to know what the two-deep looks like "
+            "after the trade, not just who won the headline."
         )
 
     if predictions:
         pick = predictions[0]
-
         favorite = pick.get(
             "favorite"
         )
-
         matchup = pick.get(
             "matchup"
         )
-
         reason = pick.get(
             "reason",
             ""
@@ -4673,7 +5041,7 @@ def build_weekly_panel_takes(
 
         if favorite == "TOSS-UP":
             marcus_parts.append(
-                f"Game pick: {matchup} is a toss-up for me. {reason}"
+                f"Game pick: {matchup} is a toss-up. {reason}"
             )
             stephen_parts.append(
                 f"I am not giving either side a pass in {matchup}. "
@@ -4681,55 +5049,49 @@ def build_weekly_panel_takes(
             )
             pat_parts.append(
                 f"{matchup} feels like the game where one weird turnover "
-                "or special-teams play can flip everything."
+                "or special-teams play flips everything."
+            )
+            josh_parts.append(
+                f"In {matchup}, the roster gap is not large enough to settle it. "
+                "I am watching situational football and user execution."
             )
         else:
             marcus_parts.append(
                 f"My early favorite in {matchup}: **{favorite}**. {reason}"
             )
             stephen_parts.append(
-                f"I have **{favorite}** in {matchup}, "
-                "but if the higher-rated roster plays sloppy, "
-                "I will be the first one criticizing them afterward."
+                f"I have **{favorite}** in {matchup}, but if the higher-rated roster "
+                "plays sloppy, I will be the first one criticizing them afterward."
             )
             pat_parts.append(
                 f"I lean **{favorite}** in {matchup}. "
                 "But this is Madden — user execution can erase an OVR edge fast."
             )
-
-    if not marcus_parts:
-        marcus_parts.append(
-            "There is not enough completed league data yet for me to fake a take. "
-            "Once the games and stats hit Snallabot, we will break them down."
-        )
-
-    if not stephen_parts:
-        stephen_parts.append(
-            "No fake outrage from me. Give me actual results, stats, "
-            "or a real matchup and then we can debate it."
-        )
-
-    if not pat_parts:
-        pat_parts.append(
-            "We are waiting on real league data. Once it lands, "
-            "we will have plenty to talk about."
-        )
+            josh_parts.append(
+                f"I lean **{favorite}** in {matchup}, but I care more about whether "
+                "their weekly formula travels than the rating advantage by itself."
+            )
 
     return {
+        "context_type":
+            context_type,
         "marcus":
             " ".join(
-                marcus_parts[:4]
+                marcus_parts[:5]
             ),
         "stephen":
             " ".join(
-                stephen_parts[:4]
+                stephen_parts[:5]
             ),
         "pat":
             " ".join(
-                pat_parts[:4]
+                pat_parts[:5]
+            ),
+        "josh_pate":
+            " ".join(
+                josh_parts[:5]
             )
     }
-
 
 
 
@@ -5470,6 +5832,407 @@ def build_super_bowl_panel_picks(
     }
 
 
+
+PANEL_DEBATE_OPENERS = [
+    "The desk is split on this one.",
+    "We have our first disagreement of the show.",
+    "This is where the panel starts pushing back on each other.",
+    "Everybody at the desk sees the same result, but not the same story.",
+    "This one turned into a real debate at the desk.",
+]
+
+PANEL_AGREEMENT_LINES = [
+    "The panel is actually on the same page here.",
+    "For once, everybody at the desk agrees on the main point.",
+    "There is not much disagreement on this one.",
+    "The whole desk is seeing the same warning sign.",
+    "This is one of the rare moments where the panel is aligned.",
+]
+
+MARCUS_DEBATE_LINES = {
+    "agree": [
+        "I agree with that part. The result backs it up, and the film should too.",
+        "That is fair. I am not fighting the obvious just to make television.",
+        "We are saying the same thing from different angles: execution decided it.",
+        "I am with you there. The roster can only matter if the user gets the most out of it.",
+    ],
+    "disagree": [
+        "I disagree with that. You are giving the roster too much credit and the actual game too little.",
+        "That is where I push back. One big name does not fix bad weekly execution.",
+        "I am not buying that argument yet. Show me the same thing next week.",
+        "You are looking at the ceiling. I am looking at what they actually put on the field.",
+    ],
+}
+
+STEPHEN_A_DEBATE_LINES = {
+    "agree": [
+        "I agree with Marcus on that point. If the evidence is right in front of us, I am not going to pretend otherwise.",
+        "That is exactly right. Expectations matter, and the performance has to match them.",
+        "I am with the desk on this one. The team earned the criticism or the praise it is getting.",
+        "Correct. We cannot keep making excuses for teams with high-end talent.",
+    ],
+    "disagree": [
+        "No, no, no — that is where I disagree. Talent creates expectations, and I am going to hold the team to them.",
+        "I hear the argument, but I am not accepting it. A contender has to be judged differently.",
+        "That sounds nice, but the scoreboard and the decisions matter more than the excuse.",
+        "I disagree completely. You cannot call yourself elite and then ask me to lower the standard after one bad week.",
+    ],
+}
+
+PAT_MCAFEE_DEBATE_LINES = {
+    "agree": [
+        "I am with you guys on that. The whole thing looked exactly like what the result says it was.",
+        "Yep, I agree. Sometimes the simple answer is the right answer.",
+        "That is where I am at too. The team that made the winning plays deserved the win.",
+        "I am riding with that take. The momentum and the execution both pointed the same direction.",
+    ],
+    "disagree": [
+        "I do not know about that one. Madden gets weird, and one swing play can make a good team look terrible.",
+        "I am pushing back a little. The result matters, but I do not think the sky is falling yet.",
+        "I disagree there. One game can get chaotic fast, and I need another week before I bury anybody.",
+        "That is a little too far for me. I saw mistakes, but I also saw stuff they can fix.",
+    ],
+}
+
+JOSH_PATE_DEBATE_LINES = {
+    "agree": [
+        "I agree with the conclusion, but I care most about whether the process behind it is repeatable.",
+        "That is where I land too. The result and the underlying structure are pointing in the same direction.",
+        "I am with the panel on that. The team showed something sustainable, not just something flashy.",
+        "Agreed. If the same formula works against different opponents, then we can start calling it an identity.",
+    ],
+    "disagree": [
+        "I disagree with the certainty, not necessarily the concern. One week is still a small sample.",
+        "That is where I separate from the desk. I need to know whether this was matchup-specific before I make a season-wide claim.",
+        "I am not ready to go that far. The result is real, but the structural conclusion still needs another data point.",
+        "I disagree with the reaction level. I care more about whether the process can be corrected than how loud the final score looked.",
+    ],
+}
+
+
+def build_panel_debate(
+    show,
+    season_type,
+    week_number
+):
+    games = show.get(
+        "top_games",
+        []
+    )
+    players = show.get(
+        "top_players",
+        []
+    )
+    trades = show.get(
+        "trade_proposals",
+        []
+    )
+    predictions = show.get(
+        "game_predictions",
+        []
+    )
+
+    topic_type = "weekly"
+    topic_label = "the overall week"
+    source_key = f"{season_type}-{week_number}"
+
+    # Choose the strongest real topic available.
+    if trades:
+        trade = trades[0]
+        topic_type = "trade"
+        topic_label = (
+            f"{trade.get('team_a', 'Team A')} ↔ "
+            f"{trade.get('team_b', 'Team B')} trade"
+        )
+        source_key = str(
+            trade.get(
+                "trade_id",
+                topic_label
+            )
+        )
+    elif games:
+        game = games[0]
+        topic_type = classify_weekly_game_context(
+            game
+        )
+        topic_label = game.get(
+            "game",
+            "the featured game"
+        )
+        source_key = str(
+            game.get(
+                "schedule_id",
+                topic_label
+            )
+        )
+    elif players:
+        player = players[0]
+        topic_type = "player"
+        topic_label = player.get(
+            "player",
+            "the featured player"
+        )
+        source_key = topic_label
+    elif predictions:
+        pick = predictions[0]
+        topic_type = "prediction"
+        topic_label = pick.get(
+            "matchup",
+            "the featured matchup"
+        )
+        source_key = topic_label
+
+    # Deterministic but changes across weeks/topics.
+    debate_mode = stable_choice(
+        [
+            "agree",
+            "agree",
+            "disagree",
+            "disagree",
+            "mixed",
+        ],
+        (
+            f"panel-debate-mode-"
+            f"{season_type}-{week_number}-"
+            f"{topic_type}-{source_key}"
+        )
+    )
+
+    opener_pool = (
+        PANEL_AGREEMENT_LINES
+        if debate_mode == "agree"
+        else PANEL_DEBATE_OPENERS
+    )
+
+    opener = stable_choice(
+        opener_pool,
+        (
+            f"panel-debate-open-"
+            f"{season_type}-{week_number}-"
+            f"{topic_type}-{source_key}-"
+            f"{debate_mode}"
+        )
+    )
+
+    if debate_mode == "agree":
+        stances = {
+            "marcus": "agree",
+            "stephen": "agree",
+            "pat": "agree",
+            "josh_pate": "agree",
+        }
+    elif debate_mode == "disagree":
+        stances = {
+            "marcus": "disagree",
+            "stephen": "disagree",
+            "pat": "agree",
+            "josh_pate": "disagree",
+        }
+    else:
+        # Mixed panels feel more natural.
+        mixed_patterns = [
+            {
+                "marcus": "agree",
+                "stephen": "disagree",
+                "pat": "agree",
+                "josh_pate": "disagree",
+            },
+            {
+                "marcus": "disagree",
+                "stephen": "agree",
+                "pat": "disagree",
+                "josh_pate": "agree",
+            },
+            {
+                "marcus": "agree",
+                "stephen": "agree",
+                "pat": "disagree",
+                "josh_pate": "disagree",
+            },
+        ]
+
+        stances = stable_choice(
+            mixed_patterns,
+            (
+                f"panel-debate-pattern-"
+                f"{season_type}-{week_number}-"
+                f"{topic_type}-{source_key}"
+            )
+        )
+
+    lines = {}
+
+    pools = {
+        "marcus": MARCUS_DEBATE_LINES,
+        "stephen": STEPHEN_A_DEBATE_LINES,
+        "pat": PAT_MCAFEE_DEBATE_LINES,
+        "josh_pate": JOSH_PATE_DEBATE_LINES,
+    }
+
+    for analyst, stance in stances.items():
+        line = stable_choice(
+            pools[analyst][stance],
+            (
+                f"panel-debate-{analyst}-"
+                f"{season_type}-{week_number}-"
+                f"{topic_type}-{source_key}-"
+                f"{stance}"
+            )
+        )
+
+        lines[analyst] = line
+
+    # Add topic-specific follow-ups so the debate is about actual league data.
+    if topic_type == "trade" and trades:
+        trade = trades[0]
+        review = (
+            trade.get(
+                "trade_committee",
+                {}
+            )
+            if isinstance(
+                trade.get(
+                    "trade_committee"
+                ),
+                dict
+            )
+            else {}
+        )
+
+        decision = review.get(
+            "decision",
+            "UNKNOWN"
+        )
+
+        gap = review.get(
+            "value_gap_percent",
+            "—"
+        )
+
+        lines["marcus"] += (
+            f" On {topic_label}, the League Office has it at "
+            f"**{decision}** with a {gap}% value gap."
+        )
+
+        lines["stephen"] += (
+            " If one side is giving up the better premium asset, "
+            "I want the roster logic explained before I praise anybody."
+        )
+
+        lines["pat"] += (
+            " I care about whether the move fixes a real weakness "
+            "or just makes the depth chart look more exciting."
+        )
+
+        lines["josh_pate"] += (
+            " I want to know what each roster looks like two moves after this one, "
+            "because good roster building is about optionality."
+        )
+
+    elif games:
+        game = games[0]
+        winner = game.get(
+            "winner",
+            "the winner"
+        )
+        loser = game.get(
+            "loser",
+            "the loser"
+        )
+
+        lines["marcus"] += (
+            f" {winner} earned the result; {loser} has to answer for the mistakes."
+        )
+
+        lines["stephen"] += (
+            f" I am judging {loser} against the standard their roster created."
+        )
+
+        lines["pat"] += (
+            f" {winner} made the winning plays when the game tilted."
+        )
+
+        lines["josh_pate"] += (
+            f" The question for {winner} is whether this winning formula travels next week."
+        )
+
+    elif topic_type == "player" and players:
+        player_name = players[0].get(
+            "player",
+            "the featured player"
+        )
+
+        lines["marcus"] += (
+            f" {player_name} earned the spotlight with actual production."
+        )
+
+        lines["stephen"] += (
+            f" If {player_name} keeps producing, defenses have to change the plan."
+        )
+
+        lines["pat"] += (
+            f" {player_name} is becoming appointment viewing in this league."
+        )
+
+        lines["josh_pate"] += (
+            f" The value of {player_name} is whether that performance raises the unit's weekly floor."
+        )
+
+    elif topic_type == "prediction" and predictions:
+        pick = predictions[0]
+        favorite = pick.get(
+            "favorite",
+            "TOSS-UP"
+        )
+
+        lines["marcus"] += (
+            f" My early lean in {topic_label} is **{favorite}**."
+        )
+
+        lines["stephen"] += (
+            " Whoever has the stronger roster still has to prove it under pressure."
+        )
+
+        lines["pat"] += (
+            " One turnover can flip the whole pick, which is why this matchup is fun."
+        )
+
+        lines["josh_pate"] += (
+            " I care more about the repeatable matchup advantage than the headline OVR."
+        )
+
+    return {
+        "topic_type":
+            topic_type,
+        "topic":
+            topic_label,
+        "mode":
+            debate_mode,
+        "opener":
+            opener,
+        "marcus":
+            lines.get(
+                "marcus",
+                ""
+            ),
+        "stephen":
+            lines.get(
+                "stephen",
+                ""
+            ),
+        "pat":
+            lines.get(
+                "pat",
+                ""
+            ),
+        "josh_pate":
+            lines.get(
+                "josh_pate",
+                ""
+            ),
+    }
+
+
 def build_weekly_show_summary(
     season_type,
     week_number
@@ -5599,6 +6362,13 @@ def build_weekly_show_summary(
         )
     )
 
+    josh_pate_segment = (
+        build_josh_pate_segment(
+            season_type,
+            week_number
+        )
+    )
+
     show = {
         "season_type":
             season_type,
@@ -5634,6 +6404,8 @@ def build_weekly_show_summary(
             stephen_segment[:2],
         "pat_mcafee_parody_segment":
             pat_segment[:2],
+        "josh_pate_parody_segment":
+            josh_pate_segment[:2],
         "closer":
             closer
     }
@@ -5649,6 +6421,14 @@ def build_weekly_show_summary(
     show["super_bowl_panel_picks"] = (
         build_super_bowl_panel_picks(
             super_bowl_favorites,
+            season_type,
+            week_number
+        )
+    )
+
+    show["panel_debate"] = (
+        build_panel_debate(
+            show,
             season_type,
             week_number
         )
@@ -5849,7 +6629,7 @@ def weekly_show_embed_fields(
                 f"**Marcus Hayes:** {fraud_take.get('marcus', '')}\n\n"
                 f"**Stephen A. Smith — AI Parody:** {fraud_take.get('stephen', '')}\n\n"
                 f"**Pat McAfee — AI Parody:** {fraud_take.get('pat', '')}\n\n"
-                "*Stephen A. Smith and Pat McAfee content is fictional AI parody.*"
+                "*Stephen A. Smith and Pat McAfee content is fictional AI parody; Josh Pate appears in the main Weekly Show panel as AI parody.*"
             )[:1024],
             "inline": False,
         })
@@ -5861,7 +6641,7 @@ def weekly_show_embed_fields(
                 f"**Marcus Hayes:** {dark_take.get('marcus', '')}\n\n"
                 f"**Stephen A. Smith — AI Parody:** {dark_take.get('stephen', '')}\n\n"
                 f"**Pat McAfee — AI Parody:** {dark_take.get('pat', '')}\n\n"
-                "*Stephen A. Smith and Pat McAfee content is fictional AI parody.*"
+                "*Stephen A. Smith and Pat McAfee content is fictional AI parody; Josh Pate appears in the main Weekly Show panel as AI parody.*"
             )[:1024],
             "inline": False,
         })
@@ -6018,6 +6798,80 @@ def weekly_show_embed_fields(
                 False
         })
 
+        fields.append({
+            "name":
+                "🏈 Josh Pate — AI Parody",
+            "value": (
+                panel.get(
+                    "josh_pate",
+                    ""
+                )
+                + "\n\n*Fictional AI parody — not a real "
+                "Josh Pate statement.*"
+            )[:1024],
+            "inline":
+                False
+        })
+
+    debate = show.get(
+        "panel_debate",
+        {}
+    )
+
+    if debate:
+        fields.append({
+            "name":
+                "🗣️ Panel Debate",
+            "value": (
+                f"**Topic:** {debate.get('topic', 'Weekly Show')}\n"
+                f"*{debate.get('opener', '')}*\n\n"
+                f"**Marcus Hayes:** {debate.get('marcus', '')}\n\n"
+                f"**Stephen A. Smith — AI Parody:** {debate.get('stephen', '')}\n\n"
+                f"**Pat McAfee — AI Parody:** {debate.get('pat', '')}\n\n"
+                f"**Josh Pate — AI Parody:** {debate.get('josh_pate', '')}\n\n"
+                "*Stephen A. Smith, Pat McAfee, and Josh Pate content is fictional AI parody "
+                "and not real statements from those people.*"
+            )[:1024],
+            "inline":
+                False
+        })
+
+    josh_pate_segment = show.get(
+        "josh_pate_parody_segment",
+        []
+    )
+
+    if josh_pate_segment:
+        lines = []
+
+        for item in josh_pate_segment[:2]:
+            headline = item.get(
+                "headline",
+                "Project Madden Breakdown"
+            )
+
+            take = item.get(
+                "take",
+                ""
+            )
+
+            lines.append(
+                f"**{headline}**\n{take}"
+            )
+
+        fields.append({
+            "name": (
+                "🎙️ Josh Pate — "
+                "AI Parody Segment"
+            ),
+            "value": (
+                "\n\n".join(lines)
+                + "\n\n*Fictional AI parody — "
+                "not a real Josh Pate statement.*"
+            )[:1024],
+            "inline": False
+        })
+
     rankings = show.get(
         "power_rankings",
         []
@@ -6139,6 +6993,18 @@ def send_weekly_show_to_discord(
         week_number
     )
 
+    try:
+        update_record_book_from_week(
+            season_type,
+            week_number
+        )
+    except Exception as e:
+        print(
+            "RECORD BOOK UPDATE ERROR:",
+            str(e)
+        )
+
+
     history = load_weekly_show_history()
     key = weekly_show_post_key(
         season_type,
@@ -6159,8 +7025,8 @@ def send_weekly_show_to_discord(
         "recent trade proposals, power rankings, and picks for "
         "the unplayed matchups on the schedule.\n\n"
         f"**Marcus Hayes closes:** {show['closer']}\n\n"
-        "*Stephen A. Smith and Pat McAfee content in this show is fictional AI parody "
-        "and not real statements from either person. Picks are Project Madden analysis "
+        "*Stephen A. Smith, Pat McAfee, and Josh Pate content in this show is fictional AI parody "
+        "and not real statements from those people. Picks are Project Madden analysis "
         "based on available league data and current OVR, not betting odds.*"
     )
 
@@ -6572,6 +7438,41 @@ def analyst_post_weekly_show(
 # STEPHEN A. SMITH - AI PARODY SPECIAL SEGMENT
 # =========================================================
 
+
+STEPHEN_A_TRADE_LINES = [
+    "I am looking at this trade and asking one question: who actually got better? Because collecting names is not the same thing as building a team.",
+    "If you are moving premium talent, the return better make sense immediately. I am not accepting 'maybe it works later' as an explanation.",
+    "This is the kind of trade where one front office is betting on fit and the other is betting on raw talent. Somebody is going to look very smart or very foolish.",
+    "You cannot send out a franchise-level player and come back with a package full of question marks. That is how a roster gets set back.",
+    "The grades matter, but so does context. If the move fixes a major weakness, I can understand it. If it creates two new weaknesses, then what are we doing?",
+    "I want to know what the plan is after this trade. Good teams do not make moves just to make headlines.",
+    "If the League Office has to stare at the value gap this long, that alone tells you this is not a simple deal.",
+    "Somebody is betting on upside, somebody is betting on certainty. I want the side that knows exactly what it is getting.",
+    "Do not tell me a player is untouchable and then move him for a package that does not change your championship ceiling.",
+    "This trade may look even on paper, but roster construction is not a spreadsheet. Fit, age, development and positional value matter.",
+]
+
+STEPHEN_A_PLAYER_COMPARE_LINES = [
+    "{player} is giving me a little bit of that **LeBron James** effect — everything runs through him, and when he controls the game, everybody else looks better.",
+    "{player} has that **Stephen Curry** type of gravity right now. The defense has to account for him before the play even develops.",
+    "{player} is playing with a **Jimmy Butler** kind of edge — not always pretty, but when the pressure rises, the impact gets louder.",
+    "{player} reminds me of **Nikola Jokic** in one specific way: the production keeps finding the right place even when it does not look flashy.",
+    "{player} is giving me **Anthony Edwards** energy — aggressive, fearless, and always looking for the next big play.",
+    "{player} has that **Kevin Durant** feel when the matchup is right — smooth production and very difficult to completely take away.",
+    "{player} is playing like a football version of **Jayson Tatum** when he gets rolling: steady, polished, and capable of carrying the offense for long stretches.",
+    "{player} has a little **Draymond Green** impact to his game right now — the box score may not tell the whole story, but he changes what the opponent can do.",
+    "{player} is giving me **Shai Gilgeous-Alexander** vibes — calm, efficient, and somehow always finding a way to get exactly what he wants.",
+    "{player} is playing with a **Giannis Antetokounmpo** level of force in this matchup — once the momentum starts going downhill, it gets difficult to stop.",
+]
+
+STEPHEN_A_BAD_PLAYER_COMPARE_LINES = [
+    "{player} is looking like a star who forgot the fourth quarter existed. That is the football version of putting up numbers and disappearing when the game gets tight.",
+    "{player} is giving me empty-calorie production right now — the basketball equivalent of scoring 30 while your team loses by 20.",
+    "{player} cannot keep turning the ball over and expect the talent label to protect him. That is like a point guard handing out assists to the other team.",
+    "{player} has the reputation, but the production is not matching it. In basketball terms, that is an All-Star name with a bench-level impact tonight.",
+    "{player} is forcing too much. It is the football version of taking contested threes every possession instead of running the offense.",
+]
+
 STEPHEN_A_PARODY_OPENERS = [
     "Now hold on! We need to talk about what just happened here.",
     "Ladies and gentlemen, this cannot simply be ignored.",
@@ -6579,6 +7480,12 @@ STEPHEN_A_PARODY_OPENERS = [
     "Excuse me, but are we really going to act like that performance was normal?",
     "This is exactly the kind of result that gets everybody in the league talking.",
     "I am not letting this one slide. There is too much to discuss.",
+    "I need everybody to stop acting like the obvious is complicated. The tape is telling us exactly what happened.",
+    "There are moments where I can be patient, and then there are moments where the performance leaves me no choice but to question everything.",
+    "This is where expectations matter. If you call yourself a contender, I am going to judge you like one.",
+    "Do not give me excuses after the fact. Show me the adjustment, show me the execution, and then we can talk.",
+    "Some teams want the praise before they have earned it. I am not doing that today.",
+    "I am looking at this situation and somebody has to take responsibility. Talent alone is not enough.",
 ]
 
 STEPHEN_A_PARODY_GAME_LINES = [
@@ -6586,6 +7493,10 @@ STEPHEN_A_PARODY_GAME_LINES = [
     "{winner} made the statement. {loser} now has to prove this was an exception and not the beginning of a problem.",
     "When {winner} walks away with that result, the conversation changes immediately. {loser} cannot just shrug this off.",
     "There are wins, and then there are wins that put pressure on everybody else. {winner} just delivered one of those.",
+    "{winner} did what serious teams are supposed to do: they took control and made {loser} play from behind. Now {loser} has to prove this was one bad day and not a pattern.",
+    "The problem for {loser} is not just the loss. It is that {winner} made the game look easier than it should have been.",
+    "I keep hearing about how talented {loser} is. Wonderful. {winner} just showed us that talent without execution is decoration.",
+    "{winner} earned every bit of this conversation. If {loser} wants the respect back, go win the next one and stop asking for sympathy.",
 ]
 
 STEPHEN_A_PARODY_PLAYER_LINES = [
@@ -6593,6 +7504,10 @@ STEPHEN_A_PARODY_PLAYER_LINES = [
     "I do not care what anybody expected coming in — {player} showed up and made the entire league notice.",
     "{player} just gave us the kind of performance that changes how opponents prepare.",
     "That was not background production from {player}. That was a headline performance.",
+    "{player} is not just putting up numbers; {player} is dictating how the opponent has to play. That is star-level impact.",
+    "When {player} is producing like this, every coordinator in the league is writing that name at the top of the game plan.",
+    "{player} gave us the kind of performance that turns a regular weekly recap into a full segment.",
+    "If {player} keeps stacking performances like this, the conversation is going to move from good season to league-wide problem.",
 ]
 
 
@@ -6641,6 +7556,101 @@ def stephen_a_parody_post_key(
     return hashlib.sha256(
         raw.encode("utf-8")
     ).hexdigest()[:20]
+
+
+
+def build_stephen_trade_reaction(
+    analysis
+):
+    team_a = analysis.get(
+        "team_a",
+        "Team A"
+    )
+    team_b = analysis.get(
+        "team_b",
+        "Team B"
+    )
+
+    review = analysis.get(
+        "trade_committee",
+        {}
+    )
+
+    decision = str(
+        review.get(
+            "decision",
+            ""
+        )
+    )
+
+    gap = review.get(
+        "value_gap_percent",
+        review.get(
+            "gap_percentage"
+        )
+    )
+
+    key = (
+        f"stephen-trade-"
+        f"{analysis.get('trade_id')}-"
+        f"{team_a}-{team_b}-"
+        f"{decision}-{gap}"
+    )
+
+    line = stable_choice(
+        STEPHEN_A_TRADE_LINES,
+        key
+    )
+
+    if "AUTO DENY" in decision.upper():
+        ending = (
+            "And if the League Office is already at AUTO DENY, "
+            "that is your sign to go back to the negotiating table."
+        )
+    elif "STRONG" in decision.upper():
+        ending = (
+            "This is exactly why the Trade Committee needs to look at it. "
+            "The package may have an idea behind it, but the imbalance is too loud to ignore."
+        )
+    elif "REVIEW" in decision.upper():
+        ending = (
+            "I can see the argument for both sides, but I am not rubber-stamping it. "
+            "Let the committee make them explain the logic."
+        )
+    else:
+        ending = (
+            "If the numbers are this close and the roster fit makes sense, "
+            "I can live with the League Office approving it."
+        )
+
+    return (
+        f"{line} {ending}"
+    )
+
+
+def build_stephen_player_comparison(
+    player_name,
+    positive=True,
+    key_suffix=""
+):
+    choices = (
+        STEPHEN_A_PLAYER_COMPARE_LINES
+        if positive
+        else STEPHEN_A_BAD_PLAYER_COMPARE_LINES
+    )
+
+    template = stable_choice(
+        choices,
+        (
+            f"stephen-player-compare-"
+            f"{player_name}-{key_suffix}-"
+            f"{'good' if positive else 'bad'}"
+        )
+    )
+
+    return template.format(
+        player=player_name
+    )
 
 
 def build_stephen_a_parody_segment(
@@ -6774,12 +7784,32 @@ def build_stephen_a_parody_segment(
             player=player
         )
 
+        comparison = build_stephen_player_comparison(
+            player,
+            positive=(
+                top_player.get(
+                    "story_type",
+                    ""
+                )
+                not in [
+                    "bad_qb",
+                    "bad",
+                    "struggle"
+                ]
+            ),
+            key_suffix=(
+                f"{season_type}-"
+                f"{week_number}-"
+                f"{source_key}"
+            )
+        )
+
         stories.append({
             "story_type": "player",
             "source_key": source_key,
             "headline": player,
             "take": (
-                f"{opener} {body}"
+                f"{opener} {body} {comparison}"
             ),
             "details": top_player
         })
@@ -7000,6 +8030,239 @@ def analyst_post_stephen_a(
 
 
 
+
+# =========================================================
+# JOSH PATE - AI PARODY SPECIAL SEGMENT
+# =========================================================
+
+JOSH_PATE_PARODY_OPENERS = [
+    "Here is the thing I keep coming back to: what did the game actually tell us beyond the final score?",
+    "I care less about the label and more about whether the team is building something repeatable.",
+    "This is where roster construction, situational football, and week-to-week consistency separate real contenders from paper contenders.",
+    "You can have all the talent in the world, but if the operation is sloppy, the ceiling drops fast.",
+    "I am looking for what travels: quarterback play, line play, discipline, and whether the staff has answers when Plan A gets taken away.",
+    "One result does not define a team, but the way a team wins or loses can reveal what is coming next.",
+]
+
+JOSH_PATE_GAME_LINES = [
+    "{winner} showed more of the things that tend to travel week to week, while {loser} left too many self-inflicted problems on the field.",
+    "{winner} did a better job controlling the terms of the game. {loser} now has to prove the issues are correctable and not structural.",
+    "The score matters, but the bigger takeaway is that {winner} looked more stable in the moments where the game could have tilted either way.",
+    "{winner} gave me more confidence in its operation. {loser} has questions to answer about execution, adjustments, and consistency.",
+    "This was not just about who had the better highlights. {winner} won the down-to-down battle more consistently than {loser}.",
+]
+
+JOSH_PATE_PLAYER_LINES = [
+    "{player} looked like the kind of player who changes what a coordinator is willing to call.",
+    "{player} is becoming the type of piece that can raise the floor of an entire unit.",
+    "{player} gave the kind of performance that makes the next opponent change its weekly plan.",
+    "{player} looked dependable, and dependable stars are what survive when the schedule gets tougher.",
+    "{player} did more than fill the box score; the performance changed how the game had to be played.",
+]
+
+JOSH_PATE_TRADE_LINES = [
+    "I evaluate trades the same way I evaluate roster building: does this move raise your floor, your ceiling, or preferably both?",
+    "The headline name is not enough for me. I want to know what the move does to the two-deep, the future, and the team’s margin for error.",
+    "A trade can be fair on a value chart and still be bad roster management if it creates a bigger hole somewhere else.",
+    "If you are moving a premium asset, the return has to make sense in both the short term and the long term.",
+    "The best trades usually make a team more flexible, not more fragile. That is the part I am looking at here.",
+    "Draft capital matters because optionality matters. Proven talent matters because certainty matters. The question is whether the balance makes sense.",
+]
+
+JOSH_PATE_COMPARE_LINES = [
+    "{player} is functioning like a true program centerpiece — the kind of player everything else can be built around.",
+    "{player} is giving this team the football equivalent of a high-level floor general: steady, efficient, and able to keep the whole operation on schedule.",
+    "{player} is becoming the kind of mismatch piece that forces opponents to change structure, not just personnel.",
+    "{player} is playing like the kind of veteran anchor every contender needs when a game gets weird.",
+    "{player} has become the sort of player whose value is bigger than one stat category because he changes what the opponent is allowed to do.",
+]
+
+
+def get_josh_pate_parody_webhook():
+    return os.environ.get(
+        "JOSH_PATE_PARODY_WEBHOOK_URL",
+        ""
+    ).strip()
+
+
+def josh_pate_parody_webhook_configured():
+    return bool(get_josh_pate_parody_webhook())
+
+
+def build_josh_pate_player_comparison(player_name, key_suffix=""):
+    template = stable_choice(
+        JOSH_PATE_COMPARE_LINES,
+        f"josh-pate-compare-{player_name}-{key_suffix}"
+    )
+    return template.format(player=player_name)
+
+
+def build_josh_pate_segment(season_type, week_number):
+    stories = []
+
+    game_reactions = build_week_game_reactions(
+        season_type,
+        week_number
+    )
+    player_reactions = build_week_player_reactions(
+        season_type,
+        week_number
+    )
+
+    if game_reactions:
+        top_game = sorted(
+            game_reactions,
+            key=lambda item: (
+                1 if item.get("upset") else 0,
+                int(item.get("margin", 0) or 0)
+            ),
+            reverse=True
+        )[0]
+
+        winner = top_game.get("winner", "the winner")
+        loser = top_game.get("loser", "the opponent")
+        source_key = str(
+            top_game.get(
+                "schedule_id",
+                top_game.get("game", "")
+            )
+        )
+
+        opener = stable_choice(
+            JOSH_PATE_PARODY_OPENERS,
+            f"josh-pate-game-open-{season_type}-{week_number}-{source_key}"
+        )
+        body = stable_choice(
+            JOSH_PATE_GAME_LINES,
+            f"josh-pate-game-body-{season_type}-{week_number}-{source_key}"
+        ).format(
+            winner=winner,
+            loser=loser
+        )
+
+        stories.append({
+            "story_type": "game",
+            "headline": f"{winner} vs {loser}",
+            "take": f"{opener} {body}"
+        })
+
+    if player_reactions:
+        top_player = player_reactions[0]
+        player = top_player.get("player", "This player")
+        source_key = (
+            f"{player}-"
+            f"{top_player.get('category', '')}-"
+            f"{top_player.get('story_type', '')}"
+        )
+
+        opener = stable_choice(
+            JOSH_PATE_PARODY_OPENERS,
+            f"josh-pate-player-open-{season_type}-{week_number}-{source_key}"
+        )
+        body = stable_choice(
+            JOSH_PATE_PLAYER_LINES,
+            f"josh-pate-player-body-{season_type}-{week_number}-{source_key}"
+        ).format(player=player)
+        comparison = build_josh_pate_player_comparison(
+            player,
+            key_suffix=f"{season_type}-{week_number}-{source_key}"
+        )
+
+        stories.append({
+            "story_type": "player",
+            "headline": player,
+            "take": f"{opener} {body} {comparison}"
+        })
+
+    return stories
+
+
+def build_josh_pate_trade_reaction(analysis):
+    team_a = analysis.get("team_a", "Team A")
+    team_b = analysis.get("team_b", "Team B")
+    review = analysis.get("trade_committee", {})
+    decision = str(review.get("decision", ""))
+
+    line = stable_choice(
+        JOSH_PATE_TRADE_LINES,
+        (
+            f"josh-pate-trade-{analysis.get('trade_id')}-"
+            f"{team_a}-{team_b}-{decision}"
+        )
+    )
+
+    if "AUTO DENY" in decision.upper():
+        closer = (
+            "If the League Office is already at AUTO DENY, "
+            "the structure of the deal needs to change before we even get to roster fit."
+        )
+    elif "REVIEW" in decision.upper():
+        closer = (
+            "This is the kind of deal where the committee should look beyond the raw number "
+            "and ask what each roster actually becomes afterward."
+        )
+    else:
+        closer = (
+            "If both sides can explain the roster logic and the value is close, "
+            "I am comfortable with the League Office letting it through."
+        )
+
+    return f"{line} {closer}"
+
+
+def send_josh_pate_parody_embed(title, description):
+    webhook_url = get_josh_pate_parody_webhook()
+
+    if not webhook_url:
+        return {
+            "sent": False,
+            "error": (
+                "JOSH_PATE_PARODY_WEBHOOK_URL "
+                "is not configured."
+            )
+        }
+
+    payload = {
+        "username": "Josh Pate | AI Parody",
+        "embeds": [
+            {
+                "title": title,
+                "description": description,
+                "footer": {
+                    "text": (
+                        "AI parody segment • "
+                        "Not real Josh Pate statements"
+                    )
+                }
+            }
+        ]
+    }
+
+    try:
+        response = requests.post(
+            webhook_url,
+            json=payload,
+            timeout=15
+        )
+
+        if response.status_code not in [200, 204]:
+            return {
+                "sent": False,
+                "error": (
+                    f"Discord returned {response.status_code}: "
+                    f"{response.text[:500]}"
+                )
+            }
+
+        return {"sent": True}
+
+    except Exception as e:
+        return {
+            "sent": False,
+            "error": str(e)
+        }
+
+
 # =========================================================
 # PAT MCAFEE - AI PARODY SPECIAL SEGMENT
 # =========================================================
@@ -7169,6 +8432,7 @@ def build_pat_mcafee_parody_segment(
 
 STANDINGS_STORY_HISTORY_FILE = "standings_story_posts.json"
 STEPHEN_A_PARODY_HISTORY_FILE = "stephen_a_parody_posts.json"
+JOSH_PATE_PARODY_HISTORY_FILE = "josh_pate_parody_posts.json"
 MARCUS_TRADE_REACTION_HISTORY_FILE = "marcus_trade_reaction_posts.json"
 WEEKLY_SHOW_HISTORY_FILE = "weekly_show_posts.json"
 TRADE_HISTORY_FILE = "trade_history.json"
@@ -8359,7 +9623,7 @@ def register_trade_slash_command():
 
     weekly_show_command = {
         "name": "weeklyshow",
-        "description": "Post Weekly Show with Marcus + Stephen A. + Pat McAfee parody",
+        "description": "Post Weekly Show with Marcus + Stephen A. + Pat McAfee + Josh Pate parody",
         "options": [
             {
                 "type": 3,
@@ -8402,12 +9666,34 @@ def register_trade_slash_command():
         ]
     }
 
+    test_josh_pate_command = {
+        "name": "testjoshpate",
+        "description": "Send a Josh Pate AI parody test segment",
+        "options": [
+            {
+                "type": 3,
+                "name": "headline",
+                "description": "Test headline",
+                "required": True,
+                "max_length": 100
+            },
+            {
+                "type": 3,
+                "name": "take",
+                "description": "AI parody test commentary",
+                "required": True,
+                "max_length": 1000
+            }
+        ]
+    }
+
     commands = [
         command,
         test_marcus_command,
         test_stephen_command,
         weekly_show_command,
-        test_weekly_show_command
+        test_weekly_show_command,
+        test_josh_pate_command
     ]
 
     headers = {
@@ -8995,6 +10281,50 @@ def build_discord_trade_result_text(interaction):
             str(e)
         )
 
+    try:
+        stephen_trade_take = (
+            build_stephen_trade_reaction(
+                analysis
+            )
+        )
+
+        send_stephen_a_parody_embed(
+            "💼 TRADE DESK • Stephen A. Smith — AI Parody",
+            (
+                f"## {analysis.get('team_a')} ↔ {analysis.get('team_b')}\n"
+                f"{stephen_trade_take}\n\n"
+                "⚠️ *Fictional AI parody for Project Madden. "
+                "This is not a real Stephen A. Smith quote or statement.*"
+            )
+        )
+    except Exception as e:
+        print(
+            "STEPHEN TRADE REACTION ERROR:",
+            str(e)
+        )
+
+    try:
+        josh_pate_trade_take = (
+            build_josh_pate_trade_reaction(
+                analysis
+            )
+        )
+
+        send_josh_pate_parody_embed(
+            "💼 TRADE DESK • Josh Pate — AI Parody",
+            (
+                f"## {analysis.get('team_a')} ↔ {analysis.get('team_b')}\n"
+                f"{josh_pate_trade_take}\n\n"
+                "⚠️ *Fictional AI parody for Project Madden. "
+                "This is not a real Josh Pate quote or statement.*"
+            )
+        )
+    except Exception as e:
+        print(
+            "JOSH PATE TRADE REACTION ERROR:",
+            str(e)
+        )
+
     review = analysis[
         "trade_committee"
     ]
@@ -9482,6 +10812,50 @@ def discord_interactions():
                 }
             })
 
+        if command_name == "testjoshpate":
+            options = discord_option_map(
+                interaction
+            )
+
+            headline = str(
+                options.get(
+                    "headline",
+                    "Project Madden Test Segment"
+                )
+            ).strip()
+
+            take = str(
+                options.get(
+                    "take",
+                    "AI parody test."
+                )
+            ).strip()
+
+            result = send_josh_pate_parody_embed(
+                "🧪 TEST • Josh Pate — AI Parody",
+                (
+                    f"## {headline}\n"
+                    f"{take}\n\n"
+                    "⚠️ *Fictional AI parody for Project Madden. "
+                    "This is not a real Josh Pate quote or statement.*"
+                )
+            )
+
+            if result.get("sent"):
+                return discord_ephemeral(
+                    "✅ Josh Pate AI parody test sent."
+                )
+
+            return discord_ephemeral(
+                "❌ Josh Pate parody test failed: "
+                + str(
+                    result.get(
+                        "error",
+                        "Unknown error"
+                    )
+                )[:1000]
+            )
+
         if command_name == "teststephena":
             options = discord_option_map(
                 interaction
@@ -9586,7 +10960,8 @@ def discord_status():
         "test_commands": [
             "/testmarcus",
             "/teststephena",
-            "/testweeklyshow"
+            "/testweeklyshow",
+            "/testjoshpate"
         ],
         "weekly_show_command":
             "/weeklyshow",
@@ -11773,6 +13148,85 @@ def trade_proposals_api():
 # =========================================================
 # START APP - MUST STAY LAST
 # =========================================================
+
+
+
+@app.route(
+    "/weekly-show/health/<season_type>/<int:week_number>"
+)
+def weekly_show_healthcheck(
+    season_type,
+    week_number
+):
+    checks = {
+        "math_imported": hasattr(math, "exp"),
+        "summary_build": False,
+        "panel_takes": False,
+        "panel_debate": False,
+        "fraud_watch": False,
+        "dark_horse_watch": False,
+        "hot_seat": False,
+        "super_bowl_favorites": False,
+        "josh_pate_segment": False,
+    }
+
+    errors = {}
+
+    try:
+        show = build_weekly_show_summary(
+            season_type,
+            week_number
+        )
+
+        checks["summary_build"] = True
+        checks["panel_takes"] = (
+            isinstance(
+                show.get("panel_takes"),
+                dict
+            )
+            and bool(
+                show.get("panel_takes")
+            )
+        )
+
+        checks["panel_debate"] = (
+            isinstance(
+                show.get("panel_debate"),
+                dict
+            )
+            and bool(
+                show.get("panel_debate")
+            )
+        )
+        checks["fraud_watch"] = (
+            "fraud_watch" in show
+        )
+        checks["dark_horse_watch"] = (
+            "dark_horse_watch" in show
+        )
+        checks["hot_seat"] = (
+            "hot_seat" in show
+        )
+        checks["super_bowl_favorites"] = (
+            "super_bowl_favorites" in show
+        )
+        checks["josh_pate_segment"] = (
+            "josh_pate_parody_segment" in show
+        )
+
+    except Exception as e:
+        errors["summary_build"] = str(e)
+
+    return jsonify({
+        "ok":
+            all(checks.values())
+            and not errors,
+        "checks":
+            checks,
+        "errors":
+            errors
+    })
+
 
 
 if __name__ == "__main__":
