@@ -145,6 +145,35 @@ def snallabot_receiver(subpath):
         }), 200
 
     #
+    # FREE AGENT ROSTER
+    #
+    if "freeagents" in parts and parts[-1] == "roster":
+
+        players = data.get("rosterInfoList", [])
+
+        save_json(
+            "freeagents_roster.json",
+            data
+        )
+
+        update_latest(
+            "freeagents_roster",
+            subpath,
+            data
+        )
+
+        print(
+            f"Saved free agents roster | "
+            f"{len(players)} players"
+        )
+
+        return jsonify({
+            "success": True,
+            "type": "freeagents",
+            "player_count": len(players)
+        }), 200
+
+    #
     # WEEKLY DATA
     #
     if "week" in parts:
