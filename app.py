@@ -3266,6 +3266,24 @@ def register_trade_slash_command():
             )
         }
 
+    def player_option(name, description):
+        return {
+            "type": 3,
+            "name": name,
+            "description": description,
+            "required": False,
+            "autocomplete": True
+        }
+
+    def pick_option(name, description):
+        return {
+            "type": 3,
+            "name": name,
+            "description": description,
+            "required": False,
+            "autocomplete": True
+        }
+
     command = {
         "name": "trade",
         "description": (
@@ -3286,16 +3304,26 @@ def register_trade_slash_command():
                 "description": "Discord owner of Team A",
                 "required": True
             },
-            {
-                "type": 3,
-                "name": "team_a_assets",
-                "description": (
-                    "Select players from Team A or type picks"
-                ),
-                "required": True,
-                "autocomplete": True,
-                "max_length": 1000
-            },
+            player_option(
+                "team_a_player_1",
+                "Team A player #1"
+            ),
+            player_option(
+                "team_a_player_2",
+                "Team A player #2"
+            ),
+            player_option(
+                "team_a_player_3",
+                "Team A player #3"
+            ),
+            pick_option(
+                "team_a_pick_1",
+                "Team A draft pick #1"
+            ),
+            pick_option(
+                "team_a_pick_2",
+                "Team A draft pick #2"
+            ),
             {
                 "type": 3,
                 "name": "team_b",
@@ -3309,16 +3337,26 @@ def register_trade_slash_command():
                 "description": "Discord owner of Team B",
                 "required": True
             },
-            {
-                "type": 3,
-                "name": "team_b_assets",
-                "description": (
-                    "Select players from Team B or type picks"
-                ),
-                "required": True,
-                "autocomplete": True,
-                "max_length": 1000
-            }
+            player_option(
+                "team_b_player_1",
+                "Team B player #1"
+            ),
+            player_option(
+                "team_b_player_2",
+                "Team B player #2"
+            ),
+            player_option(
+                "team_b_player_3",
+                "Team B player #3"
+            ),
+            pick_option(
+                "team_b_pick_1",
+                "Team B draft pick #1"
+            ),
+            pick_option(
+                "team_b_pick_2",
+                "Team B draft pick #2"
+            )
         ]
     }
 
@@ -3327,7 +3365,6 @@ def register_trade_slash_command():
         "Content-Type": "application/json"
     }
 
-    # Guild commands update in Discord almost immediately.
     if guild_id:
         url = (
             f"{DISCORD_API_BASE}/applications/"
@@ -3369,6 +3406,10 @@ def register_trade_slash_command():
         ],
         "scope": scope,
         "guild_id_configured": bool(guild_id),
+        "trade_ui": (
+            "3 player slots + 2 draft-pick "
+            "dropdowns per team"
+        ),
         "note": (
             "Guild command updates are nearly instant."
             if guild_id
@@ -3422,28 +3463,22 @@ def handle_trade_autocomplete(interaction):
     if not focused:
         return jsonify({
             "type": 8,
-            "data": {
-                "choices": []
-            }
+            "data": {"choices": []}
         })
 
-    focused_name = focused.get(
-        "name",
-        ""
-    )
-
+    focused_name = focused.get("name", "")
     raw_value = str(
-        focused.get(
-            "value",
-            ""
-        )
-    )
+        focused.get("value", "")
+    ).strip()
 
-    # Team fields: show/filter all NFL teams.
-    if focused_name in [
-        "team_a",
-        "team_b"
-    ]:
+    option_map = {
+        option.get("name"):
+            option.get("value")
+        for option in options
+    }
+
+    # TEAM DROPDOWNS
+    if focused_name in ["team_a", "team_b"]:
         query = raw_value.lower()
 
         names = [
@@ -3470,28 +3505,57 @@ def handle_trade_autocomplete(interaction):
             }
         })
 
-    # Asset fields: use the already-selected team to load that
-    # team's Snallabot roster and display real player names.
-    if focused_name in [
-        "team_a_assets",
-        "team_b_assets"
-    ]:
-        option_map = {
-            option.get("name"):
-                option.get("value")
-            for option in options
-        }
+    # DRAFT PICK DROPDOWNS
+    if "_pick_" in focused_name:
+        query = raw_value.lower()
+        current_year = datetime.now().year
 
-        team_field = (
+        # Include current season plus three future draft classes.
+        pick_choices = []
+
+        for year in range(
+            current_year,
+            current_year + 4
+        ):
+            for round_number in range(1, 8):
+                value = (
+                    f"{year} Round "
+                    f"{round_number}"
+                )
+
+                if (
+                    not query
+                    or query in value.lower()
+                ):
+                    pick_choices.append({
+                        "name": value,
+                        "value": value
+                    })
+
+                if len(pick_choices) >= 25:
+                    break
+
+            if len(pick_choices) >= 25:
+                break
+
+        return jsonify({
+            "type": 8,
+            "data": {
+                "choices": pick_choices
+            }
+        })
+
+    # PLAYER DROPDOWNS
+    if "_player_" in focused_name:
+        side = (
             "team_a"
-            if focused_name
-            == "team_a_assets"
+            if focused_name.startswith("team_a")
             else "team_b"
         )
 
         team_name = str(
             option_map.get(
-                team_field,
+                side,
                 ""
             )
         ).strip()
@@ -3511,23 +3575,22 @@ def handle_trade_autocomplete(interaction):
                 }
             })
 
-        # Allow multiple assets in one field.
-        # Example:
-        # Lamar Jackson, Zay
-        # keeps "Lamar Jackson" and searches "Zay".
-        pieces = raw_value.split(",")
+        # Don't offer the same player twice on one side.
+        selected_players = set()
 
-        already_selected = [
-            piece.strip()
-            for piece in pieces[:-1]
-            if piece.strip()
-        ]
+        for key, value in option_map.items():
+            if (
+                key.startswith(
+                    f"{side}_player_"
+                )
+                and key != focused_name
+                and value
+            ):
+                selected_players.add(
+                    str(value).lower()
+                )
 
-        current_query = (
-            pieces[-1].strip().lower()
-            if pieces
-            else ""
-        )
+        query = raw_value.lower()
 
         try:
             team, players = build_roster_index(
@@ -3548,12 +3611,7 @@ def handle_trade_autocomplete(interaction):
                 }
             })
 
-        selected_lower = {
-            name.lower()
-            for name in already_selected
-        }
-
-        matches = []
+        choices = []
 
         for player in players:
             player_name = str(
@@ -3568,47 +3626,30 @@ def handle_trade_autocomplete(interaction):
 
             if (
                 player_name.lower()
-                in selected_lower
+                in selected_players
             ):
                 continue
+
+            position = str(
+                player.get(
+                    "position",
+                    ""
+                )
+            )
 
             if (
-                current_query
-                and current_query
+                query
+                and query
                 not in player_name.lower()
-                and current_query
-                not in str(
-                    player.get(
-                        "position",
-                        ""
-                    )
-                ).lower()
+                and query
+                not in position.lower()
             ):
                 continue
 
-            matches.append(player)
-
-            if len(matches) >= 25:
-                break
-
-        choices = []
-
-        for player in matches:
-            player_name = player[
-                "name"
-            ]
-
-            position = (
-                player.get("position")
-                or "PLAYER"
-            )
-
-            overall = player.get(
-                "overall"
-            )
+            overall = player.get("overall")
 
             label = (
-                f"{position} • "
+                f"{position or 'PLAYER'} • "
                 f"{player_name}"
             )
 
@@ -3617,23 +3658,13 @@ def handle_trade_autocomplete(interaction):
                     f" • {overall} OVR"
                 )
 
-            combined = (
-                already_selected
-                + [player_name]
-            )
-
-            value = ", ".join(
-                combined
-            )
-
-            # Discord autocomplete choice values are limited.
-            if len(value) > 100:
-                value = player_name
-
             choices.append({
                 "name": label[:100],
-                "value": value[:100]
+                "value": player_name[:100]
             })
+
+            if len(choices) >= 25:
+                break
 
         return jsonify({
             "type": 8,
@@ -3644,9 +3675,7 @@ def handle_trade_autocomplete(interaction):
 
     return jsonify({
         "type": 8,
-        "data": {
-            "choices": []
-        }
+        "data": {"choices": []}
     })
 
 
@@ -3683,18 +3712,40 @@ def build_discord_trade_result_text(interaction):
         )
     ).strip()
 
-    assets_a_text = parse_slash_assets(
-        options.get(
-            "team_a_assets",
-            ""
-        )
+    team_a_assets_list = [
+        str(options.get(key, "")).strip()
+        for key in [
+            "team_a_player_1",
+            "team_a_player_2",
+            "team_a_player_3",
+            "team_a_pick_1",
+            "team_a_pick_2"
+        ]
+        if str(
+            options.get(key, "")
+        ).strip()
+    ]
+
+    team_b_assets_list = [
+        str(options.get(key, "")).strip()
+        for key in [
+            "team_b_player_1",
+            "team_b_player_2",
+            "team_b_player_3",
+            "team_b_pick_1",
+            "team_b_pick_2"
+        ]
+        if str(
+            options.get(key, "")
+        ).strip()
+    ]
+
+    assets_a_text = "\n".join(
+        team_a_assets_list
     )
 
-    assets_b_text = parse_slash_assets(
-        options.get(
-            "team_b_assets",
-            ""
-        )
+    assets_b_text = "\n".join(
+        team_b_assets_list
     )
 
     if not team_a or not team_b:
@@ -3702,6 +3753,18 @@ def build_discord_trade_result_text(interaction):
 
     if team_a.lower() == team_b.lower():
         return "❌ A team cannot trade with itself."
+
+    if not team_a_assets_list:
+        return (
+            "❌ Team A must include at least "
+            "one player or draft pick."
+        )
+
+    if not team_b_assets_list:
+        return (
+            "❌ Team B must include at least "
+            "one player or draft pick."
+        )
 
     if not find_team(team_a):
         return (
