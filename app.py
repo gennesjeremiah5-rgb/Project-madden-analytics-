@@ -5,6 +5,8 @@ import hashlib
 import uuid
 import re
 import requests
+from nacl.signing import VerifyKey
+from nacl.exceptions import BadSignatureError
 from datetime import datetime, timezone
 
 
@@ -1072,11 +1074,20 @@ def post_trade_to_discord(analysis):
 
     review = analysis["trade_committee"]
 
+    mention_ids = extract_discord_user_ids(
+        analysis.get("team_a_mention"),
+        analysis.get("team_b_mention")
+    )
+
     payload = {
         "content": (
             f"{analysis['team_a_mention']} "
             f"{analysis['team_b_mention']}"
         ),
+
+        "allowed_mentions": {
+            "users": mention_ids
+        },
 
         "embeds": [
             {
@@ -3037,6 +3048,663 @@ def analyst_post_standings():
     return jsonify(result), status_code
 
 
+
+# =========================================================
+# DISCORD SLASH COMMAND - /trade
+# =========================================================
+
+DISCORD_API_BASE = "https://discord.com/api/v10"
+
+DISCORD_TEAM_CHOICES = [
+    {"name": "49ers", "value": "49ers"},
+    {"name": "Bears", "value": "Bears"},
+    {"name": "Bengals", "value": "Bengals"},
+    {"name": "Bills", "value": "Bills"},
+    {"name": "Broncos", "value": "Broncos"},
+    {"name": "Browns", "value": "Browns"},
+    {"name": "Buccaneers", "value": "Buccaneers"},
+    {"name": "Cardinals", "value": "Cardinals"},
+    {"name": "Chargers", "value": "Chargers"},
+    {"name": "Chiefs", "value": "Chiefs"},
+    {"name": "Colts", "value": "Colts"},
+    {"name": "Commanders", "value": "Commanders"},
+    {"name": "Cowboys", "value": "Cowboys"},
+    {"name": "Dolphins", "value": "Dolphins"},
+    {"name": "Eagles", "value": "Eagles"},
+    {"name": "Falcons", "value": "Falcons"},
+    {"name": "Giants", "value": "Giants"},
+    {"name": "Jaguars", "value": "Jaguars"},
+    {"name": "Jets", "value": "Jets"},
+    {"name": "Lions", "value": "Lions"},
+    {"name": "Packers", "value": "Packers"},
+    {"name": "Panthers", "value": "Panthers"},
+    {"name": "Patriots", "value": "Patriots"},
+    {"name": "Raiders", "value": "Raiders"},
+    {"name": "Rams", "value": "Rams"},
+    {"name": "Ravens", "value": "Ravens"},
+    {"name": "Saints", "value": "Saints"},
+    {"name": "Seahawks", "value": "Seahawks"},
+    {"name": "Steelers", "value": "Steelers"},
+    {"name": "Texans", "value": "Texans"},
+    {"name": "Titans", "value": "Titans"},
+    {"name": "Vikings", "value": "Vikings"}
+]
+
+
+def discord_application_id():
+    return os.environ.get(
+        "DISCORD_APPLICATION_ID",
+        ""
+    ).strip()
+
+
+def discord_public_key():
+    return os.environ.get(
+        "DISCORD_PUBLIC_KEY",
+        ""
+    ).strip()
+
+
+def discord_bot_token():
+    return os.environ.get(
+        "DISCORD_BOT_TOKEN",
+        ""
+    ).strip()
+
+
+def discord_bot_configured():
+    return bool(
+        discord_application_id()
+        and discord_public_key()
+        and discord_bot_token()
+    )
+
+
+def discord_interactions_url():
+    return (
+        "https://project-madden-analytics.onrender.com"
+        "/discord/interactions"
+    )
+
+
+def verify_discord_request(raw_body):
+    public_key = discord_public_key()
+
+    if not public_key:
+        return False
+
+    signature = request.headers.get(
+        "X-Signature-Ed25519",
+        ""
+    )
+
+    timestamp = request.headers.get(
+        "X-Signature-Timestamp",
+        ""
+    )
+
+    if not signature or not timestamp:
+        return False
+
+    try:
+        verify_key = VerifyKey(
+            bytes.fromhex(public_key)
+        )
+
+        verify_key.verify(
+            timestamp.encode("utf-8")
+            + raw_body,
+            bytes.fromhex(signature)
+        )
+
+        return True
+
+    except (
+        BadSignatureError,
+        ValueError
+    ):
+        return False
+
+
+def discord_option_map(interaction):
+    options = (
+        interaction
+        .get("data", {})
+        .get("options", [])
+    )
+
+    return {
+        option.get("name"):
+            option.get("value")
+        for option in options
+    }
+
+
+def resolved_user(interaction, user_id):
+    resolved = (
+        interaction
+        .get("data", {})
+        .get("resolved", {})
+        .get("users", {})
+    )
+
+    return resolved.get(
+        str(user_id),
+        {}
+    )
+
+
+def discord_user_label(interaction, user_id):
+    user = resolved_user(
+        interaction,
+        user_id
+    )
+
+    username = (
+        user.get("global_name")
+        or user.get("username")
+        or str(user_id)
+    )
+
+    return (
+        f"{username} (<@{user_id}>)"
+    )
+
+
+def extract_discord_user_ids(*mentions):
+    ids = []
+
+    for mention in mentions:
+        match = re.search(
+            r"<@!?(\d+)>",
+            str(mention or "")
+        )
+
+        if match:
+            ids.append(
+                match.group(1)
+            )
+
+    return ids
+
+
+def save_trade_proposal(analysis):
+    proposals = load_json_file(
+        "trade_proposals.json"
+    )
+
+    if not isinstance(
+        proposals,
+        list
+    ):
+        proposals = []
+
+    proposals.append(analysis)
+
+    save_json_file(
+        "trade_proposals.json",
+        proposals
+    )
+
+
+def register_trade_slash_command():
+    app_id = discord_application_id()
+    token = discord_bot_token()
+
+    if not app_id or not token:
+        return {
+            "success": False,
+            "error": (
+                "DISCORD_APPLICATION_ID or "
+                "DISCORD_BOT_TOKEN is missing."
+            )
+        }
+
+    # Discord limits a single string-choice option to 25 choices.
+    # Because the NFL has 32 teams, team fields use autocomplete.
+    command = {
+        "name": "trade",
+        "description": (
+            "Submit a Project Madden trade "
+            "for League Office Review"
+        ),
+        "options": [
+            {
+                "type": 3,
+                "name": "team_a",
+                "description": "First team",
+                "required": True,
+                "autocomplete": True
+            },
+            {
+                "type": 6,
+                "name": "team_a_owner",
+                "description": "Discord owner of Team A",
+                "required": True
+            },
+            {
+                "type": 3,
+                "name": "team_a_assets",
+                "description": (
+                    "Players/picks separated by commas"
+                ),
+                "required": True,
+                "max_length": 1000
+            },
+            {
+                "type": 3,
+                "name": "team_b",
+                "description": "Second team",
+                "required": True,
+                "autocomplete": True
+            },
+            {
+                "type": 6,
+                "name": "team_b_owner",
+                "description": "Discord owner of Team B",
+                "required": True
+            },
+            {
+                "type": 3,
+                "name": "team_b_assets",
+                "description": (
+                    "Players/picks separated by commas"
+                ),
+                "required": True,
+                "max_length": 1000
+            }
+        ]
+    }
+
+    response = requests.put(
+        (
+            f"{DISCORD_API_BASE}/applications/"
+            f"{app_id}/commands"
+        ),
+        headers={
+            "Authorization":
+                f"Bot {token}",
+            "Content-Type":
+                "application/json"
+        },
+        json=[
+            command
+        ],
+        timeout=15
+    )
+
+    if response.status_code not in [
+        200,
+        201
+    ]:
+        return {
+            "success": False,
+            "status_code":
+                response.status_code,
+            "error":
+                response.text[:500]
+        }
+
+    try:
+        body = response.json()
+    except Exception:
+        body = []
+
+    return {
+        "success": True,
+        "registered": [
+            item.get("name")
+            for item in body
+        ],
+        "scope": "global",
+        "note": (
+            "Global slash commands can take "
+            "some time to appear in Discord."
+        )
+    }
+
+
+def parse_slash_assets(text):
+    # Discord slash fields are single-line strings.
+    # Accept comma, semicolon, or newline separators.
+    parts = re.split(
+        r"[\n,;]+",
+        str(text or "")
+    )
+
+    cleaned = [
+        part.strip()
+        for part in parts
+        if part.strip()
+    ]
+
+    return "\n".join(cleaned)
+
+
+def discord_ephemeral(content):
+    return jsonify({
+        "type": 4,
+        "data": {
+            "content": content,
+            "flags": 64
+        }
+    })
+
+
+def handle_trade_autocomplete(interaction):
+    options = (
+        interaction
+        .get("data", {})
+        .get("options", [])
+    )
+
+    focused = None
+
+    for option in options:
+        if option.get("focused"):
+            focused = option
+            break
+
+    query = str(
+        (focused or {}).get(
+            "value",
+            ""
+        )
+    ).lower()
+
+    names = [
+        team["value"]
+        for team in DISCORD_TEAM_CHOICES
+    ]
+
+    filtered = [
+        name
+        for name in names
+        if query in name.lower()
+    ][:25]
+
+    return jsonify({
+        "type": 8,
+        "data": {
+            "choices": [
+                {
+                    "name": name,
+                    "value": name
+                }
+                for name in filtered
+            ]
+        }
+    })
+
+
+def handle_discord_trade(interaction):
+    options = discord_option_map(
+        interaction
+    )
+
+    team_a = str(
+        options.get(
+            "team_a",
+            ""
+        )
+    ).strip()
+
+    team_b = str(
+        options.get(
+            "team_b",
+            ""
+        )
+    ).strip()
+
+    owner_a_id = str(
+        options.get(
+            "team_a_owner",
+            ""
+        )
+    ).strip()
+
+    owner_b_id = str(
+        options.get(
+            "team_b_owner",
+            ""
+        )
+    ).strip()
+
+    assets_a_text = parse_slash_assets(
+        options.get(
+            "team_a_assets",
+            ""
+        )
+    )
+
+    assets_b_text = parse_slash_assets(
+        options.get(
+            "team_b_assets",
+            ""
+        )
+    )
+
+    if not team_a or not team_b:
+        return discord_ephemeral(
+            "❌ Select both teams."
+        )
+
+    if team_a.lower() == team_b.lower():
+        return discord_ephemeral(
+            "❌ A team cannot trade with itself."
+        )
+
+    if not find_team(team_a):
+        return discord_ephemeral(
+            f"❌ I could not find {team_a} "
+            f"in the current Snallabot league export."
+        )
+
+    if not find_team(team_b):
+        return discord_ephemeral(
+            f"❌ I could not find {team_b} "
+            f"in the current Snallabot league export."
+        )
+
+    try:
+        team_a_assets = parse_trade_assets(
+            assets_a_text,
+            team_a
+        )
+
+        team_b_assets = parse_trade_assets(
+            assets_b_text,
+            team_b
+        )
+
+    except Exception as e:
+        return discord_ephemeral(
+            f"❌ Trade could not be processed:\n{str(e)[:1500]}"
+        )
+
+    mention_a = f"<@{owner_a_id}>"
+    mention_b = f"<@{owner_b_id}>"
+
+    analysis = analyze_trade({
+        "team_a": team_a,
+        "team_b": team_b,
+        "team_a_mention":
+            mention_a,
+        "team_b_mention":
+            mention_b,
+        "team_a_sends":
+            team_a_assets,
+        "team_b_sends":
+            team_b_assets
+    })
+
+    # Add slash-command audit information.
+    invoking_user = (
+        interaction.get("member", {})
+        .get("user", {})
+    )
+
+    invoking_id = (
+        invoking_user.get("id")
+        or interaction.get(
+            "user",
+            {}
+        ).get("id")
+    )
+
+    analysis["submission_source"] = (
+        "Discord /trade"
+    )
+
+    analysis["submitted_by_discord_id"] = (
+        invoking_id
+    )
+
+    save_trade_proposal(
+        analysis
+    )
+
+    discord_result = post_trade_to_discord(
+        analysis
+    )
+
+    if not discord_result.get("sent"):
+        return discord_ephemeral(
+            (
+                "⚠️ The trade was analyzed and saved, "
+                "but the #trade-approval post failed.\n"
+                f"{discord_result.get('error', 'Unknown error')[:1000]}"
+            )
+        )
+
+    review = analysis[
+        "trade_committee"
+    ]
+
+    return discord_ephemeral(
+        (
+            "✅ **Trade submitted successfully.**\n"
+            f"**{team_a} ↔ {team_b}**\n"
+            f"Trade ID: `{analysis['trade_id']}`\n"
+            f"{team_a} grade: "
+            f"**{analysis['team_a_grade']['grade']}**\n"
+            f"{team_b} grade: "
+            f"**{analysis['team_b_grade']['grade']}**\n"
+            f"🏛️ League Office Review: "
+            f"**{review['decision']}**\n"
+            "The full proposal was posted in trade approval."
+        )
+    )
+
+
+@app.route(
+    "/discord/interactions",
+    methods=["POST"]
+)
+def discord_interactions():
+    raw_body = request.get_data()
+
+    if not verify_discord_request(
+        raw_body
+    ):
+        return jsonify({
+            "error":
+                "invalid request signature"
+        }), 401
+
+    interaction = request.get_json(
+        silent=True
+    ) or {}
+
+    interaction_type = interaction.get(
+        "type"
+    )
+
+    # Discord endpoint validation / ping.
+    if interaction_type == 1:
+        return jsonify({
+            "type": 1
+        })
+
+    # Application command autocomplete.
+    if interaction_type == 4:
+        return handle_trade_autocomplete(
+            interaction
+        )
+
+    # Slash command.
+    if interaction_type == 2:
+        command_name = (
+            interaction
+            .get("data", {})
+            .get("name")
+        )
+
+        if command_name == "trade":
+            return handle_discord_trade(
+                interaction
+            )
+
+        return discord_ephemeral(
+            "❌ Unknown Project Madden command."
+        )
+
+    return jsonify({
+        "type": 4,
+        "data": {
+            "content": (
+                "Unsupported interaction."
+            ),
+            "flags": 64
+        }
+    })
+
+
+@app.route(
+    "/discord/register",
+    methods=["GET"]
+)
+def discord_register():
+    result = register_trade_slash_command()
+
+    status_code = (
+        200
+        if result.get("success")
+        else 400
+    )
+
+    return jsonify(
+        result
+    ), status_code
+
+
+@app.route(
+    "/discord/status",
+    methods=["GET"]
+)
+def discord_status():
+    return jsonify({
+        "discord_bot_configured":
+            discord_bot_configured(),
+        "application_id_configured":
+            bool(discord_application_id()),
+        "public_key_configured":
+            bool(discord_public_key()),
+        "bot_token_configured":
+            bool(discord_bot_token()),
+        "interactions_endpoint":
+            discord_interactions_url(),
+        "slash_command":
+            "/trade",
+        "trade_webhook_configured":
+            bool(
+                os.environ.get(
+                    "DISCORD_WEBHOOK_URL"
+                )
+            )
+    })
+
+
 # =========================================================
 # HOME / HEALTH
 # =========================================================
@@ -3062,7 +3730,12 @@ def home():
         ),
         "analyst_discord_webhook_configured": (
             analyst_webhook_configured()
-        )
+        ),
+        "discord_bot_configured": (
+            discord_bot_configured()
+        ),
+        "discord_slash_command": "/trade",
+        "discord_status": "/discord/status"
     })
 
 
@@ -4571,18 +5244,8 @@ def propose_trade():
         "team_b_sends": team_b_assets
     })
 
-    proposals = load_json_file(
-        "trade_proposals.json"
-    )
-
-    if not isinstance(proposals, list):
-        proposals = []
-
-    proposals.append(analysis)
-
-    save_json_file(
-        "trade_proposals.json",
-        proposals
+    save_trade_proposal(
+        analysis
     )
 
     discord_result = post_trade_to_discord(
