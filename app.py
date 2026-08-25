@@ -2142,6 +2142,19 @@ def analyst_webhook_configured():
     )
 
 
+def get_weekly_show_webhook():
+    return os.environ.get(
+        "WEEKLY_SHOW_DISCORD_WEBHOOK_URL",
+        ""
+    ).strip()
+
+
+def weekly_show_webhook_configured():
+    return bool(
+        get_weekly_show_webhook()
+    )
+
+
 
 
 def send_analyst_embed(
@@ -3252,6 +3265,549 @@ def analyst_post_key(
 
 
 
+
+# =========================================================
+# PROJECT MADDEN WEEKLY SHOW
+# =========================================================
+
+WEEKLY_SHOW_OPENERS = [
+    "Welcome to the Project Madden Weekly Show. We are breaking down the biggest games, the loudest performances, and the stories that matter.",
+    "This is the Project Madden Weekly Show, and there is no shortage of things to talk about after this week.",
+    "Another week is in the books, and now it is time to sort out who helped themselves, who hurt themselves, and what the league should be watching next.",
+    "The games are over, the numbers are in, and the Project Madden Weekly Show is live.",
+]
+
+WEEKLY_SHOW_CLOSERS = [
+    "That is the week. The next slate will tell us whether these storylines are real or temporary.",
+    "That wraps the Project Madden Weekly Show. Now the pressure shifts to next week.",
+    "The league gave us plenty to debate. We will see which teams back it up next week.",
+    "That is all for this edition. The standings and the film will keep talking for us.",
+]
+
+
+def load_weekly_show_history():
+    history = load_json_file(
+        WEEKLY_SHOW_HISTORY_FILE
+    )
+
+    if not isinstance(history, list):
+        history = []
+
+    return history
+
+
+def save_weekly_show_history(history):
+    save_json_file(
+        WEEKLY_SHOW_HISTORY_FILE,
+        history[-200:]
+    )
+
+
+def weekly_show_post_key(
+    season_type,
+    week_number
+):
+    return (
+        f"{season_type}:{week_number}"
+    )
+
+
+def build_weekly_show_summary(
+    season_type,
+    week_number
+):
+    game_reactions = build_week_game_reactions(
+        season_type,
+        week_number
+    )
+
+    player_reactions = build_week_player_reactions(
+        season_type,
+        week_number
+    )
+
+    rankings = build_power_rankings()
+
+    top_games = sorted(
+        game_reactions,
+        key=lambda item: (
+            1 if item.get("upset") else 0,
+            int(item.get("margin", 0) or 0)
+        ),
+        reverse=True
+    )[:3]
+
+    def player_score(item):
+        stats = item.get(
+            "stats",
+            {}
+        )
+
+        category = item.get(
+            "category",
+            ""
+        )
+
+        if category == "passing":
+            return (
+                int(stats.get("touchdowns", 0) or 0) * 120
+                + int(stats.get("yards", 0) or 0)
+                - int(stats.get("interceptions", 0) or 0) * 70
+            )
+
+        if category in [
+            "rushing",
+            "receiving"
+        ]:
+            return (
+                int(stats.get("touchdowns", 0) or 0) * 110
+                + int(stats.get("yards", 0) or 0)
+            )
+
+        if category == "defense":
+            return (
+                int(stats.get("sacks", 0) or 0) * 140
+                + int(stats.get("interceptions", 0) or 0) * 180
+                + int(stats.get("forced_fumbles", 0) or 0) * 120
+            )
+
+        return 0
+
+    top_players = sorted(
+        player_reactions,
+        key=player_score,
+        reverse=True
+    )[:5]
+
+    key = (
+        f"weekly-show-{season_type}-{week_number}"
+    )
+
+    opener = stable_choice(
+        WEEKLY_SHOW_OPENERS,
+        key + "-open"
+    )
+
+    closer = stable_choice(
+        WEEKLY_SHOW_CLOSERS,
+        key + "-close"
+    )
+
+    stephen_segment = (
+        build_stephen_a_parody_segment(
+            season_type,
+            week_number
+        )
+    )
+
+    pat_segment = (
+        build_pat_mcafee_parody_segment(
+            season_type,
+            week_number
+        )
+    )
+
+    return {
+        "season_type":
+            season_type,
+        "week":
+            week_number,
+        "opener":
+            opener,
+        "top_games":
+            top_games,
+        "top_players":
+            top_players,
+        "power_rankings":
+            rankings[:5],
+        "stephen_a_parody_segment":
+            stephen_segment[:2],
+        "pat_mcafee_parody_segment":
+            pat_segment[:2],
+        "closer":
+            closer
+    }
+
+
+def weekly_show_embed_fields(
+    show
+):
+    fields = []
+
+    top_games = show.get(
+        "top_games",
+        []
+    )
+
+    if top_games:
+        lines = []
+
+        for game in top_games:
+            game_line = (
+                game.get("game")
+                or (
+                    f"{game.get('winner')} "
+                    f"over {game.get('loser')}"
+                )
+            )
+
+            lines.append(
+                f"• {game_line}"
+            )
+
+        fields.append({
+            "name":
+                "🔥 Games of the Week",
+            "value":
+                "\n".join(lines),
+            "inline":
+                False
+        })
+
+    top_players = show.get(
+        "top_players",
+        []
+    )
+
+    if top_players:
+        lines = []
+
+        for player in top_players:
+            name = player.get(
+                "player",
+                "Player"
+            )
+
+            category = player.get(
+                "category",
+                ""
+            )
+
+            stats = player.get(
+                "stats",
+                {}
+            )
+
+            stat_parts = []
+
+            if category == "passing":
+                stat_parts = [
+                    f"{stats.get('yards', 0)} YDS",
+                    f"{stats.get('touchdowns', 0)} TD",
+                    f"{stats.get('interceptions', 0)} INT"
+                ]
+            elif category in [
+                "rushing",
+                "receiving"
+            ]:
+                stat_parts = [
+                    f"{stats.get('yards', 0)} YDS",
+                    f"{stats.get('touchdowns', 0)} TD"
+                ]
+            elif category == "defense":
+                stat_parts = [
+                    f"{stats.get('sacks', 0)} SACK",
+                    f"{stats.get('interceptions', 0)} INT",
+                    f"{stats.get('forced_fumbles', 0)} FF"
+                ]
+
+            lines.append(
+                f"• **{name}** — "
+                + ", ".join(stat_parts)
+            )
+
+        fields.append({
+            "name":
+                "⭐ Players of the Week",
+            "value":
+                "\n".join(lines),
+            "inline":
+                False
+        })
+
+    stephen_segment = show.get(
+        "stephen_a_parody_segment",
+        []
+    )
+
+    if stephen_segment:
+        lines = []
+
+        for item in stephen_segment[:2]:
+            headline = item.get(
+                "headline",
+                "Project Madden Debate"
+            )
+
+            take = item.get(
+                "take",
+                ""
+            )
+
+            lines.append(
+                f"**{headline}**\n{take}"
+            )
+
+        fields.append({
+            "name": (
+                "🎙️ Stephen A. Smith — "
+                "AI Parody Segment"
+            ),
+            "value": (
+                "\n\n".join(lines)
+                + "\n\n*Fictional AI parody — "
+                "not a real Stephen A. Smith statement.*"
+            ),
+            "inline": False
+        })
+
+    pat_segment = show.get(
+        "pat_mcafee_parody_segment",
+        []
+    )
+
+    if pat_segment:
+        lines = []
+
+        for item in pat_segment[:2]:
+            headline = item.get(
+                "headline",
+                "Project Madden Breakdown"
+            )
+
+            take = item.get(
+                "take",
+                ""
+            )
+
+            lines.append(
+                f"**{headline}**\n{take}"
+            )
+
+        fields.append({
+            "name": (
+                "🎙️ Pat McAfee — "
+                "AI Parody Segment"
+            ),
+            "value": (
+                "\n\n".join(lines)
+                + "\n\n*Fictional AI parody — "
+                "not a real Pat McAfee statement.*"
+            ),
+            "inline": False
+        })
+
+    rankings = show.get(
+        "power_rankings",
+        []
+    )
+
+    if rankings:
+        lines = []
+
+        for index, team in enumerate(
+            rankings,
+            start=1
+        ):
+            lines.append(
+                f"{index}. **{team.get('team')}** "
+                f"({team.get('wins', 0)}-"
+                f"{team.get('losses', 0)})"
+            )
+
+        fields.append({
+            "name":
+                "📈 Top 5 Power Rankings",
+            "value":
+                "\n".join(lines),
+            "inline":
+                False
+        })
+
+    return fields
+
+
+def send_weekly_show_embed(
+    title,
+    description,
+    fields=None
+):
+    webhook_url = get_weekly_show_webhook()
+
+    if not webhook_url:
+        return {
+            "sent": False,
+            "error": (
+                "WEEKLY_SHOW_DISCORD_WEBHOOK_URL "
+                "is not configured."
+            )
+        }
+
+    weekly_show_logo_url = (
+        "https://project-madden-analytics.onrender.com/"
+        "assets/weekly-show-logo.jpeg"
+    )
+
+    embed = {
+        "title": title,
+        "description": description,
+        "thumbnail": {
+            "url": weekly_show_logo_url
+        },
+        "image": {
+            "url": weekly_show_logo_url
+        },
+        "footer": {
+            "text":
+                "Project Madden Weekly Show"
+        }
+    }
+
+    if fields:
+        embed["fields"] = fields
+
+    payload = {
+        "username":
+            "Project Madden Weekly Show",
+        "avatar_url":
+            weekly_show_logo_url,
+        "embeds": [embed]
+    }
+
+    try:
+        response = requests.post(
+            webhook_url,
+            json=payload,
+            timeout=15
+        )
+
+        if response.status_code not in [200, 204]:
+            return {
+                "sent": False,
+                "error": (
+                    f"Discord returned "
+                    f"{response.status_code}: "
+                    f"{response.text[:500]}"
+                )
+            }
+
+        return {"sent": True}
+
+    except Exception as e:
+        return {
+            "sent": False,
+            "error": str(e)
+        }
+
+
+def send_weekly_show_to_discord(
+    season_type,
+    week_number
+):
+    if not weekly_show_webhook_configured():
+        return {
+            "success": False,
+            "error": (
+                "WEEKLY_SHOW_DISCORD_WEBHOOK_URL "
+                "is not configured."
+            )
+        }
+
+    show = build_weekly_show_summary(
+        season_type,
+        week_number
+    )
+
+    history = load_weekly_show_history()
+    key = weekly_show_post_key(
+        season_type,
+        week_number
+    )
+
+    if key in history:
+        return {
+            "success": True,
+            "skipped": True,
+            "reason":
+                "weekly_show_already_posted"
+        }
+
+    description = (
+        f"{show['opener']}\n\n"
+        "🎙️ **Marcus Hayes** leads the weekly breakdown.\n"
+        "🎙️ **Stephen A. Smith — AI Parody** joins for a special debate segment.\n"
+        "🎙️ **Pat McAfee — AI Parody** joins for an energetic reaction segment.\n\n"
+        f"**Marcus Hayes closes:** {show['closer']}\n\n"
+        "*Stephen A. Smith and Pat McAfee content in this show is fictional AI parody "
+        "and not real statements from either person.*"
+    )
+
+    result = send_weekly_show_embed(
+        (
+            f"📺 PROJECT MADDEN WEEKLY SHOW • "
+            f"{season_type.upper()} WEEK {week_number}"
+        ),
+        description,
+        weekly_show_embed_fields(
+            show
+        )
+    )
+
+    if result.get("sent"):
+        history.append(key)
+        save_weekly_show_history(
+            history
+        )
+
+    return {
+        "success":
+            bool(result.get("sent")),
+        "sent":
+            bool(result.get("sent")),
+        "result":
+            result,
+        "show":
+            show
+    }
+
+
+@app.route(
+    "/analyst/weekly-show/"
+    "<season_type>/<int:week_number>"
+)
+def analyst_weekly_show(
+    season_type,
+    week_number
+):
+    return jsonify(
+        build_weekly_show_summary(
+            season_type,
+            week_number
+        )
+    )
+
+
+@app.route(
+    "/analyst/post-weekly-show/"
+    "<season_type>/<int:week_number>",
+    methods=["GET", "POST"]
+)
+def analyst_post_weekly_show(
+    season_type,
+    week_number
+):
+    result = send_weekly_show_to_discord(
+        season_type,
+        week_number
+    )
+
+    return jsonify(result), (
+        200
+        if result.get("success")
+        else 400
+    )
+
+
 # =========================================================
 # STEPHEN A. SMITH - AI PARODY SPECIAL SEGMENT
 # =========================================================
@@ -3683,6 +4239,170 @@ def analyst_post_stephen_a(
     )
 
 
+
+# =========================================================
+# PAT MCAFEE - AI PARODY SPECIAL SEGMENT
+# =========================================================
+
+PAT_MCAFEE_PARODY_OPENERS = [
+    "Alright, this is the kind of week that gives everybody something to argue about.",
+    "There is a lot happening around Project Madden right now, and this one deserves some extra attention.",
+    "This league just gave us another wild storyline to break down.",
+    "Now that is the kind of result that gets the whole room talking.",
+    "There is no shortage of energy around this one. Let us get into what actually happened.",
+]
+
+PAT_MCAFEE_PARODY_GAME_LINES = [
+    "{winner} came out of this looking like the team with the answers, while {loser} has some work to do before the next one.",
+    "{winner} made the bigger plays when it mattered, and that is what everybody is going to remember from this matchup.",
+    "The scoreboard says {winner}, but the bigger story is how much pressure this puts on {loser} going forward.",
+    "That result from {winner} is going to have people around the league looking at this team differently.",
+]
+
+PAT_MCAFEE_PARODY_PLAYER_LINES = [
+    "{player} was everywhere this week. That is the kind of performance that gets teammates and opponents talking.",
+    "{player} gave this team exactly the kind of impact you want from a difference-maker.",
+    "You cannot watch that performance from {player} and pretend it was ordinary. That was a major week.",
+    "{player} just gave the league another reason to pay attention heading into the next matchup.",
+]
+
+
+def build_pat_mcafee_parody_segment(
+    season_type,
+    week_number
+):
+    stories = []
+
+    game_reactions = build_week_game_reactions(
+        season_type,
+        week_number
+    )
+
+    player_reactions = build_week_player_reactions(
+        season_type,
+        week_number
+    )
+
+    if game_reactions:
+        top_game = sorted(
+            game_reactions,
+            key=lambda item: (
+                1 if item.get("upset") else 0,
+                int(item.get("margin", 0) or 0)
+            ),
+            reverse=True
+        )[0]
+
+        winner = top_game.get(
+            "winner",
+            "the winner"
+        )
+
+        loser = top_game.get(
+            "loser",
+            "the opponent"
+        )
+
+        source_key = str(
+            top_game.get(
+                "schedule_id",
+                top_game.get("game", "")
+            )
+        )
+
+        opener = stable_choice(
+            PAT_MCAFEE_PARODY_OPENERS,
+            f"pat-game-open-{season_type}-{week_number}-{source_key}"
+        )
+
+        body = stable_choice(
+            PAT_MCAFEE_PARODY_GAME_LINES,
+            f"pat-game-body-{season_type}-{week_number}-{source_key}"
+        ).format(
+            winner=winner,
+            loser=loser
+        )
+
+        stories.append({
+            "story_type": "game",
+            "headline": (
+                f"{winner} vs {loser}"
+            ),
+            "take": (
+                f"{opener} {body}"
+            )
+        })
+
+    if player_reactions:
+        def player_priority(item):
+            stats = item.get("stats", {})
+            category = item.get("category", "")
+
+            if category == "passing":
+                return (
+                    int(stats.get("touchdowns", 0) or 0) * 120
+                    + int(stats.get("yards", 0) or 0)
+                    - int(stats.get("interceptions", 0) or 0) * 50
+                )
+
+            if category in [
+                "rushing",
+                "receiving"
+            ]:
+                return (
+                    int(stats.get("touchdowns", 0) or 0) * 110
+                    + int(stats.get("yards", 0) or 0)
+                )
+
+            if category == "defense":
+                return (
+                    int(stats.get("sacks", 0) or 0) * 130
+                    + int(stats.get("interceptions", 0) or 0) * 160
+                    + int(stats.get("forced_fumbles", 0) or 0) * 100
+                )
+
+            return 0
+
+        top_player = sorted(
+            player_reactions,
+            key=player_priority,
+            reverse=True
+        )[0]
+
+        player = top_player.get(
+            "player",
+            "This player"
+        )
+
+        source_key = (
+            f"{player}-"
+            f"{top_player.get('category', '')}-"
+            f"{top_player.get('story_type', '')}"
+        )
+
+        opener = stable_choice(
+            PAT_MCAFEE_PARODY_OPENERS,
+            f"pat-player-open-{season_type}-{week_number}-{source_key}"
+        )
+
+        body = stable_choice(
+            PAT_MCAFEE_PARODY_PLAYER_LINES,
+            f"pat-player-body-{season_type}-{week_number}-{source_key}"
+        ).format(
+            player=player
+        )
+
+        stories.append({
+            "story_type": "player",
+            "headline": player,
+            "take": (
+                f"{opener} {body}"
+            )
+        })
+
+    return stories
+
+
 # =========================================================
 # MARCUS HAYES - STANDINGS / POWER RANKINGS / STORYLINES
 # =========================================================
@@ -3690,6 +4410,7 @@ def analyst_post_stephen_a(
 STANDINGS_STORY_HISTORY_FILE = "standings_story_posts.json"
 STEPHEN_A_PARODY_HISTORY_FILE = "stephen_a_parody_posts.json"
 MARCUS_TRADE_REACTION_HISTORY_FILE = "marcus_trade_reaction_posts.json"
+WEEKLY_SHOW_HISTORY_FILE = "weekly_show_posts.json"
 
 
 def standing_records():
@@ -4853,10 +5574,57 @@ def register_trade_slash_command():
         ]
     }
 
+    weekly_show_command = {
+        "name": "weeklyshow",
+        "description": "Post Weekly Show with Marcus + Stephen A. + Pat McAfee parody",
+        "options": [
+            {
+                "type": 3,
+                "name": "season_type",
+                "description": "pre or reg",
+                "required": True,
+                "choices": [
+                    {
+                        "name": "Preseason",
+                        "value": "pre"
+                    },
+                    {
+                        "name": "Regular Season",
+                        "value": "reg"
+                    }
+                ]
+            },
+            {
+                "type": 4,
+                "name": "week",
+                "description": "Week number",
+                "required": True,
+                "min_value": 1,
+                "max_value": 25
+            }
+        ]
+    }
+
+    test_weekly_show_command = {
+        "name": "testweeklyshow",
+        "description": "Send a Project Madden Weekly Show test post",
+        "options": [
+            {
+                "type": 3,
+                "name": "headline",
+                "description": "Optional test headline",
+                "required": False,
+                "max_length": 100
+            }
+        ]
+    }
+
     commands = [
         command,
         test_marcus_command,
-        test_stephen_command
+        test_stephen_command,
+        weekly_show_command,
+        test_weekly_show_command
     ]
 
     headers = {
@@ -5709,6 +6477,125 @@ def discord_interactions():
                 )[:1000]
             )
 
+        if command_name == "testweeklyshow":
+            options = discord_option_map(
+                interaction
+            )
+
+            headline = str(
+                options.get(
+                    "headline",
+                    "Project Madden Weekly Show Test"
+                )
+            ).strip()
+
+            if not headline:
+                headline = (
+                    "Project Madden Weekly Show Test"
+                )
+
+            result = send_weekly_show_embed(
+                "📺 PROJECT MADDEN WEEKLY SHOW • TEST",
+                (
+                    f"## {headline}\n"
+                    "🎙️ **Marcus Hayes** is at the desk.\n"
+                    "🎙️ **Stephen A. Smith — AI Parody** is ready for the debate segment.\n"
+                    "🎙️ **Pat McAfee — AI Parody** is ready for the reaction segment.\n\n"
+                    "*This is a test post from Discord. "
+                    "Stephen A. Smith and Pat McAfee content is fictional AI parody "
+                    "and not real statements from either person.*"
+                ),
+                [
+                    {
+                        "name": "🔥 Games of the Week",
+                        "value": "Test matchup card is working.",
+                        "inline": False
+                    },
+                    {
+                        "name": "⭐ Players of the Week",
+                        "value": "Test player segment is working.",
+                        "inline": False
+                    },
+                    {
+                        "name": "📈 Top 5 Power Rankings",
+                        "value": "Test rankings segment is working.",
+                        "inline": False
+                    }
+                ]
+            )
+
+            if result.get("sent"):
+                return discord_ephemeral(
+                    "✅ Weekly Show test sent to the dedicated Weekly Show channel."
+                )
+
+            return discord_ephemeral(
+                "❌ Weekly Show test failed: "
+                + str(
+                    result.get(
+                        "error",
+                        "Unknown error"
+                    )
+                )[:1000]
+            )
+
+        if command_name == "weeklyshow":
+            options = discord_option_map(
+                interaction
+            )
+
+            season_type = str(
+                options.get(
+                    "season_type",
+                    "reg"
+                )
+            ).strip().lower()
+
+            week_number = int(
+                options.get(
+                    "week",
+                    1
+                )
+            )
+
+            result = send_weekly_show_to_discord(
+                season_type,
+                week_number
+            )
+
+            if result.get(
+                "skipped"
+            ):
+                return discord_ephemeral(
+                    "ℹ️ That weekly show was already posted."
+                )
+
+            if result.get(
+                "success"
+            ):
+                return discord_ephemeral(
+                    (
+                        "✅ Project Madden Weekly Show posted "
+                        f"for {season_type.upper()} Week {week_number}."
+                    )
+                )
+
+            return discord_ephemeral(
+                "❌ Weekly Show failed: "
+                + str(
+                    result.get(
+                        "error",
+                        result.get(
+                            "result",
+                            {}
+                        ).get(
+                            "error",
+                            "Unknown error"
+                        )
+                    )
+                )[:1000]
+            )
+
         if command_name == "teststephena":
             options = discord_option_map(
                 interaction
@@ -5812,8 +6699,16 @@ def discord_status():
             "/trade",
         "test_commands": [
             "/testmarcus",
-            "/teststephena"
+            "/teststephena",
+            "/testweeklyshow"
         ],
+        "weekly_show_command":
+            "/weeklyshow",
+        "weekly_show_discord_webhook_configured": (
+            weekly_show_webhook_configured()
+        ),
+        "weekly_show_destination":
+            "Dedicated Weekly Show channel",
         "trade_webhook_configured":
             bool(
                 os.environ.get(
@@ -5857,6 +6752,18 @@ def stephen_a_smith_parody_avatar():
         Path(__file__).resolve().parent
         / "stephen_a_smith.png",
         mimetype="image/png"
+    )
+
+
+@app.route(
+    "/assets/weekly-show-logo.jpeg",
+    methods=["GET"]
+)
+def weekly_show_logo():
+    return send_file(
+        Path(__file__).resolve().parent
+        / "weekly_show_logo.jpeg",
+        mimetype="image/jpeg"
     )
 
 
