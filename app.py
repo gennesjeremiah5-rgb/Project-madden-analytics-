@@ -78,37 +78,24 @@ def classify_game_story(game, team_map):
 
     result = {
         "schedule_id": game.get("scheduleId"),
-
-        "away_team": away.get(
-            "name",
-            "Unknown"
-        ),
-
-        "home_team": home.get(
-            "name",
-            "Unknown"
-        ),
-
+        "away_team": away.get("name", "Unknown"),
+        "home_team": home.get("name", "Unknown"),
         "away_abbr": away.get("abbr"),
         "home_abbr": home.get("abbr"),
-
         "away_score": away_score,
         "home_score": home_score,
-
         "away_overall": away_ovr,
         "home_overall": home_ovr,
-
         "away_user": away.get("user", ""),
         "home_user": home.get("user", ""),
-
         "stories": []
     }
 
     stories = result["stories"]
 
-    # =====================================================
+    # -----------------------------------------------------
     # PREGAME
-    # =====================================================
+    # -----------------------------------------------------
 
     if home_score == 0 and away_score == 0:
 
@@ -150,17 +137,16 @@ def classify_game_story(game, team_map):
             stories.append({
                 "type": "user_game",
                 "severity": "medium",
-                "headline": "User-controlled team involved"
+                "headline": "User-controlled matchup"
             })
 
         return result
 
-    # =====================================================
+    # -----------------------------------------------------
     # POSTGAME
-    # =====================================================
+    # -----------------------------------------------------
 
     margin = abs(home_score - away_score)
-
     result["margin"] = margin
 
     if home_score > away_score:
@@ -186,22 +172,13 @@ def classify_game_story(game, team_map):
 
         return result
 
-    result["winner"] = winner.get(
-        "name",
-        "Unknown"
-    )
-
-    result["loser"] = loser.get(
-        "name",
-        "Unknown"
-    )
-
+    result["winner"] = winner.get("name", "Unknown")
+    result["loser"] = loser.get("name", "Unknown")
     result["winner_location"] = winner_location
 
     winner_ovr = winner.get("overall")
     loser_ovr = loser.get("overall")
 
-    # Blowout
     if margin >= 30:
         stories.append({
             "type": "embarrassing_blowout",
@@ -230,7 +207,6 @@ def classify_game_story(game, team_map):
             "headline": "One-score game"
         })
 
-    # Road victory
     if winner_location == "away":
         stories.append({
             "type": "road_win",
@@ -238,7 +214,6 @@ def classify_game_story(game, team_map):
             "headline": "Road victory"
         })
 
-    # Upset
     if (
         winner_ovr is not None
         and loser_ovr is not None
@@ -248,10 +223,8 @@ def classify_game_story(game, team_map):
 
         if difference >= 8:
             severity = "critical"
-
         elif difference >= 5:
             severity = "high"
-
         else:
             severity = "medium"
 
@@ -262,7 +235,6 @@ def classify_game_story(game, team_map):
             "overall_difference": difference
         })
 
-    # Favorite got embarrassed
     if (
         winner_ovr is not None
         and loser_ovr is not None
@@ -275,7 +247,6 @@ def classify_game_story(game, team_map):
             "headline": "Favorite failed to deliver"
         })
 
-    # Shutout
     if loser_score == 0:
         stories.append({
             "type": "shutout",
@@ -287,7 +258,7 @@ def classify_game_story(game, team_map):
 
 
 # =========================================================
-# ANALYST REACTION GENERATOR
+# HUMAN-STYLE ANALYST REACTIONS
 # =========================================================
 
 def generate_reaction(game_data, story):
@@ -315,16 +286,20 @@ def generate_reaction(game_data, story):
 
         choices = [
             (
-                f"I'm looking at {favorite} against {underdog}, "
-                f"and there is a serious talent gap here. "
-                f"If {favorite} doesn't handle business, "
-                f"we are going to have some questions."
+                f"{favorite} should win this game. "
+                f"They've got the better roster, they've got the talent edge, "
+                f"and if they struggle with {underdog}, we're going to have "
+                f"a very different conversation afterward."
             ),
-
             (
-                f"{favorite} has the better roster on paper. "
-                f"No excuses. This is the type of matchup "
-                f"they are supposed to control."
+                f"I look at this matchup and I see one team with a clear advantage. "
+                f"{favorite} has more talent on paper. No excuses here. "
+                f"Go out there and handle your business."
+            ),
+            (
+                f"This is one of those games where {favorite} cannot afford "
+                f"to play around. You're supposed to be the better team. "
+                f"Now go prove it."
             )
         ]
 
@@ -334,45 +309,92 @@ def generate_reaction(game_data, story):
 
         if away_ovr > home_ovr:
             favorite = away
+            underdog = home
         else:
             favorite = home
+            underdog = away
 
-        return (
-            f"I've got my eyes on {favorite}. "
-            f"They have the roster advantage, so now "
-            f"it's time to prove that rating actually means something."
-        )
+        choices = [
+            (
+                f"I lean {favorite} here. They've got the roster edge, "
+                f"but I still want to see them earn it. {underdog} isn't "
+                f"just going to hand them this game."
+            ),
+            (
+                f"{favorite} has the advantage on paper, but that only means "
+                f"something if they show it once the game starts."
+            ),
+            (
+                f"This feels like a game {favorite} should control, "
+                f"but if they come out sloppy, {underdog} can absolutely make them pay."
+            )
+        ]
+
+        return random.choice(choices)
 
     if story_type == "even_matchup":
 
-        return (
-            f"This is about as even as it gets. "
-            f"{away} and {home} are evenly matched on paper, "
-            f"so execution is going to decide this one."
-        )
+        choices = [
+            (
+                f"I really don't see much separating {away} and {home}. "
+                f"This one is going to come down to who protects the football "
+                f"and who executes late."
+            ),
+            (
+                f"This is a true toss-up. The ratings are basically even, "
+                f"so I'm not giving either team an easy edge."
+            ),
+            (
+                f"If you like close games, this is one to watch. "
+                f"{away} and {home} are about as evenly matched as it gets."
+            )
+        ]
+
+        return random.choice(choices)
 
     if story_type == "user_game":
 
-        user_team = None
-
         if game_data.get("away_user"):
             user_team = away
-
-        if game_data.get("home_user"):
+            opponent = home
+        else:
             user_team = home
+            opponent = away
 
-        return (
-            f"This is a matchup I'm watching closely. "
-            f"{user_team} is user-controlled, so the pressure is on "
-            f"to outperform what the roster ratings say on paper."
-        )
+        choices = [
+            (
+                f"I'm watching {user_team} closely here. "
+                f"There's a live user on the sticks, so I'm not just staring "
+                f"at roster ratings. Execution can change everything."
+            ),
+            (
+                f"{user_team} makes this matchup interesting because somebody "
+                f"is actually controlling that team. Against {opponent}, "
+                f"that can completely change how this game plays out."
+            ),
+            (
+                f"Don't get caught staring at the ratings. "
+                f"{user_team} has somebody on the sticks, and that makes "
+                f"this matchup a lot more interesting than it looks on paper."
+            )
+        ]
+
+        return random.choice(choices)
 
     if story_type == "game_of_the_week":
 
-        return (
-            f"This is the Game of the Week for a reason. "
-            f"{away} versus {home} has my attention."
-        )
+        choices = [
+            (
+                f"This is the one I'm circling. {away} against {home} "
+                f"has the kind of matchup that can tell us a lot about both teams."
+            ),
+            (
+                f"If you're only watching one game this week, "
+                f"{away} versus {home} deserves your attention."
+            )
+        ]
+
+        return random.choice(choices)
 
     # -----------------------------------------------------
     # POSTGAME NEGATIVE
@@ -384,93 +406,155 @@ def generate_reaction(game_data, story):
         winner = game_data.get("winner")
         margin = game_data.get("margin")
 
-        return (
-            f"That was embarrassing. {loser} didn't just lose "
-            f"to {winner} — they got beat by {margin}. "
-            f"You cannot put that kind of performance on the field "
-            f"and pretend everything is fine."
-        )
+        choices = [
+            (
+                f"No. Absolutely not. {loser} just lost by {margin} points. "
+                f"That's not one bad bounce or one mistake. That's a complete "
+                f"breakdown from start to finish."
+            ),
+            (
+                f"{loser} got embarrassed. There's really no softer way to say it. "
+                f"{winner} controlled that game, and by the end it looked "
+                f"like one team belonged and the other one didn't."
+            ),
+            (
+                f"You can lose a football game. What you cannot do is get "
+                f"run out of the building like that. {loser} has a lot to answer for."
+            )
+        ]
+
+        return random.choice(choices)
 
     if story_type == "blowout":
 
         loser = game_data.get("loser")
         winner = game_data.get("winner")
 
-        return (
-            f"{loser} has some explaining to do. "
-            f"{winner} controlled this game, and this was not "
-            f"the kind of performance you can just brush aside."
-        )
+        choices = [
+            (
+                f"{loser} got handled. This wasn't one or two plays going wrong. "
+                f"{winner} was simply better for most of that game."
+            ),
+            (
+                f"I expected more from {loser}. That was a one-sided performance, "
+                f"and they've got to own it."
+            )
+        ]
+
+        return random.choice(choices)
 
     if story_type == "favorite_disappointment":
 
         loser = game_data.get("loser")
 
-        return (
-            f"This is exactly why ratings don't win football games. "
-            f"{loser} came in with the talent advantage and still "
-            f"failed to deliver. That's unacceptable."
-        )
+        choices = [
+            (
+                f"This is exactly the kind of loss that gets people talking. "
+                f"{loser} came in with the talent advantage and still couldn't get it done."
+            ),
+            (
+                f"I don't want to hear about ratings after that. "
+                f"{loser} was supposed to be the better team, and they didn't look like it."
+            ),
+            (
+                f"That's a disappointing loss for {loser}. "
+                f"When you have the better roster, expectations come with it."
+            )
+        ]
+
+        return random.choice(choices)
 
     if story_type == "upset":
 
         winner = game_data.get("winner")
         loser = game_data.get("loser")
 
-        return (
-            f"Now THIS got my attention. {winner} just took down "
-            f"a more talented {loser} team on paper. "
-            f"That's a statement win."
-        )
+        choices = [
+            (
+                f"Now that's a statement. {winner} just beat a team "
+                f"that was supposed to be better on paper."
+            ),
+            (
+                f"I love this kind of result. Everybody looked at the ratings, "
+                f"everybody leaned {loser}, and {winner} went out there and took the game."
+            ),
+            (
+                f"{winner} just flipped the script. That's the kind of upset "
+                f"that gets the whole league's attention."
+            )
+        ]
+
+        return random.choice(choices)
 
     if story_type == "shutout":
 
         loser = game_data.get("loser")
 
-        return (
-            f"Zero points? ZERO? {loser} has to go back to the drawing "
-            f"board because an offense cannot show up and give you nothing."
-        )
+        choices = [
+            (
+                f"Zero points is unacceptable. I don't care how good the defense was. "
+                f"{loser} has to find something offensively."
+            ),
+            (
+                f"You cannot walk off the field with a zero on the scoreboard "
+                f"and act like it was just one of those days. Something failed."
+            )
+        ]
+
+        return random.choice(choices)
 
     # -----------------------------------------------------
-    # POSTGAME POSITIVE / NEUTRAL
+    # POSTGAME POSITIVE / CLOSE
     # -----------------------------------------------------
 
     if story_type == "nail_biter":
 
         winner = game_data.get("winner")
 
-        return (
-            f"That one came down to the wire. "
-            f"{winner} found a way to survive when the pressure was highest."
-        )
+        choices = [
+            (
+                f"That was a fight. {winner} had to earn every bit of that win."
+            ),
+            (
+                f"That's the kind of close game that tells you something. "
+                f"{winner} found a way when things got tight."
+            )
+        ]
+
+        return random.choice(choices)
 
     if story_type == "close_game":
 
         winner = game_data.get("winner")
 
         return (
-            f"It wasn't easy, but {winner} got the job done "
-            f"in a one-score game."
+            f"It wasn't pretty, but {winner} did enough to finish the job."
         )
 
     if story_type == "road_win":
 
         winner = game_data.get("winner")
 
-        return (
-            f"Going on the road and getting a win matters. "
-            f"{winner} deserves credit for handling business away from home."
-        )
+        choices = [
+            (
+                f"Winning on the road matters. {winner} went into somebody else's place "
+                f"and handled business."
+            ),
+            (
+                f"I give {winner} credit for this one. Road wins are never automatic."
+            )
+        ]
+
+        return random.choice(choices)
 
     return (
-        f"{away} versus {home} is one of the stories "
-        f"to watch around Project Madden."
+        f"{away} versus {home} is one of the matchups "
+        f"worth watching around Project Madden."
     )
 
 
 # =========================================================
-# HOME
+# HOME / HEALTH
 # =========================================================
 
 @app.route("/")
@@ -517,14 +601,10 @@ def snallabot_receiver(subpath):
 
     print("PROJECT MADDEN EXPORT:", subpath)
 
-    # League teams
     if parts[-1] == "leagueteams":
 
         with open(
-            os.path.join(
-                DATA_DIR,
-                "leagueteams.json"
-            ),
+            os.path.join(DATA_DIR, "leagueteams.json"),
             "w"
         ) as f:
             json.dump(data, f, indent=2)
@@ -534,14 +614,10 @@ def snallabot_receiver(subpath):
             "type": "leagueteams"
         }), 200
 
-    # Standings
     if parts[-1] == "standings":
 
         with open(
-            os.path.join(
-                DATA_DIR,
-                "standings.json"
-            ),
+            os.path.join(DATA_DIR, "standings.json"),
             "w"
         ) as f:
             json.dump(data, f, indent=2)
@@ -551,14 +627,10 @@ def snallabot_receiver(subpath):
             "type": "standings"
         }), 200
 
-    # Extra
     if parts[-1] == "extra":
 
         with open(
-            os.path.join(
-                DATA_DIR,
-                "extra.json"
-            ),
+            os.path.join(DATA_DIR, "extra.json"),
             "w"
         ) as f:
             json.dump(data, f, indent=2)
@@ -568,7 +640,6 @@ def snallabot_receiver(subpath):
             "type": "extra"
         }), 200
 
-    # Free agents
     if (
         "freeagents" in parts
         and parts[-1] == "roster"
@@ -588,7 +659,6 @@ def snallabot_receiver(subpath):
             "type": "freeagents"
         }), 200
 
-    # Team rosters
     if (
         "team" in parts
         and parts[-1] == "roster"
@@ -612,7 +682,6 @@ def snallabot_receiver(subpath):
             "team_id": team_id
         }), 200
 
-    # Weekly stats/schedules
     if "week" in parts:
 
         try:
@@ -670,56 +739,6 @@ def snallabot_receiver(subpath):
         "type": "unknown",
         "path": subpath
     }), 200
-
-
-# =========================================================
-# STORIES
-# =========================================================
-
-@app.route(
-    "/analytics/stories/<season_type>/<week_number>"
-)
-def weekly_stories(
-    season_type,
-    week_number
-):
-
-    filename = get_schedule_file(
-        season_type,
-        week_number
-    )
-
-    if not os.path.exists(filename):
-        return jsonify({
-            "error": "Schedule data not found"
-        }), 404
-
-    with open(filename, "r") as f:
-        schedule_data = json.load(f)
-
-    team_map = get_team_map()
-
-    games = schedule_data.get(
-        "gameScheduleInfoList",
-        []
-    )
-
-    output = []
-
-    for game in games:
-        output.append(
-            classify_game_story(
-                game,
-                team_map
-            )
-        )
-
-    return jsonify({
-        "league": "Project Madden",
-        "season_type": season_type,
-        "week": week_number,
-        "games": output
-    })
 
 
 # =========================================================
@@ -790,7 +809,7 @@ def analyst_reactions(
 
     return jsonify({
         "analyst":
-            "Project Madden Analyst",
+            "Project Madden First Take",
 
         "note":
             "Generated fictional league commentary",
@@ -810,7 +829,7 @@ def analyst_reactions(
 
 
 # =========================================================
-# DISCOHOOK / DISCORD EMBED PREVIEW
+# DISCORD / DISCOHOOK EMBED
 # =========================================================
 
 @app.route(
@@ -850,9 +869,6 @@ def analyst_embed(
             team_map
         )
 
-        if not game_data["stories"]:
-            continue
-
         for story in game_data["stories"]:
 
             reaction = generate_reaction(
@@ -873,10 +889,9 @@ def analyst_embed(
                     False
             })
 
-    # Discord allows max 25 embed fields
     fields = fields[:25]
 
-    embed = {
+    return jsonify({
         "embeds": [
             {
                 "title":
@@ -884,7 +899,7 @@ def analyst_embed(
 
                 "description":
                     (
-                        f"Analyst reactions for "
+                        f"Project Madden First Take reactions • "
                         f"{season_type.upper()} Week {week_number}"
                     ),
 
@@ -893,13 +908,11 @@ def analyst_embed(
 
                 "footer": {
                     "text":
-                        "Project Madden • Fictional Analyst Commentary"
+                        "Project Madden • Around The League"
                 }
             }
         ]
-    }
-
-    return jsonify(embed)
+    })
 
 
 # =========================================================
@@ -954,9 +967,7 @@ def weekly_matchups(
                     "name",
                     "Unknown"
                 ),
-                "overall": away.get(
-                    "overall"
-                ),
+                "overall": away.get("overall"),
                 "score": game.get(
                     "awayScore",
                     0
@@ -968,17 +979,14 @@ def weekly_matchups(
                     "name",
                     "Unknown"
                 ),
-                "overall": home.get(
-                    "overall"
-                ),
+                "overall": home.get("overall"),
                 "score": game.get(
                     "homeScore",
                     0
                 )
             },
 
-            "status":
-                game.get("status")
+            "status": game.get("status")
         })
 
     return jsonify({
