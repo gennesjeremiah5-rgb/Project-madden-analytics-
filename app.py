@@ -3284,9 +3284,10 @@ def register_trade_slash_command():
                 "type": 3,
                 "name": "team_a_assets",
                 "description": (
-                    "Players/picks separated by commas"
+                    "Select players from Team A or type picks"
                 ),
                 "required": True,
+                "autocomplete": True,
                 "max_length": 1000
             },
             {
@@ -3306,9 +3307,10 @@ def register_trade_slash_command():
                 "type": 3,
                 "name": "team_b_assets",
                 "description": (
-                    "Players/picks separated by commas"
+                    "Select players from Team B or type picks"
                 ),
                 "required": True,
+                "autocomplete": True,
                 "max_length": 1000
             }
         ]
@@ -3403,34 +3405,233 @@ def handle_trade_autocomplete(interaction):
             focused = option
             break
 
-    query = str(
-        (focused or {}).get(
+    if not focused:
+        return jsonify({
+            "type": 8,
+            "data": {
+                "choices": []
+            }
+        })
+
+    focused_name = focused.get(
+        "name",
+        ""
+    )
+
+    raw_value = str(
+        focused.get(
             "value",
             ""
         )
-    ).lower()
+    )
 
-    names = [
-        team["value"]
-        for team in DISCORD_TEAM_CHOICES
-    ]
+    # Team fields: show/filter all NFL teams.
+    if focused_name in [
+        "team_a",
+        "team_b"
+    ]:
+        query = raw_value.lower()
 
-    filtered = [
-        name
-        for name in names
-        if query in name.lower()
-    ][:25]
+        names = [
+            team["value"]
+            for team in DISCORD_TEAM_CHOICES
+        ]
+
+        filtered = [
+            name
+            for name in names
+            if query in name.lower()
+        ][:25]
+
+        return jsonify({
+            "type": 8,
+            "data": {
+                "choices": [
+                    {
+                        "name": name,
+                        "value": name
+                    }
+                    for name in filtered
+                ]
+            }
+        })
+
+    # Asset fields: use the already-selected team to load that
+    # team's Snallabot roster and display real player names.
+    if focused_name in [
+        "team_a_assets",
+        "team_b_assets"
+    ]:
+        option_map = {
+            option.get("name"):
+                option.get("value")
+            for option in options
+        }
+
+        team_field = (
+            "team_a"
+            if focused_name
+            == "team_a_assets"
+            else "team_b"
+        )
+
+        team_name = str(
+            option_map.get(
+                team_field,
+                ""
+            )
+        ).strip()
+
+        if not team_name:
+            return jsonify({
+                "type": 8,
+                "data": {
+                    "choices": [
+                        {
+                            "name":
+                                "Select the team first",
+                            "value":
+                                raw_value[:100]
+                        }
+                    ]
+                }
+            })
+
+        # Allow multiple assets in one field.
+        # Example:
+        # Lamar Jackson, Zay
+        # keeps "Lamar Jackson" and searches "Zay".
+        pieces = raw_value.split(",")
+
+        already_selected = [
+            piece.strip()
+            for piece in pieces[:-1]
+            if piece.strip()
+        ]
+
+        current_query = (
+            pieces[-1].strip().lower()
+            if pieces
+            else ""
+        )
+
+        try:
+            team, players = build_roster_index(
+                team_name
+            )
+        except Exception:
+            return jsonify({
+                "type": 8,
+                "data": {
+                    "choices": [
+                        {
+                            "name":
+                                "Roster unavailable — run Snallabot roster export",
+                            "value":
+                                raw_value[:100]
+                        }
+                    ]
+                }
+            })
+
+        selected_lower = {
+            name.lower()
+            for name in already_selected
+        }
+
+        matches = []
+
+        for player in players:
+            player_name = str(
+                player.get(
+                    "name",
+                    ""
+                )
+            ).strip()
+
+            if not player_name:
+                continue
+
+            if (
+                player_name.lower()
+                in selected_lower
+            ):
+                continue
+
+            if (
+                current_query
+                and current_query
+                not in player_name.lower()
+                and current_query
+                not in str(
+                    player.get(
+                        "position",
+                        ""
+                    )
+                ).lower()
+            ):
+                continue
+
+            matches.append(player)
+
+            if len(matches) >= 25:
+                break
+
+        choices = []
+
+        for player in matches:
+            player_name = player[
+                "name"
+            ]
+
+            position = (
+                player.get("position")
+                or "PLAYER"
+            )
+
+            overall = player.get(
+                "overall"
+            )
+
+            label = (
+                f"{position} • "
+                f"{player_name}"
+            )
+
+            if overall is not None:
+                label += (
+                    f" • {overall} OVR"
+                )
+
+            combined = (
+                already_selected
+                + [player_name]
+            )
+
+            value = ", ".join(
+                combined
+            )
+
+            # Discord autocomplete choice values are limited.
+            if len(value) > 100:
+                value = player_name
+
+            choices.append({
+                "name": label[:100],
+                "value": value[:100]
+            })
+
+        return jsonify({
+            "type": 8,
+            "data": {
+                "choices": choices
+            }
+        })
 
     return jsonify({
         "type": 8,
         "data": {
-            "choices": [
-                {
-                    "name": name,
-                    "value": name
-                }
-                for name in filtered
-            ]
+            "choices": []
         }
     })
 
