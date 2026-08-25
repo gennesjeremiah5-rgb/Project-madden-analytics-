@@ -7630,123 +7630,34 @@ def discord_interactions():
             )
 
         if command_name == "testweeklyshow":
-            options = discord_option_map(
-                interaction
+            worker = threading.Thread(
+                target=process_test_weekly_show_background,
+                args=(interaction,),
+                daemon=True
             )
+            worker.start()
 
-            headline = str(
-                options.get(
-                    "headline",
-                    "Project Madden Weekly Show Test"
-                )
-            ).strip()
-
-            if not headline:
-                headline = (
-                    "Project Madden Weekly Show Test"
-                )
-
-            result = send_weekly_show_embed(
-                "📺 PROJECT MADDEN WEEKLY SHOW • TEST",
-                (
-                    f"## {headline}\n"
-                    "🎙️ **Marcus Hayes** is at the desk.\n"
-                    "🎙️ **Stephen A. Smith — AI Parody** is ready for the debate segment.\n"
-                    "🎙️ **Pat McAfee — AI Parody** is ready for the reaction segment.\n\n"
-                    "*This is a test post from Discord. "
-                    "Stephen A. Smith and Pat McAfee content is fictional AI parody "
-                    "and not real statements from either person.*"
-                ),
-                [
-                    {
-                        "name": "🔥 Games of the Week",
-                        "value": "Test matchup card is working.",
-                        "inline": False
-                    },
-                    {
-                        "name": "⭐ Players of the Week",
-                        "value": "Test player segment is working.",
-                        "inline": False
-                    },
-                    {
-                        "name": "📈 Top 5 Power Rankings",
-                        "value": "Test rankings segment is working.",
-                        "inline": False
-                    }
-                ]
-            )
-
-            if result.get("sent"):
-                return discord_ephemeral(
-                    "✅ Weekly Show test sent to the dedicated Weekly Show channel."
-                )
-
-            return discord_ephemeral(
-                "❌ Weekly Show test failed: "
-                + str(
-                    result.get(
-                        "error",
-                        "Unknown error"
-                    )
-                )[:1000]
-            )
+            return jsonify({
+                "type": 5,
+                "data": {
+                    "flags": 64
+                }
+            })
 
         if command_name == "weeklyshow":
-            options = discord_option_map(
-                interaction
+            worker = threading.Thread(
+                target=process_weekly_show_background,
+                args=(interaction,),
+                daemon=True
             )
+            worker.start()
 
-            season_type = str(
-                options.get(
-                    "season_type",
-                    "reg"
-                )
-            ).strip().lower()
-
-            week_number = int(
-                options.get(
-                    "week",
-                    1
-                )
-            )
-
-            result = send_weekly_show_to_discord(
-                season_type,
-                week_number
-            )
-
-            if result.get(
-                "skipped"
-            ):
-                return discord_ephemeral(
-                    "ℹ️ That weekly show was already posted."
-                )
-
-            if result.get(
-                "success"
-            ):
-                return discord_ephemeral(
-                    (
-                        "✅ Project Madden Weekly Show posted "
-                        f"for {season_type.upper()} Week {week_number}."
-                    )
-                )
-
-            return discord_ephemeral(
-                "❌ Weekly Show failed: "
-                + str(
-                    result.get(
-                        "error",
-                        result.get(
-                            "result",
-                            {}
-                        ).get(
-                            "error",
-                            "Unknown error"
-                        )
-                    )
-                )[:1000]
-            )
+            return jsonify({
+                "type": 5,
+                "data": {
+                    "flags": 64
+                }
+            })
 
         if command_name == "teststephena":
             options = discord_option_map(
