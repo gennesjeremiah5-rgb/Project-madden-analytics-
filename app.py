@@ -145,30 +145,65 @@ def snallabot_receiver(subpath):
         }), 200
 
     #
-    # WEEKLY STATS
+    # WEEKLY DATA
     #
-    if "week" in parts or "weekly" in parts:
+    if "week" in parts:
 
-        safe_path = subpath.replace("/", "_")
+        try:
+            week_index = parts.index("week")
 
-        save_json(
-            f"weekly_{safe_path}.json",
-            data
+            season_type = parts[week_index + 1]
+            week_number = parts[week_index + 2]
+            stat_type = parts[week_index + 3]
+
+        except Exception:
+            season_type = "unknown"
+            week_number = "unknown"
+            stat_type = "unknown"
+
+        weekly_dir = os.path.join(
+            DATA_DIR,
+            "weekly",
+            season_type,
+            f"week_{week_number}"
         )
 
+        os.makedirs(
+            weekly_dir,
+            exist_ok=True
+        )
+
+        filename = os.path.join(
+            weekly_dir,
+            f"{stat_type}.json"
+        )
+
+        with open(filename, "w") as f:
+            json.dump(
+                data,
+                f,
+                indent=2
+            )
+
         update_latest(
-            safe_path,
+            f"{season_type}_week_{week_number}_{stat_type}",
             subpath,
             data
         )
 
-        print("Saved: WEEKLY DATA")
-        print("Path:", subpath)
+        print(
+            f"Saved weekly data | "
+            f"{season_type.upper()} "
+            f"Week {week_number} | "
+            f"{stat_type}"
+        )
 
         return jsonify({
             "success": True,
             "type": "weekly",
-            "path": subpath
+            "season_type": season_type,
+            "week": week_number,
+            "stat_type": stat_type
         }), 200
 
     #
@@ -228,8 +263,10 @@ def analytics_status():
 
     files = []
 
-    if os.path.exists(DATA_DIR):
-        files = os.listdir(DATA_DIR)
+    for root, dirs, filenames in os.walk(DATA_DIR):
+        for filename in filenames:
+            full_path = os.path.join(root, filename)
+            files.append(full_path)
 
     return jsonify({
         "service": "Project Madden Analytics",
