@@ -23,8 +23,12 @@ def load_json_file(filename):
     if not os.path.exists(path):
         return None
 
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    except Exception:
+        return None
 
 
 def save_json_file(filename, data):
@@ -50,10 +54,64 @@ def stable_choice(options, key):
 
 
 # =========================================================
+# NFL LOGOS
+# =========================================================
+
+NFL_LOGO_CODES = {
+    "ARI": "ari",
+    "ATL": "atl",
+    "BAL": "bal",
+    "BUF": "buf",
+    "CAR": "car",
+    "CHI": "chi",
+    "CIN": "cin",
+    "CLE": "cle",
+    "DAL": "dal",
+    "DEN": "den",
+    "DET": "det",
+    "GB": "gb",
+    "HOU": "hou",
+    "IND": "ind",
+    "JAX": "jax",
+    "KC": "kc",
+    "LV": "lv",
+    "LAC": "lac",
+    "LAR": "lar",
+    "MIA": "mia",
+    "MIN": "min",
+    "NE": "ne",
+    "NO": "no",
+    "NYG": "nyg",
+    "NYJ": "nyj",
+    "PHI": "phi",
+    "PIT": "pit",
+    "SEA": "sea",
+    "SF": "sf",
+    "TB": "tb",
+    "TEN": "ten",
+    "WAS": "wsh",
+    "WSH": "wsh"
+}
+
+
+def get_logo_url(abbr):
+    code = NFL_LOGO_CODES.get(
+        str(abbr or "").upper(),
+        str(abbr or "").lower()
+    )
+
+    return (
+        "https://a.espncdn.com/i/teamlogos/"
+        f"nfl/500/{code}.png"
+    )
+
+
+# =========================================================
 # TEAM DATA
 # =========================================================
 
 def get_team_map():
+
     data = load_json_file(
         "leagueteams.json"
     )
@@ -68,20 +126,49 @@ def get_team_map():
         []
     ):
 
-        teams[str(team.get("teamId"))] = {
-            "teamId": team.get("teamId"),
-            "abbr": team.get("abbrName"),
-            "city": team.get("cityName"),
-            "name": team.get("displayName"),
-            "nickname": team.get("nickName"),
-            "overall": team.get("ovrRating"),
-            "user": team.get("userName", "")
+        abbr = team.get(
+            "abbrName"
+        )
+
+        teams[
+            str(team.get("teamId"))
+        ] = {
+
+            "teamId":
+                team.get("teamId"),
+
+            "abbr":
+                abbr,
+
+            "city":
+                team.get("cityName"),
+
+            "name":
+                team.get("displayName"),
+
+            "nickname":
+                team.get("nickName"),
+
+            "overall":
+                team.get("ovrRating"),
+
+            "user":
+                team.get(
+                    "userName",
+                    ""
+                ),
+
+            "logo":
+                get_logo_url(
+                    abbr
+                )
         }
 
     return teams
 
 
 def find_team(team_name):
+
     target = str(
         team_name
     ).strip().lower()
@@ -99,7 +186,9 @@ def find_team(team_name):
 
             if (
                 value
-                and str(value).strip().lower()
+                and str(value)
+                .strip()
+                .lower()
                 == target
             ):
                 return team
@@ -112,6 +201,7 @@ def find_team(team_name):
 # =========================================================
 
 def recursive_records(obj):
+
     records = []
 
     if isinstance(obj, list):
@@ -122,10 +212,14 @@ def recursive_records(obj):
                 item,
                 dict
             ):
-                records.append(item)
+                records.append(
+                    item
+                )
 
             records.extend(
-                recursive_records(item)
+                recursive_records(
+                    item
+                )
             )
 
     elif isinstance(obj, dict):
@@ -137,18 +231,23 @@ def recursive_records(obj):
                 (list, dict)
             ):
                 records.extend(
-                    recursive_records(value)
+                    recursive_records(
+                        value
+                    )
                 )
 
     return records
 
 
 def first_value(record, keys):
+
     for key in keys:
 
         if key in record:
 
-            value = record.get(key)
+            value = record.get(
+                key
+            )
 
             if value is not None:
                 return value
@@ -157,6 +256,7 @@ def first_value(record, keys):
 
 
 def detect_player_name(record):
+
     full_name = first_value(
         record,
         [
@@ -170,6 +270,7 @@ def detect_player_name(record):
     )
 
     if full_name:
+
         return str(
             full_name
         ).strip()
@@ -193,6 +294,7 @@ def detect_player_name(record):
     )
 
     if first and last:
+
         return (
             f"{first} {last}"
         ).strip()
@@ -201,6 +303,7 @@ def detect_player_name(record):
 
 
 def detect_position(record):
+
     value = first_value(
         record,
         [
@@ -220,20 +323,14 @@ def detect_position(record):
     ).upper()
 
 
-# =========================================================
-# SNALLABOT OVR DETECTOR
-# =========================================================
-
 def detect_overall(record):
+
     value = first_value(
         record,
         [
-            # Actual Snallabot Madden fields
             "playerBestOvr",
             "playerSchemeOvr",
             "teamSchemeOvr",
-
-            # Fallbacks
             "ovrRating",
             "overallRating",
             "overall",
@@ -250,13 +347,19 @@ def detect_overall(record):
     )
 
     try:
-        return int(value)
+        return int(
+            value
+        )
 
-    except (TypeError, ValueError):
+    except (
+        TypeError,
+        ValueError
+    ):
         return None
 
 
 def detect_age(record):
+
     value = first_value(
         record,
         [
@@ -267,13 +370,19 @@ def detect_age(record):
     )
 
     try:
-        return int(value)
+        return int(
+            value
+        )
 
-    except (TypeError, ValueError):
+    except (
+        TypeError,
+        ValueError
+    ):
         return None
 
 
 def detect_dev(record):
+
     value = first_value(
         record,
         [
@@ -288,7 +397,10 @@ def detect_dev(record):
     if value is None:
         return "normal"
 
-    if isinstance(value, int):
+    if isinstance(
+        value,
+        int
+    ):
 
         mapping = {
             0: "normal",
@@ -326,14 +438,17 @@ def detect_dev(record):
 # =========================================================
 
 def get_team_roster(team_name):
+
     team = find_team(
         team_name
     )
 
     if not team:
+
         raise ValueError(
-            f"Could not find team '{team_name}' "
-            f"in the Snallabot league data."
+            f"Could not find team "
+            f"'{team_name}' in "
+            f"Snallabot league data."
         )
 
     team_id = team.get(
@@ -345,18 +460,26 @@ def get_team_roster(team_name):
     )
 
     if not roster:
+
         raise ValueError(
-            f"No Snallabot roster found for "
-            f"the {team.get('name')}. "
-            f"Run the Snallabot roster export again."
+            f"No Snallabot roster "
+            f"found for the "
+            f"{team.get('name')}. "
+            f"Run the Snallabot "
+            f"roster export again."
         )
 
     return team, roster
 
 
-def build_roster_index(team_name):
-    team, roster = get_team_roster(
-        team_name
+def build_roster_index(
+    team_name
+):
+
+    team, roster = (
+        get_team_roster(
+            team_name
+        )
     )
 
     records = recursive_records(
@@ -394,74 +517,55 @@ def build_roster_index(team_name):
         ):
             continue
 
-        unique_key = (
+        key = (
             name.lower(),
             position,
             overall
         )
 
-        if unique_key in seen:
+        if key in seen:
             continue
 
         seen.add(
-            unique_key
+            key
         )
 
         players.append({
-            "name": name,
-            "position": position,
-            "overall": overall,
-            "age": age,
-            "dev": detect_dev(
-                record
-            )
+
+            "name":
+                name,
+
+            "position":
+                position,
+
+            "overall":
+                overall,
+
+            "age":
+                age,
+
+            "dev":
+                detect_dev(
+                    record
+                )
         })
 
-    return team, players
-
-
-# =========================================================
-# RAW PLAYER LOOKUP
-# =========================================================
-
-def find_raw_player_records(
-    team_name,
-    player_name
-):
-
-    team, roster = get_team_roster(
-        team_name
-    )
-
-    target = (
-        player_name
-        .strip()
-        .lower()
-    )
-
-    records = recursive_records(
-        roster
-    )
-
-    matches = []
-
-    for record in records:
-
-        name = detect_player_name(
-            record
+    players.sort(
+        key=lambda p: (
+            -(
+                p.get(
+                    "overall"
+                )
+                or 0
+            ),
+            p.get(
+                "name",
+                ""
+            )
         )
+    )
 
-        if not name:
-            continue
-
-        if target in name.lower():
-
-            matches.append({
-                "detected_name": name,
-                "raw_record": record
-            })
-
-    return team, matches
+    return team, players
 
 
 # =========================================================
@@ -473,8 +577,10 @@ def find_player_on_team(
     player_name
 ):
 
-    team, players = build_roster_index(
-        team_name
+    team, players = (
+        build_roster_index(
+            team_name
+        )
     )
 
     target = (
@@ -485,26 +591,39 @@ def find_player_on_team(
 
     exact = [
         player
-        for player in players
-        if player["name"].lower()
-        == target
+        for player
+        in players
+        if player[
+            "name"
+        ].lower() == target
     ]
 
-    if len(exact) >= 1:
+    if exact:
+
         player = exact[0]
 
     else:
+
         partial = [
             player
-            for player in players
+            for player
+            in players
             if target
-            in player["name"].lower()
+            in player[
+                "name"
+            ].lower()
         ]
 
-        if len(partial) == 1:
+        if len(
+            partial
+        ) == 1:
+
             player = partial[0]
 
-        elif len(partial) > 1:
+        elif len(
+            partial
+        ) > 1:
+
             names = ", ".join(
                 player["name"]
                 for player
@@ -512,46 +631,80 @@ def find_player_on_team(
             )
 
             raise ValueError(
-                f"'{player_name}' matched multiple "
-                f"{team.get('name')} players: "
-                f"{names}. Enter the full name."
+                f"'{player_name}' "
+                f"matched multiple "
+                f"{team.get('name')} "
+                f"players: {names}."
             )
 
         else:
+
             raise ValueError(
-                f"Could not find '{player_name}' "
-                f"on the {team.get('name')} roster."
+                f"Could not find "
+                f"'{player_name}' "
+                f"on the "
+                f"{team.get('name')} "
+                f"roster."
             )
 
     missing = []
 
-    if player.get("overall") is None:
-        missing.append("OVR")
+    if player.get(
+        "overall"
+    ) is None:
+        missing.append(
+            "OVR"
+        )
 
-    if player.get("age") is None:
-        missing.append("age")
+    if player.get(
+        "age"
+    ) is None:
+        missing.append(
+            "age"
+        )
 
-    if not player.get("position"):
-        missing.append("position")
+    if not player.get(
+        "position"
+    ):
+        missing.append(
+            "position"
+        )
 
     if missing:
+
         raise ValueError(
-            f"Found {player['name']}, "
-            f"but Snallabot did not provide: "
+            f"Found "
+            f"{player['name']}, "
+            f"but Snallabot did "
+            f"not provide: "
             f"{', '.join(missing)}."
         )
 
     return {
-        "type": "player",
-        "name": player["name"],
-        "position": player["position"],
-        "overall": player["overall"],
-        "age": player["age"],
-        "dev": player.get(
-            "dev",
-            "normal"
-        ),
-        "source": "Snallabot roster"
+
+        "type":
+            "player",
+
+        "name":
+            player["name"],
+
+        "position":
+            player["position"],
+
+        "overall":
+            player["overall"],
+
+        "age":
+            player["age"],
+
+        "dev":
+            player.get(
+                "dev",
+                "normal"
+            ),
+
+        "source":
+            "Snallabot roster"
     }
 
 
@@ -560,10 +713,14 @@ def find_player_on_team(
 # =========================================================
 
 def parse_easy_pick(line):
+
     clean = (
         line.strip()
         .lower()
-        .replace(",", " ")
+        .replace(
+            ",",
+            " "
+        )
     )
 
     year_match = re.search(
@@ -579,7 +736,9 @@ def parse_easy_pick(line):
     )
 
     round_match = re.search(
-        r"(?:round\s*)?([1-7])(?:st|nd|rd|th)?",
+        r"(?:round\s*)?"
+        r"([1-7])"
+        r"(?:st|nd|rd|th)?",
         clean
     )
 
@@ -590,7 +749,9 @@ def parse_easy_pick(line):
         round_match.group(1)
     )
 
-    current_year = datetime.now().year
+    current_year = (
+        datetime.now().year
+    )
 
     years_away = max(
         0,
@@ -601,13 +762,10 @@ def parse_easy_pick(line):
         "type": "pick",
         "year": year,
         "round": round_number,
-        "years_away": years_away
+        "years_away":
+            years_away
     }
 
-
-# =========================================================
-# TRADE ASSET PARSER
-# =========================================================
 
 def parse_trade_assets(
     text,
@@ -628,25 +786,36 @@ def parse_trade_assets(
         )
 
         if pick:
+
             assets.append(
                 pick
             )
+
             continue
 
-        player = find_player_on_team(
-            team_name,
-            line
+        player = (
+            find_player_on_team(
+                team_name,
+                line
+            )
         )
 
         assets.append(
             player
         )
 
+    if not assets:
+
+        raise ValueError(
+            f"{team_name} must "
+            f"send at least one asset."
+        )
+
     return assets
 
 
 # =========================================================
-# VALUE SETTINGS
+# TRADE VALUE SETTINGS
 # =========================================================
 
 DEV_VALUES = {
@@ -661,25 +830,31 @@ POSITION_MULTIPLIERS = {
     "QB": 1.30,
     "WR": 1.08,
     "TE": 1.02,
+
     "LT": 1.08,
     "RT": 1.03,
     "LG": 1.00,
     "RG": 1.00,
     "C": 1.00,
+
     "LE": 1.08,
     "RE": 1.08,
     "EDGE": 1.10,
     "DT": 1.03,
+
     "LOLB": 1.03,
     "ROLB": 1.03,
     "MLB": 1.00,
     "LB": 1.00,
+
     "CB": 1.08,
     "FS": 1.03,
     "SS": 1.03,
+
     "HB": 0.94,
     "RB": 0.94,
     "FB": 0.80,
+
     "K": 0.72,
     "P": 0.65
 }
@@ -697,10 +872,13 @@ PICK_VALUES = {
 
 
 # =========================================================
-# VALUE ENGINE
+# TRADE VALUE ENGINE
 # =========================================================
 
-def calculate_player_value(asset):
+def calculate_player_value(
+    asset
+):
+
     overall = float(
         asset["overall"]
     )
@@ -758,12 +936,18 @@ def calculate_player_value(asset):
     )
 
     return round(
-        max(value, 1),
+        max(
+            value,
+            1
+        ),
         2
     )
 
 
-def calculate_pick_value(asset):
+def calculate_pick_value(
+    asset
+):
+
     round_number = int(
         asset["round"]
     )
@@ -781,6 +965,7 @@ def calculate_pick_value(asset):
     )
 
     if years_away > 0:
+
         value *= (
             0.90
             ** years_away
@@ -792,36 +977,55 @@ def calculate_pick_value(asset):
     )
 
 
-def calculate_asset_value(asset):
-    if asset["type"] == "pick":
-        return calculate_pick_value(
-            asset
+def calculate_asset_value(
+    asset
+):
+
+    if asset[
+        "type"
+    ] == "pick":
+
+        return (
+            calculate_pick_value(
+                asset
+            )
         )
 
-    return calculate_player_value(
-        asset
+    return (
+        calculate_player_value(
+            asset
+        )
     )
 
 
-def calculate_package_value(assets):
+def calculate_package_value(
+    assets
+):
+
     total = 0
     breakdown = []
 
     for asset in assets:
 
-        value = calculate_asset_value(
-            asset
+        value = (
+            calculate_asset_value(
+                asset
+            )
         )
 
         total += value
 
         breakdown.append({
             **asset,
-            "calculated_value": value
+            "calculated_value":
+                value
         })
 
     return (
-        round(total, 2),
+        round(
+            total,
+            2
+        ),
         breakdown
     )
 
@@ -834,6 +1038,7 @@ def trade_grade(
     received,
     sent
 ):
+
     difference = (
         received - sent
     )
@@ -871,15 +1076,20 @@ def trade_grade(
         grade = "F"
 
     return {
-        "grade": grade,
-        "difference": round(
-            difference,
-            2
-        ),
-        "percentage": round(
-            percentage,
-            1
-        )
+        "grade":
+            grade,
+
+        "difference":
+            round(
+                difference,
+                2
+            ),
+
+        "percentage":
+            round(
+                percentage,
+                1
+            )
     }
 
 
@@ -893,6 +1103,7 @@ def committee_review(
     value_a,
     value_b
 ):
+
     highest = max(
         value_a,
         value_b
@@ -920,64 +1131,114 @@ def committee_review(
     )
 
     if value_a > value_b:
+
         advantage_team = team_a
-        disadvantage_team = team_b
+        disadvantage_team = (
+            team_b
+        )
 
     elif value_b > value_a:
+
         advantage_team = team_b
-        disadvantage_team = team_a
+        disadvantage_team = (
+            team_a
+        )
 
     else:
+
         advantage_team = None
         disadvantage_team = None
 
     if gap_percent <= 10:
-        decision = "AUTO APPROVE"
+
+        decision = (
+            "AUTO APPROVE"
+        )
+
         level = "GOOD"
         emoji = "✅"
 
         reason = (
-            "The trade packages are close enough "
-            "in calculated value for automatic approval."
+            "The trade packages "
+            "are close enough in "
+            "calculated value for "
+            "automatic approval."
         )
 
     elif gap_percent <= 20:
-        decision = "COMMITTEE REVIEW"
-        level = "QUESTIONABLE"
+
+        decision = (
+            "COMMITTEE REVIEW"
+        )
+
+        level = (
+            "QUESTIONABLE"
+        )
+
         emoji = "🟡"
 
         reason = (
-            f"The value difference is {gap_percent}%."
+            f"The value "
+            f"difference is "
+            f"{gap_percent}%."
         )
 
     elif gap_percent < 35:
-        decision = "STRONG COMMITTEE REVIEW"
+
+        decision = (
+            "STRONG COMMITTEE "
+            "REVIEW"
+        )
+
         level = "BAD"
         emoji = "🟠"
 
         reason = (
-            f"The packages have a {gap_percent}% "
+            f"The packages have "
+            f"a {gap_percent}% "
             f"value difference."
         )
 
     else:
-        decision = "AUTO DENY"
-        level = "VERY BAD"
+
+        decision = (
+            "AUTO DENY"
+        )
+
+        level = (
+            "VERY BAD"
+        )
+
         emoji = "❌"
 
         reason = (
-            f"The trade has a {gap_percent}% "
+            f"The trade has a "
+            f"{gap_percent}% "
             f"value difference."
         )
 
     return {
-        "decision": decision,
-        "level": level,
-        "emoji": emoji,
-        "value_gap_percent": gap_percent,
-        "advantage_team": advantage_team,
-        "disadvantage_team": disadvantage_team,
-        "reason": reason
+
+        "decision":
+            decision,
+
+        "level":
+            level,
+
+        "emoji":
+            emoji,
+
+        "value_gap_percent":
+            gap_percent,
+
+        "advantage_team":
+            advantage_team,
+
+        "disadvantage_team":
+            disadvantage_team,
+
+        "reason":
+            reason
     }
 
 
@@ -994,84 +1255,135 @@ def generate_trade_reaction(
     value_b_received,
     trade_id
 ):
-    if value_a_received > value_b_received:
+
+    if (
+        value_a_received
+        > value_b_received
+    ):
+
         winner = team_a
         loser = team_b
 
-    elif value_b_received > value_a_received:
+    elif (
+        value_b_received
+        > value_a_received
+    ):
+
         winner = team_b
         loser = team_a
 
     else:
+
         return (
             "Even trade",
             (
-                "I can understand this deal from both sides. "
-                "The value is close enough that neither team "
-                "looks like it got taken advantage of."
+                "I can understand "
+                "this deal from both "
+                "sides. The value is "
+                "close enough that "
+                "neither team looks "
+                "like it got taken "
+                "advantage of."
             )
         )
 
     gap = max(
         abs(
-            grade_a["percentage"]
+            grade_a[
+                "percentage"
+            ]
         ),
         abs(
-            grade_b["percentage"]
+            grade_b[
+                "percentage"
+            ]
         )
     )
 
     if gap >= 35:
+
         verdict = (
-            f"{winner} won — major steal"
+            f"{winner} won — "
+            f"major steal"
         )
 
         choices = [
             (
-                f"Hold on. What are the {loser} doing here? "
-                f"The {winner} are walking away with the better value "
-                f"and it really isn't close. I'm calling this a robbery."
+                f"Hold on. What are "
+                f"the {loser} doing "
+                f"here? The {winner} "
+                f"are walking away "
+                f"with the better "
+                f"value and it really "
+                f"isn't close. I'm "
+                f"calling this a "
+                f"robbery."
             ),
             (
-                f"I do not like this for the {loser}. "
-                f"The {winner} clearly got the better package. "
-                f"Somebody has to explain this one to me."
+                f"I do not like this "
+                f"for the {loser}. "
+                f"The {winner} "
+                f"clearly got the "
+                f"better package. "
+                f"Somebody has to "
+                f"explain this one."
             )
         ]
 
     elif gap >= 20:
+
         verdict = (
-            f"{winner} won the trade"
+            f"{winner} won "
+            f"the trade"
         )
 
         choices = [
             (
-                f"I understand the thinking, but I'm giving "
-                f"this deal to the {winner}. "
-                f"The {loser} gave up more value than I would've liked."
+                f"I understand the "
+                f"thinking, but I'm "
+                f"giving this deal "
+                f"to the {winner}. "
+                f"The {loser} gave "
+                f"up more value than "
+                f"I would've liked."
             )
         ]
 
     elif gap >= 8:
+
         verdict = (
-            f"Slight edge to {winner}"
+            f"Slight edge to "
+            f"{winner}"
         )
 
         choices = [
             (
-                f"This one is close, but if you're forcing me "
-                f"to choose a winner, I'm taking the {winner}."
+                f"This one is close, "
+                f"but if you're "
+                f"forcing me to "
+                f"choose a winner, "
+                f"I'm taking the "
+                f"{winner}."
             )
         ]
 
     else:
-        verdict = "Fair trade"
+
+        verdict = (
+            "Fair trade"
+        )
 
         choices = [
             (
-                "I don't see a clear loser here. "
-                "The value is close enough that this trade "
-                "will ultimately be judged by what happens on the field."
+                "I don't see a clear "
+                "loser here. The "
+                "value is close "
+                "enough that this "
+                "trade will "
+                "ultimately be "
+                "judged by what "
+                "happens on the "
+                "field."
             )
         ]
 
@@ -1089,8 +1401,14 @@ def generate_trade_reaction(
 # =========================================================
 
 def analyze_trade(data):
-    team_a = data["team_a"]
-    team_b = data["team_b"]
+
+    team_a = data[
+        "team_a"
+    ]
+
+    team_b = data[
+        "team_b"
+    ]
 
     team_a_sends = data[
         "team_a_sends"
@@ -1100,20 +1418,27 @@ def analyze_trade(data):
         "team_b_sends"
     ]
 
-    value_a_sent, breakdown_a = (
-        calculate_package_value(
-            team_a_sends
-        )
+    (
+        value_a_sent,
+        breakdown_a
+    ) = calculate_package_value(
+        team_a_sends
     )
 
-    value_b_sent, breakdown_b = (
-        calculate_package_value(
-            team_b_sends
-        )
+    (
+        value_b_sent,
+        breakdown_b
+    ) = calculate_package_value(
+        team_b_sends
     )
 
-    value_a_received = value_b_sent
-    value_b_received = value_a_sent
+    value_a_received = (
+        value_b_sent
+    )
+
+    value_b_received = (
+        value_a_sent
+    )
 
     grade_a = trade_grade(
         value_a_received,
@@ -1141,24 +1466,35 @@ def analyze_trade(data):
         )
     )
 
-    committee = committee_review(
-        team_a,
-        team_b,
-        value_a_received,
-        value_b_received
+    committee = (
+        committee_review(
+            team_a,
+            team_b,
+            value_a_received,
+            value_b_received
+        )
     )
 
     return {
-        "trade_id": trade_id,
 
-        "team_a": team_a,
-        "team_b": team_b,
+        "trade_id":
+            trade_id,
+
+        "team_a":
+            team_a,
+
+        "team_b":
+            team_b,
 
         "team_a_mention":
-            data["team_a_mention"],
+            data[
+                "team_a_mention"
+            ],
 
         "team_b_mention":
-            data["team_b_mention"],
+            data[
+                "team_b_mention"
+            ],
 
         "team_a_sends":
             breakdown_a,
@@ -1198,72 +1534,92 @@ def analyze_trade(data):
 
 
 # =========================================================
-# DISPLAY ASSETS
+# ASSET DISPLAY
 # =========================================================
 
-def summarize_asset(asset):
-    if asset["type"] == "pick":
+def dev_display(dev):
+
+    mapping = {
+        "normal": "Normal",
+        "star": "Star",
+        "superstar": "Superstar",
+        "xfactor": "X-Factor"
+    }
+
+    return mapping.get(
+        str(dev).lower(),
+        str(dev)
+    )
+
+
+def summarize_asset(
+    asset
+):
+
+    if asset[
+        "type"
+    ] == "pick":
+
         return (
             f"{asset['year']} "
-            f"Round {asset['round']} Pick"
+            f"Round "
+            f"{asset['round']} "
+            f"Pick"
         )
-
-    dev = str(
-        asset.get(
-            "dev",
-            "normal"
-        )
-    ).replace(
-        "xfactor",
-        "X-Factor"
-    ).replace(
-        "superstar",
-        "Superstar"
-    ).replace(
-        "star",
-        "Star"
-    ).replace(
-        "normal",
-        "Normal"
-    )
 
     return (
         f"{asset['name']} — "
         f"{asset['overall']} OVR "
         f"{asset['position']} • "
         f"Age {asset['age']} • "
-        f"{dev}"
+        f"{dev_display(asset.get('dev'))}"
     )
 
 
 # =========================================================
-# DISCORD WEBHOOK
+# DISCORD
 # =========================================================
 
 def post_trade_to_discord(
     analysis
 ):
-    webhook_url = os.environ.get(
-        "DISCORD_WEBHOOK_URL"
+
+    webhook_url = (
+        os.environ.get(
+            "DISCORD_WEBHOOK_URL"
+        )
     )
 
     if not webhook_url:
+
         return {
             "sent": False,
             "error":
-                "DISCORD_WEBHOOK_URL is not configured in Render."
+                (
+                    "DISCORD_WEBHOOK_URL "
+                    "is not configured "
+                    "in Render."
+                )
         }
 
     team_a_assets = "\n".join(
-        f"• {summarize_asset(asset)}"
-        for asset in analysis[
+        (
+            f"• "
+            f"{summarize_asset(asset)}"
+        )
+        for asset
+        in analysis[
             "team_a_sends"
         ]
     )
 
     team_b_assets = "\n".join(
-        f"• {summarize_asset(asset)}"
-        for asset in analysis[
+        (
+            f"• "
+            f"{summarize_asset(asset)}"
+        )
+        for asset
+        in analysis[
             "team_b_sends"
         ]
     )
@@ -1273,6 +1629,7 @@ def post_trade_to_discord(
     ]
 
     payload = {
+
         "content":
             (
                 f"{analysis['team_a_mention']} "
@@ -1282,19 +1639,28 @@ def post_trade_to_discord(
         "embeds": [
             {
                 "title":
-                    "🚨 PROJECT MADDEN TRADE PROPOSAL",
+                    (
+                        "🚨 PROJECT MADDEN "
+                        "TRADE PROPOSAL"
+                    ),
 
                 "description":
                     (
-                        f"**{analysis['team_a']} ↔ "
-                        f"{analysis['team_b']}**\n\n"
-                        f"Trade ID: `{analysis['trade_id']}`"
+                        f"**{analysis['team_a']} "
+                        f"↔ "
+                        f"{analysis['team_b']}**"
+                        f"\n\n"
+                        f"Trade ID: "
+                        f"`{analysis['trade_id']}`"
                     ),
 
                 "fields": [
                     {
                         "name":
-                            f"{analysis['team_a']} Sends",
+                            (
+                                f"{analysis['team_a']} "
+                                f"Sends"
+                            ),
 
                         "value":
                             team_a_assets,
@@ -1305,7 +1671,10 @@ def post_trade_to_discord(
 
                     {
                         "name":
-                            f"{analysis['team_b']} Sends",
+                            (
+                                f"{analysis['team_b']} "
+                                f"Sends"
+                            ),
 
                         "value":
                             team_b_assets,
@@ -1320,9 +1689,14 @@ def post_trade_to_discord(
 
                         "value":
                             (
-                                f"**{analysis['team_a']}:** "
-                                f"{analysis['team_a_grade']['grade']}\n"
-                                f"**{analysis['team_b']}:** "
+                                f"**"
+                                f"{analysis['team_a']}"
+                                f":** "
+                                f"{analysis['team_a_grade']['grade']}"
+                                f"\n"
+                                f"**"
+                                f"{analysis['team_b']}"
+                                f":** "
                                 f"{analysis['team_b_grade']['grade']}"
                             ),
 
@@ -1332,15 +1706,23 @@ def post_trade_to_discord(
 
                     {
                         "name":
-                            "🏛️ Trade Committee",
+                            (
+                                "🏛️ "
+                                "Trade Committee"
+                            ),
 
                         "value":
                             (
                                 f"{committee['emoji']} "
-                                f"**{committee['decision']}**\n"
-                                f"Quality: {committee['level']}\n"
+                                f"**"
+                                f"{committee['decision']}"
+                                f"**\n"
+                                f"Quality: "
+                                f"{committee['level']}"
+                                f"\n"
                                 f"Value Gap: "
-                                f"{committee['value_gap_percent']}%\n"
+                                f"{committee['value_gap_percent']}"
+                                f"%\n"
                                 f"{committee['reason']}"
                             ),
 
@@ -1350,11 +1732,17 @@ def post_trade_to_discord(
 
                     {
                         "name":
-                            "🎙️ Project Madden First Take",
+                            (
+                                "🎙️ Project Madden "
+                                "First Take"
+                            ),
 
                         "value":
                             (
-                                f"**{analysis['verdict']}**\n\n"
+                                f"**"
+                                f"{analysis['verdict']}"
+                                f"**"
+                                f"\n\n"
                                 f"{analysis['reaction']}"
                             ),
 
@@ -1365,13 +1753,17 @@ def post_trade_to_discord(
 
                 "footer": {
                     "text":
-                        "Project Madden • Trade Center"
+                        (
+                            "Project Madden "
+                            "• Trade Center"
+                        )
                 }
             }
         ]
     }
 
     try:
+
         response = requests.post(
             webhook_url,
             json=payload,
@@ -1382,6 +1774,7 @@ def post_trade_to_discord(
             200,
             204
         ]:
+
             return {
                 "sent": True
             }
@@ -1397,9 +1790,11 @@ def post_trade_to_discord(
         }
 
     except Exception as e:
+
         return {
             "sent": False,
-            "error": str(e)
+            "error":
+                str(e)
         }
 
 
@@ -1409,30 +1804,53 @@ def post_trade_to_discord(
 
 @app.route("/")
 def home():
+
     return jsonify({
-        "status": "online",
-        "service": "Project Madden Analytics",
-        "snallabot": "connected",
-        "trade_center": "/proposetrade",
-        "player_search": "/api/players",
-        "raw_player_inspector": "/api/player-raw",
-        "discord_webhook_configured": bool(
-            os.environ.get(
-                "DISCORD_WEBHOOK_URL"
+
+        "status":
+            "online",
+
+        "service":
+            (
+                "Project Madden "
+                "Analytics"
+            ),
+
+        "snallabot":
+            "connected",
+
+        "trade_center":
+            "/proposetrade",
+
+        "team_api":
+            "/api/teams",
+
+        "player_search":
+            "/api/players",
+
+        "discord_webhook_configured":
+            bool(
+                os.environ.get(
+                    "DISCORD_WEBHOOK_URL"
+                )
             )
-        )
     })
 
 
 @app.route("/health")
 def health():
+
     return jsonify({
-        "online": True,
-        "discord_webhook_configured": bool(
-            os.environ.get(
-                "DISCORD_WEBHOOK_URL"
+
+        "online":
+            True,
+
+        "discord_webhook_configured":
+            bool(
+                os.environ.get(
+                    "DISCORD_WEBHOOK_URL"
+                )
             )
-        )
     })
 
 
@@ -1448,9 +1866,12 @@ def health():
         "PUT"
     ]
 )
-def snallabot_receiver(subpath):
+def snallabot_receiver(
+    subpath
+):
 
     if request.method == "GET":
+
         return jsonify({
             "working": True,
             "path": subpath
@@ -1461,9 +1882,11 @@ def snallabot_receiver(subpath):
     )
 
     if data is None:
+
         return jsonify({
             "success": False,
-            "error": "No JSON received"
+            "error":
+                "No JSON received"
         }), 400
 
     parts = subpath.split(
@@ -1475,7 +1898,9 @@ def snallabot_receiver(subpath):
         subpath
     )
 
-    if parts[-1] == "leagueteams":
+    if parts[-1] == (
+        "leagueteams"
+    ):
 
         save_json_file(
             "leagueteams.json",
@@ -1484,10 +1909,13 @@ def snallabot_receiver(subpath):
 
         return jsonify({
             "success": True,
-            "type": "leagueteams"
+            "type":
+                "leagueteams"
         })
 
-    if parts[-1] == "standings":
+    if parts[-1] == (
+        "standings"
+    ):
 
         save_json_file(
             "standings.json",
@@ -1496,7 +1924,8 @@ def snallabot_receiver(subpath):
 
         return jsonify({
             "success": True,
-            "type": "standings"
+            "type":
+                "standings"
         })
 
     if parts[-1] == "extra":
@@ -1508,12 +1937,14 @@ def snallabot_receiver(subpath):
 
         return jsonify({
             "success": True,
-            "type": "extra"
+            "type":
+                "extra"
         })
 
     if (
         "freeagents" in parts
-        and parts[-1] == "roster"
+        and parts[-1]
+        == "roster"
     ):
 
         save_json_file(
@@ -1523,16 +1954,20 @@ def snallabot_receiver(subpath):
 
         return jsonify({
             "success": True,
-            "type": "freeagents"
+            "type":
+                "freeagents"
         })
 
     if (
         "team" in parts
-        and parts[-1] == "roster"
+        and parts[-1]
+        == "roster"
     ):
 
-        team_index = parts.index(
-            "team"
+        team_index = (
+            parts.index(
+                "team"
+            )
         )
 
         team_id = parts[
@@ -1546,15 +1981,20 @@ def snallabot_receiver(subpath):
 
         return jsonify({
             "success": True,
-            "type": "roster",
-            "team_id": team_id
+            "type":
+                "roster",
+            "team_id":
+                team_id
         })
 
     if "week" in parts:
 
         try:
-            week_index = parts.index(
-                "week"
+
+            week_index = (
+                parts.index(
+                    "week"
+                )
             )
 
             season_type = parts[
@@ -1570,17 +2010,23 @@ def snallabot_receiver(subpath):
             ]
 
         except Exception:
+
             return jsonify({
                 "success": False,
                 "error":
-                    "Invalid weekly export path"
+                    (
+                        "Invalid weekly "
+                        "export path"
+                    )
             }), 400
 
-        weekly_dir = os.path.join(
-            DATA_DIR,
-            "weekly",
-            season_type,
-            f"week_{week_number}"
+        weekly_dir = (
+            os.path.join(
+                DATA_DIR,
+                "weekly",
+                season_type,
+                f"week_{week_number}"
+            )
         )
 
         os.makedirs(
@@ -1596,6 +2042,7 @@ def snallabot_receiver(subpath):
             "w",
             encoding="utf-8"
         ) as f:
+
             json.dump(
                 data,
                 f,
@@ -1603,17 +2050,62 @@ def snallabot_receiver(subpath):
             )
 
         return jsonify({
-            "success": True,
-            "type": "weekly",
-            "season_type": season_type,
-            "week": week_number,
-            "stat_type": stat_type
+            "success":
+                True,
+
+            "type":
+                "weekly",
+
+            "season_type":
+                season_type,
+
+            "week":
+                week_number,
+
+            "stat_type":
+                stat_type
         })
 
     return jsonify({
-        "success": True,
-        "type": "unknown",
-        "path": subpath
+        "success":
+            True,
+
+        "type":
+            "unknown",
+
+        "path":
+            subpath
+    })
+
+
+# =========================================================
+# TEAM API
+# =========================================================
+
+@app.route("/api/teams")
+def teams_api():
+
+    teams = list(
+        get_team_map().values()
+    )
+
+    teams.sort(
+        key=lambda t:
+            (
+                t.get(
+                    "name"
+                )
+                or ""
+            )
+    )
+
+    return jsonify({
+
+        "team_count":
+            len(teams),
+
+        "teams":
+            teams
     })
 
 
@@ -1624,38 +2116,60 @@ def snallabot_receiver(subpath):
 @app.route("/api/players")
 def players_api():
 
-    team_name = request.args.get(
-        "team",
-        ""
+    team_name = (
+        request.args.get(
+            "team",
+            ""
+        )
     )
 
-    query = request.args.get(
-        "q",
-        ""
-    ).lower()
+    query = (
+        request.args.get(
+            "q",
+            ""
+        )
+        .strip()
+        .lower()
+    )
 
     try:
-        team, players = build_roster_index(
-            team_name
+
+        team, players = (
+            build_roster_index(
+                team_name
+            )
         )
 
     except Exception as e:
+
         return jsonify({
-            "error": str(e)
+            "error":
+                str(e)
         }), 400
 
     if query:
 
         players = [
             player
-            for player in players
+            for player
+            in players
             if query
-            in player["name"].lower()
+            in player[
+                "name"
+            ].lower()
         ]
 
     return jsonify({
+
         "team":
-            team.get("name"),
+            team.get(
+                "name"
+            ),
+
+        "team_logo":
+            team.get(
+                "logo"
+            ),
 
         "player_count":
             len(players),
@@ -1666,154 +2180,414 @@ def players_api():
 
 
 # =========================================================
-# RAW PLAYER API
-# =========================================================
-
-@app.route("/api/player-raw")
-def player_raw():
-
-    team_name = request.args.get(
-        "team",
-        ""
-    )
-
-    query = request.args.get(
-        "q",
-        ""
-    )
-
-    if not team_name or not query:
-        return jsonify({
-            "error":
-                "Use ?team=TEAM&q=PLAYER"
-        }), 400
-
-    try:
-        team, matches = find_raw_player_records(
-            team_name,
-            query
-        )
-
-    except Exception as e:
-        return jsonify({
-            "error": str(e)
-        }), 400
-
-    return jsonify({
-        "team":
-            team.get("name"),
-
-        "query":
-            query,
-
-        "match_count":
-            len(matches),
-
-        "matches":
-            matches[:10]
-    })
-
-
-# =========================================================
 # TRADE PAGE
 # =========================================================
 
 TRADE_PAGE = """
 <!DOCTYPE html>
 <html>
+
 <head>
 
-<meta name="viewport"
-content="width=device-width, initial-scale=1">
+<meta
+name="viewport"
+content="width=device-width, initial-scale=1, viewport-fit=cover">
 
-<title>Project Madden Trade Center</title>
+<title>
+Project Madden Trade Center
+</title>
 
 <style>
 
+* {
+    box-sizing: border-box;
+}
+
 body {
     margin: 0;
-    background: #0b0c10;
+    background:
+        linear-gradient(
+            180deg,
+            #08090d 0%,
+            #11131a 100%
+        );
     color: white;
-    font-family: Arial, sans-serif;
+    font-family:
+        Arial,
+        Helvetica,
+        sans-serif;
+    min-height: 100vh;
 }
 
 .container {
-    max-width: 850px;
+    max-width: 900px;
     margin: auto;
-    padding: 20px;
+    padding: 18px;
+    padding-bottom: 60px;
 }
 
-.title {
+.header {
     text-align: center;
-    font-size: 32px;
+    margin-top: 8px;
+    margin-bottom: 28px;
+}
+
+.logo-title {
+    font-size: 31px;
     font-weight: 900;
+    letter-spacing: -1px;
 }
 
 .subtitle {
-    text-align: center;
-    color: #aaa;
-    margin-bottom: 25px;
+    color: #8e94a5;
+    margin-top: 7px;
+    font-size: 15px;
 }
 
-.card,
-.result,
-.committee {
-    background: #15171d;
-    border: 1px solid #2c303b;
-    border-radius: 14px;
+.card {
+    background: #171920;
+    border: 1px solid #292d39;
+    border-radius: 18px;
     padding: 18px;
-    margin-bottom: 20px;
+    margin-bottom: 18px;
+}
+
+.card-title {
+    font-size: 20px;
+    font-weight: 850;
+    margin-bottom: 15px;
+}
+
+label {
+    display: block;
+    color: #d9dce6;
+    font-weight: 750;
+    margin-top: 15px;
+    margin-bottom: 8px;
 }
 
 input,
-textarea {
+select {
     width: 100%;
-    box-sizing: border-box;
-    padding: 13px;
-    margin-top: 6px;
-    margin-bottom: 12px;
-    background: #0d0f14;
+    min-height: 48px;
+    background: #0e1016;
+    border: 1px solid #363b49;
     color: white;
-    border: 1px solid #454853;
-    border-radius: 8px;
+    border-radius: 12px;
+    padding: 12px;
+    font-size: 16px;
+    outline: none;
+}
+
+input:focus,
+select:focus {
+    border-color: #5865f2;
+}
+
+.team-picker {
+    position: relative;
+}
+
+.team-button {
+    width: 100%;
+    border: 1px solid #363b49;
+    border-radius: 13px;
+    background: #0e1016;
+    min-height: 62px;
+    padding: 8px 12px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: white;
+    text-align: left;
+    font-size: 17px;
+}
+
+.team-button img {
+    width: 42px;
+    height: 42px;
+    object-fit: contain;
+}
+
+.team-button .placeholder {
+    color: #777e90;
+}
+
+.team-dropdown {
+    display: none;
+    position: absolute;
+    top: 68px;
+    left: 0;
+    right: 0;
+    z-index: 1000;
+    max-height: 350px;
+    overflow-y: auto;
+    background: #151821;
+    border: 1px solid #3b4150;
+    border-radius: 14px;
+    box-shadow:
+        0 16px 40px
+        rgba(0,0,0,.55);
+}
+
+.team-dropdown.open {
+    display: block;
+}
+
+.team-option {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 13px;
+    border-bottom: 1px solid #272b35;
+    cursor: pointer;
+}
+
+.team-option:last-child {
+    border-bottom: 0;
+}
+
+.team-option img {
+    width: 38px;
+    height: 38px;
+    object-fit: contain;
+}
+
+.team-option-name {
+    font-size: 16px;
+    font-weight: 750;
+}
+
+.team-option-small {
+    color: #858b9b;
+    font-size: 12px;
+    margin-top: 3px;
+}
+
+.player-search-wrap {
+    position: relative;
+}
+
+.player-results {
+    display: none;
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 54px;
+    z-index: 900;
+    max-height: 330px;
+    overflow-y: auto;
+    background: #151821;
+    border: 1px solid #3b4150;
+    border-radius: 14px;
+    box-shadow:
+        0 16px 40px
+        rgba(0,0,0,.55);
+}
+
+.player-results.open {
+    display: block;
+}
+
+.player-option {
+    padding: 13px;
+    border-bottom: 1px solid #292d36;
+    cursor: pointer;
+}
+
+.player-option:last-child {
+    border-bottom: 0;
+}
+
+.player-name {
+    font-weight: 850;
     font-size: 16px;
 }
 
-textarea {
-    min-height: 140px;
+.player-info {
+    color: #9ba1af;
+    font-size: 13px;
+    margin-top: 5px;
 }
 
-button {
-    width: 100%;
-    padding: 16px;
-    background: #5865F2;
-    border: none;
+.overall {
+    color: #7d89ff;
+    font-weight: 850;
+}
+
+.selected-assets {
+    margin-top: 12px;
+}
+
+.asset-chip {
+    background: #20232c;
+    border: 1px solid #363c4a;
+    border-radius: 12px;
+    padding: 11px 12px;
+    margin-top: 9px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+}
+
+.asset-main {
+    font-weight: 750;
+    font-size: 14px;
+}
+
+.asset-small {
+    color: #9da3b2;
+    font-size: 12px;
+    margin-top: 4px;
+}
+
+.remove-button {
+    border: 0;
+    background: #482127;
+    color: #ff858d;
     border-radius: 9px;
+    width: 34px;
+    height: 34px;
+    font-size: 17px;
+    flex-shrink: 0;
+}
+
+.pick-grid {
+    display: grid;
+    grid-template-columns:
+        1fr 1fr;
+    gap: 10px;
+}
+
+.add-pick {
+    margin-top: 10px;
+    width: 100%;
+    min-height: 46px;
+    border: 1px solid #414758;
+    background: #232732;
     color: white;
+    border-radius: 11px;
+    font-weight: 750;
+    font-size: 15px;
+}
+
+.submit {
+    width: 100%;
+    border: 0;
+    border-radius: 14px;
+    background:
+        linear-gradient(
+            90deg,
+            #5865f2,
+            #6877ff
+        );
+    color: white;
+    font-weight: 900;
     font-size: 18px;
-    font-weight: bold;
-}
-
-.error {
-    background: #43191c;
-    border: 1px solid #98343b;
-    padding: 15px;
-    border-radius: 10px;
-    margin-bottom: 20px;
-}
-
-.success {
-    background: #14351b;
-    border: 1px solid #2d7c3c;
-    padding: 15px;
-    border-radius: 10px;
-    margin-bottom: 20px;
+    min-height: 58px;
 }
 
 .help {
-    color: #aaa;
-    font-size: 14px;
-    line-height: 1.5;
+    color: #858b9b;
+    font-size: 13px;
+    margin-top: 9px;
+    line-height: 1.45;
+}
+
+.error {
+    background: #42191d;
+    border: 1px solid #893239;
+    border-radius: 13px;
+    padding: 14px;
+    margin-bottom: 18px;
+}
+
+.success {
+    background: #15361d;
+    border: 1px solid #347845;
+    border-radius: 13px;
+    padding: 14px;
+    margin-bottom: 18px;
+}
+
+.result {
+    background: #171920;
+    border: 1px solid #292d39;
+    border-radius: 18px;
+    padding: 18px;
+    margin-bottom: 18px;
+}
+
+.result h2 {
+    margin-top: 0;
+}
+
+.result-team {
+    font-size: 19px;
+    font-weight: 850;
+    margin-top: 20px;
+}
+
+.result-asset {
+    color: #d8dbe4;
+    margin-top: 7px;
+}
+
+.value {
+    color: #99a3ff;
+    font-weight: 800;
+}
+
+.committee {
+    background: #171920;
+    border: 1px solid #5865f2;
+    border-radius: 18px;
+    padding: 18px;
+    margin-bottom: 18px;
+}
+
+.again {
+    display: block;
+    text-decoration: none;
+}
+
+.again button {
+    width: 100%;
+    min-height: 54px;
+    border: 0;
+    border-radius: 14px;
+    background: #5865f2;
+    color: white;
+    font-weight: 900;
+    font-size: 17px;
+}
+
+.loading {
+    padding: 15px;
+    color: #9da3b2;
+}
+
+.empty {
+    padding: 15px;
+    color: #9da3b2;
+}
+
+@media (max-width: 600px) {
+
+    .container {
+        padding:
+            15px 13px
+            50px;
+    }
+
+    .card {
+        padding: 16px;
+    }
+
+    .logo-title {
+        font-size: 27px;
+    }
 }
 
 </style>
@@ -1824,7 +2598,9 @@ button {
 
 <div class="container">
 
-<div class="title">
+<div class="header">
+
+<div class="logo-title">
 🏈 PROJECT MADDEN
 </div>
 
@@ -1832,12 +2608,21 @@ button {
 Trade Proposal & Committee Center
 </div>
 
+</div>
+
+
 {% if error %}
 
 <div class="error">
-<strong>Trade Error</strong>
+
+<strong>
+Trade Error
+</strong>
+
 <br><br>
+
 {{ error }}
+
 </div>
 
 {% endif %}
@@ -1847,7 +2632,9 @@ Trade Proposal & Committee Center
 
 <div class="result">
 
-<h2>🚨 TRADE PROPOSED</h2>
+<h2>
+🚨 TRADE PROPOSED
+</h2>
 
 <p>
 {{ analysis.team_a_mention }}
@@ -1855,51 +2642,64 @@ Trade Proposal & Committee Center
 {{ analysis.team_b_mention }}
 </p>
 
-<h3>{{ analysis.team_a }} Sends</h3>
+<div class="result-team">
+{{ analysis.team_a }} Sends
+</div>
 
 {% for asset in analysis.team_a_sends %}
-<p>• {{ summarize(asset) }}</p>
+
+<div class="result-asset">
+• {{ summarize(asset) }}
+</div>
+
 {% endfor %}
 
-<p>
-<strong>
+<p class="value">
 Package Value:
 {{ analysis.team_a_value_sent }}
-</strong>
 </p>
 
-<h3>{{ analysis.team_b }} Sends</h3>
+
+<div class="result-team">
+{{ analysis.team_b }} Sends
+</div>
 
 {% for asset in analysis.team_b_sends %}
-<p>• {{ summarize(asset) }}</p>
+
+<div class="result-asset">
+• {{ summarize(asset) }}
+</div>
+
 {% endfor %}
 
-<p>
-<strong>
+<p class="value">
 Package Value:
 {{ analysis.team_b_value_sent }}
-</strong>
 </p>
 
 <hr>
 
-<h3>📊 Trade Grades</h3>
+<h3>
+📊 Trade Grades
+</h3>
 
 <p>
-{{ analysis.team_a }}:
 <strong>
+{{ analysis.team_a }}:
 {{ analysis.team_a_grade.grade }}
 </strong>
 </p>
 
 <p>
-{{ analysis.team_b }}:
 <strong>
+{{ analysis.team_b }}:
 {{ analysis.team_b_grade.grade }}
 </strong>
 </p>
 
-<h3>🎙️ Project Madden First Take</h3>
+<h3>
+🎙️ Project Madden First Take
+</h3>
 
 <p>
 <strong>
@@ -1916,7 +2716,9 @@ Package Value:
 
 <div class="committee">
 
-<h2>🏛️ Trade Committee</h2>
+<h2>
+🏛️ Trade Committee
+</h2>
 
 <h2>
 {{ analysis.trade_committee.emoji }}
@@ -1949,109 +2751,397 @@ Package Value:
 {% else %}
 
 <div class="error">
+
 ⚠️ Trade was analyzed, but Discord post failed.
+
 <br><br>
+
 {{ discord.error }}
+
 </div>
 
 {% endif %}
 
-<a href="/proposetrade">
+
+<a
+class="again"
+href="/proposetrade">
+
 <button>
 Propose Another Trade
 </button>
+
 </a>
 
 
 {% else %}
 
-<form method="POST">
+
+<form
+method="POST"
+id="tradeForm">
+
+
+<!-- TEAM A -->
 
 <div class="card">
 
-<h2>TEAM A</h2>
+<div class="card-title">
+TEAM A
+</div>
 
-<label>Team</label>
+
+<label>
+Select Team
+</label>
+
+<div
+class="team-picker"
+id="pickerA">
+
+<button
+type="button"
+class="team-button"
+id="teamButtonA">
+
+<span class="placeholder">
+Select Team A
+</span>
+
+</button>
+
+<div
+class="team-dropdown"
+id="teamDropdownA">
+</div>
+
+</div>
 
 <input
+type="hidden"
 name="team_a"
-placeholder="Ravens"
+id="teamA"
 required>
 
-<label>Discord @</label>
+
+<label>
+Discord @
+</label>
 
 <input
 name="team_a_mention"
 placeholder="@RavensOwner"
 required>
 
-<label>Assets Being Sent</label>
 
-<textarea
+<label>
+Search Team A Players
+</label>
+
+<div class="player-search-wrap">
+
+<input
+type="text"
+id="playerSearchA"
+placeholder="Select a team first..."
+autocomplete="off"
+disabled>
+
+<div
+class="player-results"
+id="playerResultsA">
+</div>
+
+</div>
+
+<div
+class="selected-assets"
+id="selectedPlayersA">
+</div>
+
+
+<label>
+Add Draft Pick
+</label>
+
+<div class="pick-grid">
+
+<select id="pickYearA">
+
+<option value="2027">
+2027
+</option>
+
+<option value="2028">
+2028
+</option>
+
+<option value="2029">
+2029
+</option>
+
+<option value="2030">
+2030
+</option>
+
+<option value="2031">
+2031
+</option>
+
+</select>
+
+
+<select id="pickRoundA">
+
+<option value="1">
+Round 1
+</option>
+
+<option value="2">
+Round 2
+</option>
+
+<option value="3">
+Round 3
+</option>
+
+<option value="4">
+Round 4
+</option>
+
+<option value="5">
+Round 5
+</option>
+
+<option value="6">
+Round 6
+</option>
+
+<option value="7">
+Round 7
+</option>
+
+</select>
+
+</div>
+
+<button
+type="button"
+class="add-pick"
+onclick="addPick('A')">
+
++ Add Draft Pick
+
+</button>
+
+
+<div
+class="selected-assets"
+id="selectedPicksA">
+</div>
+
+
+<input
+type="hidden"
 name="team_a_assets"
-placeholder="Lamar Jackson
-Zay Flowers
-2027 Round 2"
-required></textarea>
+id="assetsA">
+
 
 <p class="help">
-Type one asset per line.
-<br><br>
-Example player:
-<br>
-Lamar Jackson
-<br><br>
-Example pick:
-<br>
-2027 Round 2
-<br><br>
-Player OVR, age, position and dev are pulled automatically from Snallabot.
+Player ratings, age, position and development trait are pulled automatically from Snallabot.
 </p>
 
 </div>
 
 
+<!-- TEAM B -->
+
 <div class="card">
 
-<h2>TEAM B</h2>
+<div class="card-title">
+TEAM B
+</div>
 
-<label>Team</label>
+
+<label>
+Select Team
+</label>
+
+<div
+class="team-picker"
+id="pickerB">
+
+<button
+type="button"
+class="team-button"
+id="teamButtonB">
+
+<span class="placeholder">
+Select Team B
+</span>
+
+</button>
+
+<div
+class="team-dropdown"
+id="teamDropdownB">
+</div>
+
+</div>
 
 <input
+type="hidden"
 name="team_b"
-placeholder="Chiefs"
+id="teamB"
 required>
 
-<label>Discord @</label>
+
+<label>
+Discord @
+</label>
 
 <input
 name="team_b_mention"
 placeholder="@ChiefsOwner"
 required>
 
-<label>Assets Being Sent</label>
 
-<textarea
+<label>
+Search Team B Players
+</label>
+
+<div class="player-search-wrap">
+
+<input
+type="text"
+id="playerSearchB"
+placeholder="Select a team first..."
+autocomplete="off"
+disabled>
+
+<div
+class="player-results"
+id="playerResultsB">
+</div>
+
+</div>
+
+
+<div
+class="selected-assets"
+id="selectedPlayersB">
+</div>
+
+
+<label>
+Add Draft Pick
+</label>
+
+<div class="pick-grid">
+
+<select id="pickYearB">
+
+<option value="2027">
+2027
+</option>
+
+<option value="2028">
+2028
+</option>
+
+<option value="2029">
+2029
+</option>
+
+<option value="2030">
+2030
+</option>
+
+<option value="2031">
+2031
+</option>
+
+</select>
+
+
+<select id="pickRoundB">
+
+<option value="1">
+Round 1
+</option>
+
+<option value="2">
+Round 2
+</option>
+
+<option value="3">
+Round 3
+</option>
+
+<option value="4">
+Round 4
+</option>
+
+<option value="5">
+Round 5
+</option>
+
+<option value="6">
+Round 6
+</option>
+
+<option value="7">
+Round 7
+</option>
+
+</select>
+
+</div>
+
+<button
+type="button"
+class="add-pick"
+onclick="addPick('B')">
+
++ Add Draft Pick
+
+</button>
+
+
+<div
+class="selected-assets"
+id="selectedPicksB">
+</div>
+
+
+<input
+type="hidden"
 name="team_b_assets"
-placeholder="Patrick Mahomes
-2027 Round 1"
-required></textarea>
+id="assetsB">
 
 </div>
 
 
 <div class="card">
 
-<h3>🏛️ Automatic Trade Committee</h3>
+<div class="card-title">
+🏛️ Automatic Trade Committee
+</div>
 
 <p class="help">
 
 ✅ 0–10% = AUTO APPROVE
-<br>
+
+<br><br>
+
 🟡 10–20% = COMMITTEE REVIEW
-<br>
+
+<br><br>
+
 🟠 20–35% = STRONG REVIEW
-<br>
+
+<br><br>
+
 ❌ 35%+ = AUTO DENY
 
 </p>
@@ -2059,20 +3149,981 @@ required></textarea>
 </div>
 
 
-<button type="submit">
+<button
+class="submit"
+type="submit">
+
 🚨 PROPOSE TRADE
+
 </button>
 
 </form>
+
+
+<script>
+
+const teams = [];
+
+const selected = {
+    A: {
+        team: null,
+        players: [],
+        picks: []
+    },
+
+    B: {
+        team: null,
+        players: [],
+        picks: []
+    }
+};
+
+
+function devName(dev) {
+
+    if (!dev) {
+        return "Normal";
+    }
+
+    const value =
+        dev.toLowerCase();
+
+    if (value === "xfactor") {
+        return "X-Factor";
+    }
+
+    if (value === "superstar") {
+        return "Superstar";
+    }
+
+    if (value === "star") {
+        return "Star";
+    }
+
+    return "Normal";
+}
+
+
+async function loadTeams() {
+
+    const response =
+        await fetch("/api/teams");
+
+    const data =
+        await response.json();
+
+    teams.push(
+        ...(data.teams || [])
+    );
+
+    renderTeamDropdown("A");
+    renderTeamDropdown("B");
+}
+
+
+function renderTeamDropdown(side) {
+
+    const dropdown =
+        document.getElementById(
+            "teamDropdown" + side
+        );
+
+    dropdown.innerHTML = "";
+
+    teams.forEach(team => {
+
+        const option =
+            document.createElement(
+                "div"
+            );
+
+        option.className =
+            "team-option";
+
+        option.innerHTML = `
+            <img
+            src="${team.logo}"
+            alt="">
+
+            <div>
+
+                <div
+                class="team-option-name">
+                ${team.name}
+                </div>
+
+                <div
+                class="team-option-small">
+
+                ${team.abbr}
+                ${team.overall
+                    ? " • " +
+                      team.overall +
+                      " OVR"
+                    : ""}
+
+                </div>
+
+            </div>
+        `;
+
+        option.onclick = () => {
+            selectTeam(
+                side,
+                team
+            );
+        };
+
+        dropdown.appendChild(
+            option
+        );
+    });
+}
+
+
+function selectTeam(
+    side,
+    team
+) {
+
+    const other =
+        side === "A"
+        ? "B"
+        : "A";
+
+    if (
+        selected[other].team
+        &&
+        String(
+            selected[other]
+                .team.teamId
+        )
+        ===
+        String(team.teamId)
+    ) {
+
+        alert(
+            "Team A and Team B cannot be the same team."
+        );
+
+        return;
+    }
+
+    selected[side].team =
+        team;
+
+    selected[side].players =
+        [];
+
+    selected[side].picks =
+        [];
+
+    document.getElementById(
+        "team" + side
+    ).value = team.name;
+
+    const button =
+        document.getElementById(
+            "teamButton" + side
+        );
+
+    button.innerHTML = `
+        <img
+        src="${team.logo}"
+        alt="">
+
+        <div>
+
+            <div
+            style="
+            font-weight:850;
+            font-size:17px;
+            ">
+            ${team.name}
+            </div>
+
+            <div
+            style="
+            color:#8e94a5;
+            font-size:12px;
+            margin-top:3px;
+            ">
+            ${team.abbr}
+            ${team.overall
+                ? " • " +
+                  team.overall +
+                  " OVR"
+                : ""}
+            </div>
+
+        </div>
+    `;
+
+    closeTeamDropdown(
+        side
+    );
+
+    const search =
+        document.getElementById(
+            "playerSearch" + side
+        );
+
+    search.disabled = false;
+
+    search.value = "";
+
+    search.placeholder =
+        `Search ${team.name} players...`;
+
+    renderAssets(
+        side
+    );
+}
+
+
+function toggleTeamDropdown(
+    side
+) {
+
+    const dropdown =
+        document.getElementById(
+            "teamDropdown" + side
+        );
+
+    dropdown.classList.toggle(
+        "open"
+    );
+
+    const other =
+        side === "A"
+        ? "B"
+        : "A";
+
+    closeTeamDropdown(
+        other
+    );
+}
+
+
+function closeTeamDropdown(
+    side
+) {
+
+    document.getElementById(
+        "teamDropdown" + side
+    ).classList.remove(
+        "open"
+    );
+}
+
+
+document.getElementById(
+    "teamButtonA"
+).onclick = () =>
+    toggleTeamDropdown("A");
+
+
+document.getElementById(
+    "teamButtonB"
+).onclick = () =>
+    toggleTeamDropdown("B");
+
+
+let searchTimerA = null;
+let searchTimerB = null;
+
+
+function setupPlayerSearch(
+    side
+) {
+
+    const input =
+        document.getElementById(
+            "playerSearch" + side
+        );
+
+    input.addEventListener(
+        "input",
+        () => {
+
+            const timerName =
+                side === "A"
+                ? "A"
+                : "B";
+
+            if (timerName === "A") {
+
+                clearTimeout(
+                    searchTimerA
+                );
+
+                searchTimerA =
+                    setTimeout(
+                        () =>
+                            searchPlayers(
+                                side
+                            ),
+                        250
+                    );
+
+            } else {
+
+                clearTimeout(
+                    searchTimerB
+                );
+
+                searchTimerB =
+                    setTimeout(
+                        () =>
+                            searchPlayers(
+                                side
+                            ),
+                        250
+                    );
+            }
+
+        }
+    );
+
+
+    input.addEventListener(
+        "focus",
+        () => {
+
+            if (
+                selected[side].team
+            ) {
+                searchPlayers(
+                    side
+                );
+            }
+
+        }
+    );
+}
+
+
+async function searchPlayers(
+    side
+) {
+
+    const team =
+        selected[side].team;
+
+    if (!team) {
+        return;
+    }
+
+    const input =
+        document.getElementById(
+            "playerSearch" + side
+        );
+
+    const results =
+        document.getElementById(
+            "playerResults" + side
+        );
+
+    const query =
+        input.value.trim();
+
+    results.classList.add(
+        "open"
+    );
+
+    results.innerHTML =
+        '<div class="loading">Loading players...</div>';
+
+    try {
+
+        const response =
+            await fetch(
+                "/api/players?team="
+                +
+                encodeURIComponent(
+                    team.name
+                )
+                +
+                "&q="
+                +
+                encodeURIComponent(
+                    query
+                )
+            );
+
+        const data =
+            await response.json();
+
+        if (data.error) {
+
+            results.innerHTML =
+                `<div class="empty">
+                ${data.error}
+                </div>`;
+
+            return;
+        }
+
+        let players =
+            data.players || [];
+
+        players =
+            players.filter(
+                player =>
+                    !selected[
+                        side
+                    ].players.some(
+                        selectedPlayer =>
+                            selectedPlayer
+                                .name
+                            ===
+                            player.name
+                    )
+            );
+
+        if (
+            players.length === 0
+        ) {
+
+            results.innerHTML =
+                '<div class="empty">No players found.</div>';
+
+            return;
+        }
+
+        results.innerHTML = "";
+
+        players
+            .slice(0, 30)
+            .forEach(player => {
+
+                const option =
+                    document.createElement(
+                        "div"
+                    );
+
+                option.className =
+                    "player-option";
+
+                option.innerHTML = `
+                    <div
+                    class="player-name">
+
+                    ${player.name}
+
+                    </div>
+
+                    <div
+                    class="player-info">
+
+                    <span
+                    class="overall">
+                    ${player.overall}
+                    OVR
+                    </span>
+
+                    •
+                    ${player.position}
+
+                    •
+                    Age ${player.age}
+
+                    •
+                    ${devName(
+                        player.dev
+                    )}
+
+                    </div>
+                `;
+
+                option.onclick = () => {
+
+                    addPlayer(
+                        side,
+                        player
+                    );
+
+                };
+
+                results.appendChild(
+                    option
+                );
+            });
+
+    } catch (error) {
+
+        results.innerHTML =
+            '<div class="empty">Player search failed.</div>';
+    }
+}
+
+
+function addPlayer(
+    side,
+    player
+) {
+
+    const exists =
+        selected[
+            side
+        ].players.some(
+            item =>
+                item.name
+                ===
+                player.name
+        );
+
+    if (exists) {
+        return;
+    }
+
+    selected[
+        side
+    ].players.push(
+        player
+    );
+
+    document.getElementById(
+        "playerSearch" + side
+    ).value = "";
+
+    document.getElementById(
+        "playerResults" + side
+    ).classList.remove(
+        "open"
+    );
+
+    renderAssets(
+        side
+    );
+}
+
+
+function removePlayer(
+    side,
+    index
+) {
+
+    selected[
+        side
+    ].players.splice(
+        index,
+        1
+    );
+
+    renderAssets(
+        side
+    );
+}
+
+
+function addPick(
+    side
+) {
+
+    if (
+        !selected[
+            side
+        ].team
+    ) {
+
+        alert(
+            "Select a team first."
+        );
+
+        return;
+    }
+
+    const year =
+        document.getElementById(
+            "pickYear" + side
+        ).value;
+
+    const round =
+        document.getElementById(
+            "pickRound" + side
+        ).value;
+
+    const alreadyExists =
+        selected[
+            side
+        ].picks.some(
+            pick =>
+                String(
+                    pick.year
+                )
+                ===
+                String(year)
+                &&
+                String(
+                    pick.round
+                )
+                ===
+                String(round)
+        );
+
+    if (
+        alreadyExists
+    ) {
+
+        alert(
+            "That draft pick is already added."
+        );
+
+        return;
+    }
+
+    selected[
+        side
+    ].picks.push({
+        year:
+            Number(year),
+
+        round:
+            Number(round)
+    });
+
+    renderAssets(
+        side
+    );
+}
+
+
+function removePick(
+    side,
+    index
+) {
+
+    selected[
+        side
+    ].picks.splice(
+        index,
+        1
+    );
+
+    renderAssets(
+        side
+    );
+}
+
+
+function renderAssets(
+    side
+) {
+
+    const playerBox =
+        document.getElementById(
+            "selectedPlayers" + side
+        );
+
+    const pickBox =
+        document.getElementById(
+            "selectedPicks" + side
+        );
+
+    playerBox.innerHTML = "";
+
+    pickBox.innerHTML = "";
+
+
+    selected[
+        side
+    ].players.forEach(
+        (
+            player,
+            index
+        ) => {
+
+            const item =
+                document.createElement(
+                    "div"
+                );
+
+            item.className =
+                "asset-chip";
+
+            item.innerHTML = `
+                <div>
+
+                    <div
+                    class="asset-main">
+
+                    ${player.name}
+
+                    </div>
+
+                    <div
+                    class="asset-small">
+
+                    ${player.overall}
+                    OVR
+
+                    •
+                    ${player.position}
+
+                    •
+                    Age ${player.age}
+
+                    •
+                    ${devName(
+                        player.dev
+                    )}
+
+                    </div>
+
+                </div>
+
+                <button
+                type="button"
+                class="remove-button"
+                onclick="
+                removePlayer(
+                    '${side}',
+                    ${index}
+                )">
+                ✕
+                </button>
+            `;
+
+            playerBox.appendChild(
+                item
+            );
+        }
+    );
+
+
+    selected[
+        side
+    ].picks.forEach(
+        (
+            pick,
+            index
+        ) => {
+
+            const item =
+                document.createElement(
+                    "div"
+                );
+
+            item.className =
+                "asset-chip";
+
+            item.innerHTML = `
+                <div>
+
+                    <div
+                    class="asset-main">
+
+                    ${pick.year}
+                    Round
+                    ${pick.round}
+                    Pick
+
+                    </div>
+
+                    <div
+                    class="asset-small">
+
+                    Draft Pick
+
+                    </div>
+
+                </div>
+
+                <button
+                type="button"
+                class="remove-button"
+                onclick="
+                removePick(
+                    '${side}',
+                    ${index}
+                )">
+                ✕
+                </button>
+            `;
+
+            pickBox.appendChild(
+                item
+            );
+        }
+    );
+
+
+    syncHiddenAssets(
+        side
+    );
+}
+
+
+function syncHiddenAssets(
+    side
+) {
+
+    const lines = [];
+
+    selected[
+        side
+    ].players.forEach(
+        player => {
+
+            lines.push(
+                player.name
+            );
+
+        }
+    );
+
+    selected[
+        side
+    ].picks.forEach(
+        pick => {
+
+            lines.push(
+                `${pick.year} Round ${pick.round}`
+            );
+
+        }
+    );
+
+    document.getElementById(
+        "assets" + side
+    ).value =
+        lines.join(
+            "\\n"
+        );
+}
+
+
+document.getElementById(
+    "tradeForm"
+).addEventListener(
+    "submit",
+    event => {
+
+        syncHiddenAssets(
+            "A"
+        );
+
+        syncHiddenAssets(
+            "B"
+        );
+
+        if (
+            !selected.A.team
+            ||
+            !selected.B.team
+        ) {
+
+            event.preventDefault();
+
+            alert(
+                "Select both teams."
+            );
+
+            return;
+        }
+
+        if (
+            selected.A.players.length
+            +
+            selected.A.picks.length
+            === 0
+        ) {
+
+            event.preventDefault();
+
+            alert(
+                "Team A must send at least one asset."
+            );
+
+            return;
+        }
+
+        if (
+            selected.B.players.length
+            +
+            selected.B.picks.length
+            === 0
+        ) {
+
+            event.preventDefault();
+
+            alert(
+                "Team B must send at least one asset."
+            );
+
+            return;
+        }
+
+    }
+);
+
+
+setupPlayerSearch(
+    "A"
+);
+
+setupPlayerSearch(
+    "B"
+);
+
+loadTeams();
+
+
+document.addEventListener(
+    "click",
+    event => {
+
+        if (
+            !document
+            .getElementById(
+                "pickerA"
+            )
+            .contains(
+                event.target
+            )
+        ) {
+
+            closeTeamDropdown(
+                "A"
+            );
+
+        }
+
+        if (
+            !document
+            .getElementById(
+                "pickerB"
+            )
+            .contains(
+                event.target
+            )
+        ) {
+
+            closeTeamDropdown(
+                "B"
+            );
+
+        }
+
+    }
+);
+
+</script>
 
 {% endif %}
 
 </div>
 
 </body>
+
 </html>
 """
 
+
+# =========================================================
+# PROPOSE TRADE
+# =========================================================
 
 @app.route(
     "/proposetrade",
@@ -2084,97 +4135,175 @@ required></textarea>
 def propose_trade():
 
     if request.method == "GET":
+
         return render_template_string(
             TRADE_PAGE,
             analysis=None,
             error=None,
             discord=None,
-            summarize=summarize_asset
+            summarize=
+                summarize_asset
         )
 
-    team_a = request.form.get(
-        "team_a",
-        ""
-    ).strip()
+    team_a = (
+        request.form.get(
+            "team_a",
+            ""
+        ).strip()
+    )
 
-    team_b = request.form.get(
-        "team_b",
-        ""
-    ).strip()
+    team_b = (
+        request.form.get(
+            "team_b",
+            ""
+        ).strip()
+    )
 
-    mention_a = request.form.get(
-        "team_a_mention",
-        ""
-    ).strip()
+    mention_a = (
+        request.form.get(
+            "team_a_mention",
+            ""
+        ).strip()
+    )
 
-    mention_b = request.form.get(
-        "team_b_mention",
-        ""
-    ).strip()
+    mention_b = (
+        request.form.get(
+            "team_b_mention",
+            ""
+        ).strip()
+    )
 
-    if not mention_a.startswith("@"):
+    if not team_a:
+
         return render_template_string(
             TRADE_PAGE,
             analysis=None,
             error=
-                "Team A must include a Discord @.",
+                "Select Team A.",
             discord=None,
-            summarize=summarize_asset
+            summarize=
+                summarize_asset
         )
 
-    if not mention_b.startswith("@"):
+    if not team_b:
+
         return render_template_string(
             TRADE_PAGE,
             analysis=None,
             error=
-                "Team B must include a Discord @.",
+                "Select Team B.",
             discord=None,
-            summarize=summarize_asset
+            summarize=
+                summarize_asset
         )
 
-    if team_a.lower() == team_b.lower():
+    if (
+        team_a.lower()
+        == team_b.lower()
+    ):
+
         return render_template_string(
             TRADE_PAGE,
             analysis=None,
             error=
-                "A team cannot trade with itself.",
+                (
+                    "A team cannot "
+                    "trade with itself."
+                ),
             discord=None,
-            summarize=summarize_asset
+            summarize=
+                summarize_asset
+        )
+
+    if not mention_a.startswith(
+        "@"
+    ):
+
+        return render_template_string(
+            TRADE_PAGE,
+            analysis=None,
+            error=
+                (
+                    "Team A must "
+                    "include a "
+                    "Discord @."
+                ),
+            discord=None,
+            summarize=
+                summarize_asset
+        )
+
+    if not mention_b.startswith(
+        "@"
+    ):
+
+        return render_template_string(
+            TRADE_PAGE,
+            analysis=None,
+            error=
+                (
+                    "Team B must "
+                    "include a "
+                    "Discord @."
+                ),
+            discord=None,
+            summarize=
+                summarize_asset
         )
 
     try:
-        team_a_assets = parse_trade_assets(
-            request.form.get(
-                "team_a_assets",
-                ""
-            ),
-            team_a
+
+        team_a_assets = (
+            parse_trade_assets(
+                request.form.get(
+                    "team_a_assets",
+                    ""
+                ),
+                team_a
+            )
         )
 
-        team_b_assets = parse_trade_assets(
-            request.form.get(
-                "team_b_assets",
-                ""
-            ),
-            team_b
+        team_b_assets = (
+            parse_trade_assets(
+                request.form.get(
+                    "team_b_assets",
+                    ""
+                ),
+                team_b
+            )
         )
 
     except Exception as e:
+
         return render_template_string(
             TRADE_PAGE,
             analysis=None,
-            error=str(e),
+            error=
+                str(e),
             discord=None,
-            summarize=summarize_asset
+            summarize=
+                summarize_asset
         )
 
     analysis = analyze_trade({
-        "team_a": team_a,
-        "team_b": team_b,
-        "team_a_mention": mention_a,
-        "team_b_mention": mention_b,
-        "team_a_sends": team_a_assets,
-        "team_b_sends": team_b_assets
+
+        "team_a":
+            team_a,
+
+        "team_b":
+            team_b,
+
+        "team_a_mention":
+            mention_a,
+
+        "team_b_mention":
+            mention_b,
+
+        "team_a_sends":
+            team_a_assets,
+
+        "team_b_sends":
+            team_b_assets
     })
 
     proposals = load_json_file(
@@ -2185,6 +4314,7 @@ def propose_trade():
         proposals,
         list
     ):
+
         proposals = []
 
     proposals.append(
@@ -2196,39 +4326,54 @@ def propose_trade():
         proposals
     )
 
-    discord_result = post_trade_to_discord(
-        analysis
+    discord_result = (
+        post_trade_to_discord(
+            analysis
+        )
     )
 
     return render_template_string(
         TRADE_PAGE,
-        analysis=analysis,
-        error=None,
-        discord=discord_result,
-        summarize=summarize_asset
+        analysis=
+            analysis,
+        error=
+            None,
+        discord=
+            discord_result,
+        summarize=
+            summarize_asset
     )
 
 
 # =========================================================
-# TRADE PROPOSAL API
+# TRADE PROPOSALS API
 # =========================================================
 
-@app.route("/analyst/trade-proposals")
+@app.route(
+    "/analyst/trade-proposals"
+)
 def trade_proposals_api():
 
-    proposals = load_json_file(
-        "trade_proposals.json"
+    proposals = (
+        load_json_file(
+            "trade_proposals.json"
+        )
     )
 
     if not isinstance(
         proposals,
         list
     ):
+
         proposals = []
 
     return jsonify({
-        "count": len(proposals),
-        "proposals": proposals
+
+        "count":
+            len(proposals),
+
+        "proposals":
+            proposals
     })
 
 
@@ -2237,6 +4382,7 @@ def trade_proposals_api():
 # =========================================================
 
 if __name__ == "__main__":
+
     app.run(
         host="0.0.0.0",
         port=10000
