@@ -2207,6 +2207,32 @@ def post_trade_to_discord(analysis):
         )
     ).strip()
 
+    review = analysis.get(
+        "trade_committee",
+        {}
+    )
+
+    decision = str(
+        review.get(
+            "decision",
+            ""
+        )
+    ).upper()
+
+    committee_role = (
+        trade_committee_role_id()
+    )
+
+    committee_role_mention = ""
+
+    if committee_role and (
+        "LEAGUE OFFICE REVIEW" in decision
+        or "STRONG LEAGUE OFFICE REVIEW" in decision
+    ):
+        committee_role_mention = (
+            f"<@&{committee_role}>"
+        )
+
     payload = {
         "username": "Project Madden League Office",
         "avatar_url": (
@@ -2216,6 +2242,11 @@ def post_trade_to_discord(analysis):
         "content": (
             f"{analysis['team_a_mention']} "
             f"{analysis['team_b_mention']}"
+            + (
+                f" {committee_role_mention}"
+                if committee_role_mention
+                else ""
+            )
         ),
 
         "embeds": [
@@ -6743,6 +6774,13 @@ def discord_guild_id():
     ).strip()
 
 
+def trade_committee_role_id():
+    return os.environ.get(
+        "TRADE_COMMITTEE_ROLE_ID",
+        ""
+    ).strip()
+
+
 def discord_bot_configured():
     return bool(
         discord_application_id()
@@ -8258,6 +8296,10 @@ def discord_status():
                 os.environ.get(
                     "DISCORD_WEBHOOK_URL"
                 )
+            ),
+        "trade_committee_role_configured":
+            bool(
+                trade_committee_role_id()
             )
     })
 
