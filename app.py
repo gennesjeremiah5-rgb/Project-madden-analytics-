@@ -25,6 +25,7 @@ ANALYST_HISTORY_FILE = "analyst_history.json"
 ANALYST_POST_HISTORY_FILE = "analyst_discord_posts.json"
 PROJECT_MADDEN_ANALYST = "Marcus Hayes"
 DISCORD_DEBUG_FILE = "discord_interaction_debug.json"
+STANDINGS_POST_LOCK = threading.Lock()
 
 
 # =========================================================
@@ -1214,8 +1215,18 @@ def send_analyst_embed(
     if fields:
         embed["fields"] = fields
 
+    marcus_avatar_url = (
+        "https://project-madden-analytics.onrender.com/"
+        "assets/marcus-hayes.png"
+    )
+
+    embed["thumbnail"] = {
+        "url": marcus_avatar_url
+    }
+
     payload = {
         "username": "Marcus Hayes | Project Madden",
+        "avatar_url": marcus_avatar_url,
         "embeds": [embed]
     }
 
@@ -2625,12 +2636,18 @@ def parse_streak(streak):
 
 
 POWER_RANKING_INTROS = [
-    "The standings are starting to separate the serious teams from everybody else.",
-    "We have enough information now to start talking about who actually deserves respect.",
-    "Records matter, but the way teams are winning matters too.",
-    "This is where reputation stops carrying you and production starts deciding the conversation.",
-    "The league table is giving us some real storylines now.",
-    "You can argue all you want, but eventually the standings force the conversation."
+    "The standings changed, so the conversation changes with them. I am looking at who earned respect this week.",
+    "Forget the names on the jerseys for a minute. The teams producing on the field are the teams getting my attention.",
+    "We have movement in this league, and some teams are making a much stronger case than they were a week ago.",
+    "This ranking is not about reputation. It is about what the league has actually shown us right now.",
+    "Some teams are climbing, some are slipping, and the standings are starting to expose the difference.",
+    "I am not rewarding hype. Wins, losses, point differential, and how you are playing right now decide this conversation.",
+    "There is a new league snapshot in front of us, and a few teams have completely changed how I look at them.",
+    "The hierarchy is moving. If you want to stay near the top, your production has to keep matching the name on your roster.",
+    "Every new result gives us more evidence. Right now, the teams earning their spot are separating themselves.",
+    "This league is starting to develop an identity, and the latest standings tell us exactly who is trending the right way.",
+    "I want results, not excuses. The newest league table gives us a better picture of who is actually delivering.",
+    "The latest games gave us something new to debate, because this league order is not standing still."
 ]
 
 HOT_STREAK_LINES = [
@@ -2732,11 +2749,20 @@ def build_standings_storylines():
         for x in rankings[:8]
     )
 
+    total_games = sum(
+        int(team.get("games") or 0)
+        for team in rankings
+    )
+
     stories.append({
         "story_type": "power_rankings_intro",
-        "headline": "Marcus Hayes checks the league hierarchy",
-        "analyst_take": unique_analyst_choice(
-            "power_ranking_intro",
+        "headline": (
+            "Marcus Hayes updates the league hierarchy"
+            if total_games > 0
+            else "Marcus Hayes sets the preseason hierarchy"
+        ),
+        "state_key": intro_key,
+        "analyst_take": stable_choice(
             POWER_RANKING_INTROS,
             intro_key
         )
@@ -2764,6 +2790,7 @@ def build_standings_storylines():
 
             stories.append({
                 "story_type": "hot_streak",
+                "state_key": key,
                 "team": team["team"],
                 "headline": (
                     f"{team['team']} is heating up"
@@ -2783,6 +2810,7 @@ def build_standings_storylines():
 
             stories.append({
                 "story_type": "cold_streak",
+                "state_key": key,
                 "team": team["team"],
                 "headline": (
                     f"Pressure rising on {team['team']}"
@@ -2816,6 +2844,7 @@ def build_standings_storylines():
 
             stories.append({
                 "story_type": "fraud_watch",
+                "state_key": key,
                 "team": team["team"],
                 "headline": (
                     f"Fraud Watch: {team['team']}"
@@ -2843,6 +2872,7 @@ def build_standings_storylines():
 
             stories.append({
                 "story_type": "overachiever",
+                "state_key": key,
                 "team": team["team"],
                 "headline": (
                     f"{team['team']} is outperforming expectations"
@@ -2868,6 +2898,7 @@ def build_standings_storylines():
 
             stories.append({
                 "story_type": "playoff_race",
+                "state_key": key,
                 "team": team["team"],
                 "seed": playoff_seed,
                 "headline": (
@@ -2882,11 +2913,21 @@ def build_standings_storylines():
 
 
 def standings_post_key(story):
-    return hashlib.sha256(
-        json.dumps(
+    state_key = story.get("state_key")
+
+    if state_key:
+        raw_key = (
+            f"{story.get('story_type', 'standings')}|"
+            f"{state_key}"
+        )
+    else:
+        raw_key = json.dumps(
             story,
             sort_keys=True
-        ).encode("utf-8")
+        )
+
+    return hashlib.sha256(
+        raw_key.encode("utf-8")
     ).hexdigest()[:16]
 
 
@@ -2933,7 +2974,7 @@ def post_standings_storyline_to_discord(story):
     )
 
 
-def process_standings_posts():
+def _process_standings_posts_unlocked():
     if not analyst_webhook_configured():
         return {
             "success": False,
@@ -2999,6 +3040,13 @@ def process_standings_posts():
         "skipped": skipped,
         "failed": failed
     }
+
+
+def process_standings_posts():
+    # Snallabot can deliver closely-timed exports. Only one standings
+    # posting pass may run at a time so Discord never gets duplicate cards.
+    with STANDINGS_POST_LOCK:
+        return _process_standings_posts_unlocked()
 
 
 @app.route("/analyst/standings")
@@ -4189,6 +4237,18 @@ def project_madden_league_office_avatar():
         Path(__file__).resolve().parent
         / "project_madden_league_office.jpeg",
         mimetype="image/jpeg"
+    )
+
+
+@app.route(
+    "/assets/marcus-hayes.png",
+    methods=["GET"]
+)
+def marcus_hayes_avatar():
+    return send_file(
+        Path(__file__).resolve().parent
+        / "marcus_hayes.png",
+        mimetype="image/png"
     )
 
 
