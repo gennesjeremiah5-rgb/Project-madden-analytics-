@@ -2462,12 +2462,43 @@ def snallabot_receiver(subpath):
                 indent=2
             )
 
+        auto_post = None
+
+        # Marcus checks for new material whenever one of the
+        # analyst-relevant weekly exports arrives.
+        #
+        # This safely works even when Snallabot sends the files
+        # one at a time:
+        # - schedules can trigger the game reaction
+        # - passing/rushing/receiving/defense can trigger player reactions
+        # - duplicate history prevents the same segment from reposting
+        if stat_type in [
+            "schedules",
+            "passing",
+            "rushing",
+            "receiving",
+            "defense"
+        ]:
+            try:
+                auto_post = process_analyst_week_posts(
+                    season_type,
+                    int(week_number)
+                )
+            except Exception as e:
+                # Never reject a valid Snallabot export just because
+                # Discord or the analyst post step had a problem.
+                auto_post = {
+                    "success": False,
+                    "error": str(e)
+                }
+
         return jsonify({
             "success": True,
             "type": "weekly",
             "season_type": season_type,
             "week": week_number,
-            "stat_type": stat_type
+            "stat_type": stat_type,
+            "marcus_auto_post": auto_post
         })
 
     return jsonify({
@@ -2684,49 +2715,24 @@ def analyst_weekly_show(
 
 
 # =========================================================
-# MARCUS HAYES STATUS / DISCORD POST
+# AUTOMATIC MARCUS HAYES DISCORD PROCESSOR
 # =========================================================
 
-@app.route("/analyst/status")
-def analyst_status():
-    return jsonify({
-        "analyst": PROJECT_MADDEN_ANALYST,
-        "brand": "Project Madden Media",
-        "show": "Project Madden First Take",
-        "discord_webhook_configured": (
-            analyst_webhook_configured()
-        ),
-        "game_reactions": (
-            "/analyst/reactions/pre/1"
-        ),
-        "player_reactions": (
-            "/analyst/players/pre/1"
-        ),
-        "weekly_show": (
-            "/analyst/show/pre/1"
-        ),
-        "post_to_discord": (
-            "/analyst/post/pre/1"
-        )
-    })
-
-
-@app.route(
-    "/analyst/post/<season_type>/<int:week_number>",
-    methods=["GET", "POST"]
-)
-def post_analyst_week(
+def process_analyst_week_posts(
     season_type,
     week_number
 ):
     if not analyst_webhook_configured():
-        return jsonify({
+        return {
             "success": False,
             "error": (
                 "ANALYST_DISCORD_WEBHOOK_URL "
                 "is not configured in Render."
-            )
-        }), 400
+            ),
+            "sent_count": 0,
+            "skipped_count": 0,
+            "failed_count": 0
+        }
 
     post_history = load_analyst_post_history()
 
@@ -2743,6 +2749,10 @@ def post_analyst_week(
     sent = []
     skipped = []
     failed = []
+
+    # -------------------------
+    # GAME REACTIONS
+    # -------------------------
 
     for reaction in game_reactions:
         identifier = reaction.get(
@@ -2786,6 +2796,10 @@ def post_analyst_week(
                     "error"
                 )
             })
+
+    # -------------------------
+    # PLAYER REACTIONS
+    # -------------------------
 
     for index, reaction in enumerate(
         player_reactions
@@ -2843,7 +2857,7 @@ def post_analyst_week(
         post_history
     )
 
-    return jsonify({
+    return {
         "success": len(failed) == 0,
         "analyst": PROJECT_MADDEN_ANALYST,
         "destination": "Project Madden Media",
@@ -2861,7 +2875,64 @@ def post_analyst_week(
         "sent": sent,
         "skipped": skipped,
         "failed": failed
+    }
+
+
+# =========================================================
+# MARCUS HAYES STATUS / DISCORD POST
+# =========================================================
+
+@app.route("/analyst/status")
+def analyst_status():
+    return jsonify({
+        "analyst": PROJECT_MADDEN_ANALYST,
+        "brand": "Project Madden Media",
+        "show": "Project Madden First Take",
+        "discord_webhook_configured": (
+            analyst_webhook_configured()
+        ),
+        "game_reactions": (
+            "/analyst/reactions/pre/1"
+        ),
+        "player_reactions": (
+            "/analyst/players/pre/1"
+        ),
+        "weekly_show": (
+            "/analyst/show/pre/1"
+        ),
+        "post_to_discord": (
+            "/analyst/post/pre/1"
+        ),
+        "automatic_posting": True,
+        "automatic_trigger": (
+            "Snallabot weekly schedules, passing, "
+            "rushing, receiving, or defense export"
+        )
     })
+
+
+@app.route(
+    "/analyst/post/<season_type>/<int:week_number>",
+    methods=["GET", "POST"]
+)
+def post_analyst_week(
+    season_type,
+    week_number
+):
+    result = process_analyst_week_posts(
+        season_type,
+        week_number
+    )
+
+    status_code = 200
+
+    if (
+        not result.get("success")
+        and result.get("error")
+    ):
+        status_code = 400
+
+    return jsonify(result), status_code
 
 
 # =========================================================
