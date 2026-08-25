@@ -5,6 +5,7 @@ import hashlib
 import uuid
 import re
 import requests
+import threading
 from nacl.signing import VerifyKey
 from nacl.exceptions import BadSignatureError
 from datetime import datetime, timezone
@@ -3437,7 +3438,7 @@ def handle_trade_autocomplete(interaction):
     })
 
 
-def handle_discord_trade(interaction):
+def build_discord_trade_result_text(interaction):
     options = discord_option_map(
         interaction
     )
@@ -3485,23 +3486,19 @@ def handle_discord_trade(interaction):
     )
 
     if not team_a or not team_b:
-        return discord_ephemeral(
-            "❌ Select both teams."
-        )
+        return "❌ Select both teams."
 
     if team_a.lower() == team_b.lower():
-        return discord_ephemeral(
-            "❌ A team cannot trade with itself."
-        )
+        return "❌ A team cannot trade with itself."
 
     if not find_team(team_a):
-        return discord_ephemeral(
+        return (
             f"❌ I could not find {team_a} "
             f"in the current Snallabot league export."
         )
 
     if not find_team(team_b):
-        return discord_ephemeral(
+        return (
             f"❌ I could not find {team_b} "
             f"in the current Snallabot league export."
         )
@@ -3518,8 +3515,9 @@ def handle_discord_trade(interaction):
         )
 
     except Exception as e:
-        return discord_ephemeral(
-            f"❌ Trade could not be processed:\n{str(e)[:1500]}"
+        return (
+            "❌ Trade could not be processed:\n"
+            f"{str(e)[:1500]}"
         )
 
     mention_a = f"<@{owner_a_id}>"
@@ -3528,17 +3526,12 @@ def handle_discord_trade(interaction):
     analysis = analyze_trade({
         "team_a": team_a,
         "team_b": team_b,
-        "team_a_mention":
-            mention_a,
-        "team_b_mention":
-            mention_b,
-        "team_a_sends":
-            team_a_assets,
-        "team_b_sends":
-            team_b_assets
+        "team_a_mention": mention_a,
+        "team_b_mention": mention_b,
+        "team_a_sends": team_a_assets,
+        "team_b_sends": team_b_assets
     })
 
-    # Add slash-command audit information.
     invoking_user = (
         interaction.get("member", {})
         .get("user", {})
@@ -3569,31 +3562,85 @@ def handle_discord_trade(interaction):
     )
 
     if not discord_result.get("sent"):
-        return discord_ephemeral(
-            (
-                "⚠️ The trade was analyzed and saved, "
-                "but the #trade-approval post failed.\n"
-                f"{discord_result.get('error', 'Unknown error')[:1000]}"
-            )
+        return (
+            "⚠️ The trade was analyzed and saved, "
+            "but the #trade-approval post failed.\n"
+            f"{discord_result.get('error', 'Unknown error')[:1000]}"
         )
 
     review = analysis[
         "trade_committee"
     ]
 
-    return discord_ephemeral(
-        (
-            "✅ **Trade submitted successfully.**\n"
-            f"**{team_a} ↔ {team_b}**\n"
-            f"Trade ID: `{analysis['trade_id']}`\n"
-            f"{team_a} grade: "
-            f"**{analysis['team_a_grade']['grade']}**\n"
-            f"{team_b} grade: "
-            f"**{analysis['team_b_grade']['grade']}**\n"
-            f"🏛️ League Office Review: "
-            f"**{review['decision']}**\n"
-            "The full proposal was posted in trade approval."
+    return (
+        "✅ **Trade submitted successfully.**\n"
+        f"**{team_a} ↔ {team_b}**\n"
+        f"Trade ID: `{analysis['trade_id']}`\n"
+        f"{team_a} grade: "
+        f"**{analysis['team_a_grade']['grade']}**\n"
+        f"{team_b} grade: "
+        f"**{analysis['team_b_grade']['grade']}**\n"
+        f"🏛️ League Office Review: "
+        f"**{review['decision']}**\n"
+        "The full proposal was posted in trade approval."
+    )
+
+
+def edit_discord_deferred_response(
+    application_id,
+    interaction_token,
+    content
+):
+    url = (
+        f"{DISCORD_API_BASE}/webhooks/"
+        f"{application_id}/"
+        f"{interaction_token}/messages/@original"
+    )
+
+    try:
+        requests.patch(
+            url,
+            json={
+                "content": content
+            },
+            timeout=15
         )
+    except Exception as e:
+        print(
+            "DISCORD FOLLOWUP ERROR:",
+            str(e)
+        )
+
+
+def process_trade_interaction_background(
+    interaction
+):
+    try:
+        content = (
+            build_discord_trade_result_text(
+                interaction
+            )
+        )
+    except Exception as e:
+        content = (
+            "❌ Project Madden hit an internal error "
+            f"while processing the trade: {str(e)[:1200]}"
+        )
+
+    edit_discord_deferred_response(
+        str(
+            interaction.get(
+                "application_id",
+                discord_application_id()
+            )
+        ),
+        str(
+            interaction.get(
+                "token",
+                ""
+            )
+        ),
+        content
     )
 
 
@@ -3641,20 +3688,37 @@ def discord_interactions():
         )
 
         if command_name == "trade":
-            return handle_discord_trade(
-                interaction
+            # Discord requires the first response in about 3 seconds.
+            # Defer immediately, then process the Snallabot/trade work
+            # in the background and edit the original private response.
+            worker = threading.Thread(
+                target=process_trade_interaction_background,
+                args=(interaction,),
+                daemon=True
             )
+            worker.start()
 
-        return discord_ephemeral(
-            "❌ Unknown Project Madden command."
-        )
+            return jsonify({
+                "type": 5,
+                "data": {
+                    "flags": 64
+                }
+            })
+
+        return jsonify({
+            "type": 4,
+            "data": {
+                "content":
+                    "❌ Unknown Project Madden command.",
+                "flags": 64
+            }
+        })
 
     return jsonify({
         "type": 4,
         "data": {
-            "content": (
-                "Unsupported interaction."
-            ),
+            "content":
+                "Unsupported interaction.",
             "flags": 64
         }
     })
