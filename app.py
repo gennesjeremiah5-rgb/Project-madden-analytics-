@@ -4,6 +4,7 @@ import os
 import hashlib
 import uuid
 import re
+import requests
 from datetime import datetime, timezone
 
 app = Flask(__name__)
@@ -53,7 +54,6 @@ def stable_choice(options, key):
 # =========================================================
 
 def get_team_map():
-
     data = load_json_file(
         "leagueteams.json"
     )
@@ -82,7 +82,6 @@ def get_team_map():
 
 
 def find_team(team_name):
-
     target = str(
         team_name
     ).strip().lower()
@@ -113,7 +112,6 @@ def find_team(team_name):
 # =========================================================
 
 def recursive_records(obj):
-
     records = []
 
     if isinstance(obj, list):
@@ -146,7 +144,6 @@ def recursive_records(obj):
 
 
 def first_value(record, keys):
-
     for key in keys:
 
         if key in record:
@@ -160,7 +157,6 @@ def first_value(record, keys):
 
 
 def detect_player_name(record):
-
     full_name = first_value(
         record,
         [
@@ -205,7 +201,6 @@ def detect_player_name(record):
 
 
 def detect_position(record):
-
     value = first_value(
         record,
         [
@@ -225,21 +220,14 @@ def detect_position(record):
     ).upper()
 
 
-# =========================================================
-# FIXED SNALLABOT OVR DETECTOR
-# =========================================================
-
 def detect_overall(record):
-
     value = first_value(
         record,
         [
-            # Actual Snallabot / Madden roster fields
             "playerBestOvr",
             "playerSchemeOvr",
             "teamSchemeOvr",
 
-            # Fallback formats
             "ovrRating",
             "overallRating",
             "overall",
@@ -263,7 +251,6 @@ def detect_overall(record):
 
 
 def detect_age(record):
-
     value = first_value(
         record,
         [
@@ -281,7 +268,6 @@ def detect_age(record):
 
 
 def detect_dev(record):
-
     value = first_value(
         record,
         [
@@ -330,17 +316,15 @@ def detect_dev(record):
 
 
 # =========================================================
-# TEAM ROSTER
+# TEAM ROSTERS
 # =========================================================
 
 def get_team_roster(team_name):
-
     team = find_team(
         team_name
     )
 
     if not team:
-
         raise ValueError(
             f"Could not find team '{team_name}' "
             f"in the Snallabot league data."
@@ -355,7 +339,6 @@ def get_team_roster(team_name):
     )
 
     if not roster:
-
         raise ValueError(
             f"No Snallabot roster found for "
             f"the {team.get('name')}. "
@@ -366,7 +349,6 @@ def get_team_roster(team_name):
 
 
 def build_roster_index(team_name):
-
     team, roster = get_team_roster(
         team_name
     )
@@ -432,54 +414,6 @@ def build_roster_index(team_name):
     return team, players
 
 
-# =========================================================
-# RAW PLAYER RECORD LOOKUP
-# =========================================================
-
-def find_raw_player_records(
-    team_name,
-    player_name
-):
-
-    team, roster = get_team_roster(
-        team_name
-    )
-
-    target = (
-        player_name
-        .strip()
-        .lower()
-    )
-
-    records = recursive_records(
-        roster
-    )
-
-    matches = []
-
-    for record in records:
-
-        name = detect_player_name(
-            record
-        )
-
-        if not name:
-            continue
-
-        if target in name.lower():
-
-            matches.append({
-                "detected_name": name,
-                "raw_record": record
-            })
-
-    return team, matches
-
-
-# =========================================================
-# PLAYER LOOKUP
-# =========================================================
-
 def find_player_on_team(
     team_name,
     player_name
@@ -503,11 +437,9 @@ def find_player_on_team(
     ]
 
     if len(exact) >= 1:
-
         player = exact[0]
 
     else:
-
         partial = [
             player
             for player in players
@@ -516,11 +448,9 @@ def find_player_on_team(
         ]
 
         if len(partial) == 1:
-
             player = partial[0]
 
         elif len(partial) > 1:
-
             names = ", ".join(
                 player["name"]
                 for player
@@ -534,34 +464,23 @@ def find_player_on_team(
             )
 
         else:
-
             raise ValueError(
-                f"Could not find "
-                f"'{player_name}' on the "
-                f"{team.get('name')} roster."
+                f"Could not find '{player_name}' "
+                f"on the {team.get('name')} roster."
             )
 
     missing = []
 
-    if player.get(
-        "overall"
-    ) is None:
+    if player.get("overall") is None:
         missing.append("OVR")
 
-    if player.get(
-        "age"
-    ) is None:
+    if player.get("age") is None:
         missing.append("age")
 
-    if not player.get(
-        "position"
-    ):
-        missing.append(
-            "position"
-        )
+    if not player.get("position"):
+        missing.append("position")
 
     if missing:
-
         raise ValueError(
             f"Found {player['name']}, "
             f"but Snallabot did not provide: "
@@ -583,11 +502,10 @@ def find_player_on_team(
 
 
 # =========================================================
-# EASY PICK PARSER
+# PICK / ASSET PARSER
 # =========================================================
 
 def parse_easy_pick(line):
-
     clean = (
         line.strip()
         .lower()
@@ -633,10 +551,6 @@ def parse_easy_pick(line):
     }
 
 
-# =========================================================
-# EASY TRADE ASSET PARSER
-# =========================================================
-
 def parse_trade_assets(
     text,
     team_name
@@ -651,92 +565,19 @@ def parse_trade_assets(
         if not line:
             continue
 
-        if "|" in line:
-
-            pieces = [
-                piece.strip()
-                for piece
-                in line.split("|")
-            ]
-
-            asset_type = (
-                pieces[0]
-                .lower()
-            )
-
-            if asset_type == "player":
-
-                if len(pieces) < 2:
-
-                    raise ValueError(
-                        "Player format must be: "
-                        "player|Player Name"
-                    )
-
-                player = (
-                    find_player_on_team(
-                        team_name,
-                        pieces[1]
-                    )
-                )
-
-                assets.append(
-                    player
-                )
-
-                continue
-
-            if asset_type == "pick":
-
-                if len(pieces) < 3:
-
-                    raise ValueError(
-                        "Pick format must be: "
-                        "pick|Year|Round|YearsAway"
-                    )
-
-                year = int(
-                    pieces[1]
-                )
-
-                round_number = int(
-                    pieces[2]
-                )
-
-                years_away = 0
-
-                if len(pieces) >= 4:
-
-                    years_away = int(
-                        pieces[3]
-                    )
-
-                assets.append({
-                    "type": "pick",
-                    "year": year,
-                    "round": round_number,
-                    "years_away": years_away
-                })
-
-                continue
-
         pick = parse_easy_pick(
             line
         )
 
         if pick:
-
             assets.append(
                 pick
             )
-
             continue
 
-        player = (
-            find_player_on_team(
-                team_name,
-                line
-            )
+        player = find_player_on_team(
+            team_name,
+            line
         )
 
         assets.append(
@@ -747,7 +588,7 @@ def parse_trade_assets(
 
 
 # =========================================================
-# TRADE VALUE SETTINGS
+# VALUE SETTINGS
 # =========================================================
 
 DEV_VALUES = {
@@ -762,32 +603,25 @@ POSITION_MULTIPLIERS = {
     "QB": 1.30,
     "WR": 1.08,
     "TE": 1.02,
-
     "LT": 1.08,
     "RT": 1.03,
     "LG": 1.00,
     "RG": 1.00,
     "C": 1.00,
-
     "LE": 1.08,
     "RE": 1.08,
     "EDGE": 1.10,
-
     "DT": 1.03,
-
     "LOLB": 1.03,
     "ROLB": 1.03,
     "MLB": 1.00,
     "LB": 1.00,
-
     "CB": 1.08,
     "FS": 1.03,
     "SS": 1.03,
-
     "HB": 0.94,
     "RB": 0.94,
     "FB": 0.80,
-
     "K": 0.72,
     "P": 0.65
 }
@@ -805,11 +639,10 @@ PICK_VALUES = {
 
 
 # =========================================================
-# TRADE VALUE ENGINE
+# VALUE ENGINE
 # =========================================================
 
 def calculate_player_value(asset):
-
     overall = float(
         asset["overall"]
     )
@@ -867,16 +700,12 @@ def calculate_player_value(asset):
     )
 
     return round(
-        max(
-            value,
-            1
-        ),
+        max(value, 1),
         2
     )
 
 
 def calculate_pick_value(asset):
-
     round_number = int(
         asset["round"]
     )
@@ -894,7 +723,6 @@ def calculate_pick_value(asset):
     )
 
     if years_away > 0:
-
         value *= (
             0.90
             ** years_away
@@ -907,9 +735,7 @@ def calculate_pick_value(asset):
 
 
 def calculate_asset_value(asset):
-
     if asset["type"] == "pick":
-
         return calculate_pick_value(
             asset
         )
@@ -920,7 +746,6 @@ def calculate_asset_value(asset):
 
 
 def calculate_package_value(assets):
-
     total = 0
     breakdown = []
 
@@ -944,24 +769,21 @@ def calculate_package_value(assets):
 
 
 # =========================================================
-# TRADE GRADES
+# GRADES + COMMITTEE
 # =========================================================
 
 def trade_grade(
     received,
     sent
 ):
-
     difference = (
         received - sent
     )
 
     if sent <= 0:
-
         percentage = 100
 
     else:
-
         percentage = (
             difference / sent
         ) * 100
@@ -1003,17 +825,12 @@ def trade_grade(
     }
 
 
-# =========================================================
-# TRADE COMMITTEE
-# =========================================================
-
 def committee_review(
     team_a,
     team_b,
     value_a,
     value_b
 ):
-
     highest = max(
         value_a,
         value_b
@@ -1025,11 +842,9 @@ def committee_review(
     )
 
     if highest <= 0:
-
         gap_percent = 0
 
     else:
-
         gap_percent = (
             (
                 highest - lowest
@@ -1043,22 +858,18 @@ def committee_review(
     )
 
     if value_a > value_b:
-
         advantage_team = team_a
         disadvantage_team = team_b
 
     elif value_b > value_a:
-
         advantage_team = team_b
         disadvantage_team = team_a
 
     else:
-
         advantage_team = None
         disadvantage_team = None
 
     if gap_percent <= 10:
-
         decision = "AUTO APPROVE"
         level = "GOOD"
         emoji = "✅"
@@ -1068,13 +879,7 @@ def committee_review(
             "in calculated value for automatic approval."
         )
 
-        committee_comment = (
-            "The committee sees reasonable value "
-            "going to both teams."
-        )
-
     elif gap_percent <= 20:
-
         decision = "COMMITTEE REVIEW"
         level = "QUESTIONABLE"
         emoji = "🟡"
@@ -1083,13 +888,7 @@ def committee_review(
             f"The value difference is {gap_percent}%."
         )
 
-        committee_comment = (
-            f"{advantage_team} currently receives more "
-            f"calculated value than {disadvantage_team}."
-        )
-
     elif gap_percent < 35:
-
         decision = "STRONG COMMITTEE REVIEW"
         level = "BAD"
         emoji = "🟠"
@@ -1099,13 +898,7 @@ def committee_review(
             f"value difference."
         )
 
-        committee_comment = (
-            f"The committee believes {advantage_team} "
-            f"is receiving significantly more value."
-        )
-
     else:
-
         decision = "AUTO DENY"
         level = "VERY BAD"
         emoji = "❌"
@@ -1115,12 +908,6 @@ def committee_review(
             f"value difference."
         )
 
-        committee_comment = (
-            f"The committee sees this as too one-sided. "
-            f"{advantage_team} is receiving far more "
-            f"value than {disadvantage_team}."
-        )
-
     return {
         "decision": decision,
         "level": level,
@@ -1128,13 +915,12 @@ def committee_review(
         "value_gap_percent": gap_percent,
         "advantage_team": advantage_team,
         "disadvantage_team": disadvantage_team,
-        "reason": reason,
-        "committee_comment": committee_comment
+        "reason": reason
     }
 
 
 # =========================================================
-# FIRST TAKE TRADE REACTION
+# ANALYST REACTION
 # =========================================================
 
 def generate_trade_reaction(
@@ -1146,19 +932,15 @@ def generate_trade_reaction(
     value_b_received,
     trade_id
 ):
-
     if value_a_received > value_b_received:
-
         winner = team_a
         loser = team_b
 
     elif value_b_received > value_a_received:
-
         winner = team_b
         loser = team_a
 
     else:
-
         return (
             "Even trade",
             (
@@ -1178,7 +960,6 @@ def generate_trade_reaction(
     )
 
     if gap >= 35:
-
         verdict = (
             f"{winner} won — major steal"
         )
@@ -1197,7 +978,6 @@ def generate_trade_reaction(
         ]
 
     elif gap >= 20:
-
         verdict = (
             f"{winner} won the trade"
         )
@@ -1207,16 +987,10 @@ def generate_trade_reaction(
                 f"I understand the thinking, but I'm giving "
                 f"this deal to the {winner}. "
                 f"The {loser} gave up more value than I would've liked."
-            ),
-            (
-                f"The {winner} came out ahead. "
-                f"I wouldn't call it a complete robbery, "
-                f"but they definitely got the better end."
             )
         ]
 
     elif gap >= 8:
-
         verdict = (
             f"Slight edge to {winner}"
         )
@@ -1229,7 +1003,6 @@ def generate_trade_reaction(
         ]
 
     else:
-
         verdict = "Fair trade"
 
         choices = [
@@ -1250,11 +1023,10 @@ def generate_trade_reaction(
 
 
 # =========================================================
-# FULL TRADE ANALYSIS
+# ANALYZE TRADE
 # =========================================================
 
 def analyze_trade(data):
-
     team_a = data["team_a"]
     team_b = data["team_b"]
 
@@ -1291,12 +1063,9 @@ def analyze_trade(data):
         value_b_sent
     )
 
-    trade_id = data.get(
-        "trade_id",
-        str(
-            uuid.uuid4()
-        )[:8]
-    )
+    trade_id = str(
+        uuid.uuid4()
+    )[:8]
 
     verdict, reaction = (
         generate_trade_reaction(
@@ -1310,26 +1079,12 @@ def analyze_trade(data):
         )
     )
 
-    committee = (
-        committee_review(
-            team_a,
-            team_b,
-            value_a_received,
-            value_b_received
-        )
+    committee = committee_review(
+        team_a,
+        team_b,
+        value_a_received,
+        value_b_received
     )
-
-    if value_a_received > value_b_received:
-
-        winner = team_a
-
-    elif value_b_received > value_a_received:
-
-        winner = team_b
-
-    else:
-
-        winner = "Even"
 
     return {
         "trade_id": trade_id,
@@ -1352,23 +1107,14 @@ def analyze_trade(data):
         "team_a_value_sent":
             value_a_sent,
 
-        "team_a_value_received":
-            value_a_received,
-
         "team_b_value_sent":
             value_b_sent,
-
-        "team_b_value_received":
-            value_b_received,
 
         "team_a_grade":
             grade_a,
 
         "team_b_grade":
             grade_b,
-
-        "winner":
-            winner,
 
         "verdict":
             verdict,
@@ -1390,13 +1136,11 @@ def analyze_trade(data):
 
 
 # =========================================================
-# DISPLAY ASSETS
+# DISPLAY
 # =========================================================
 
 def summarize_asset(asset):
-
     if asset["type"] == "pick":
-
         return (
             f"{asset['year']} "
             f"Round {asset['round']} Pick"
@@ -1431,25 +1175,193 @@ def summarize_asset(asset):
 
 
 # =========================================================
+# DISCORD WEBHOOK
+# =========================================================
+
+def post_trade_to_discord(
+    analysis
+):
+    webhook_url = os.environ.get(
+        "DISCORD_WEBHOOK_URL"
+    )
+
+    if not webhook_url:
+        return {
+            "sent": False,
+            "error":
+                "DISCORD_WEBHOOK_URL not configured"
+        }
+
+    team_a_assets = "\n".join(
+        f"• {summarize_asset(asset)}"
+        for asset in analysis[
+            "team_a_sends"
+        ]
+    )
+
+    team_b_assets = "\n".join(
+        f"• {summarize_asset(asset)}"
+        for asset in analysis[
+            "team_b_sends"
+        ]
+    )
+
+    committee = analysis[
+        "trade_committee"
+    ]
+
+    payload = {
+        "content":
+            (
+                f"{analysis['team_a_mention']} "
+                f"{analysis['team_b_mention']}"
+            ),
+
+        "embeds": [
+            {
+                "title":
+                    "🚨 PROJECT MADDEN TRADE PROPOSAL",
+
+                "description":
+                    (
+                        f"**{analysis['team_a']} ↔ "
+                        f"{analysis['team_b']}**\n\n"
+                        f"Trade ID: `{analysis['trade_id']}`"
+                    ),
+
+                "fields": [
+                    {
+                        "name":
+                            f"{analysis['team_a']} Sends",
+
+                        "value":
+                            team_a_assets,
+
+                        "inline":
+                            False
+                    },
+
+                    {
+                        "name":
+                            f"{analysis['team_b']} Sends",
+
+                        "value":
+                            team_b_assets,
+
+                        "inline":
+                            False
+                    },
+
+                    {
+                        "name":
+                            "📊 Trade Grades",
+
+                        "value":
+                            (
+                                f"**{analysis['team_a']}:** "
+                                f"{analysis['team_a_grade']['grade']}\n"
+                                f"**{analysis['team_b']}:** "
+                                f"{analysis['team_b_grade']['grade']}"
+                            ),
+
+                        "inline":
+                            False
+                    },
+
+                    {
+                        "name":
+                            "🏛️ Trade Committee",
+
+                        "value":
+                            (
+                                f"{committee['emoji']} "
+                                f"**{committee['decision']}**\n"
+                                f"Quality: {committee['level']}\n"
+                                f"Value Gap: "
+                                f"{committee['value_gap_percent']}%\n"
+                                f"{committee['reason']}"
+                            ),
+
+                        "inline":
+                            False
+                    },
+
+                    {
+                        "name":
+                            "🎙️ Project Madden First Take",
+
+                        "value":
+                            (
+                                f"**{analysis['verdict']}**\n\n"
+                                f"{analysis['reaction']}"
+                            ),
+
+                        "inline":
+                            False
+                    }
+                ],
+
+                "footer": {
+                    "text":
+                        "Project Madden • Trade Center"
+                }
+            }
+        ]
+    }
+
+    try:
+        response = requests.post(
+            webhook_url,
+            json=payload,
+            timeout=10
+        )
+
+        if response.status_code in [
+            200,
+            204
+        ]:
+            return {
+                "sent": True
+            }
+
+        return {
+            "sent": False,
+            "error":
+                (
+                    f"Discord returned "
+                    f"{response.status_code}"
+                )
+        }
+
+    except Exception as e:
+        return {
+            "sent": False,
+            "error": str(e)
+        }
+
+
+# =========================================================
 # HOME
 # =========================================================
 
 @app.route("/")
 def home():
-
     return jsonify({
         "status": "online",
         "service": "Project Madden Analytics",
         "snallabot": "connected",
         "trade_center": "/proposetrade",
-        "raw_player_inspector": "/api/player-raw",
-        "snallabot_ovr_field": "playerBestOvr"
+        "discord_webhook_configured":
+            bool(
+                os.environ.get(
+                    "DISCORD_WEBHOOK_URL"
+                )
+            )
     })
 
 
 @app.route("/health")
 def health():
-
     return jsonify({
         "online": True
     })
@@ -1468,9 +1380,7 @@ def health():
     ]
 )
 def snallabot_receiver(subpath):
-
     if request.method == "GET":
-
         return jsonify({
             "working": True,
             "path": subpath
@@ -1481,7 +1391,6 @@ def snallabot_receiver(subpath):
     )
 
     if data is None:
-
         return jsonify({
             "success": False,
             "error": "No JSON received"
@@ -1491,71 +1400,55 @@ def snallabot_receiver(subpath):
         "/"
     )
 
-    print(
-        "PROJECT MADDEN EXPORT:",
-        subpath
-    )
-
     if parts[-1] == "leagueteams":
-
         save_json_file(
             "leagueteams.json",
             data
         )
 
         return jsonify({
-            "success": True,
-            "type": "leagueteams"
+            "success": True
         })
 
     if parts[-1] == "standings":
-
         save_json_file(
             "standings.json",
             data
         )
 
         return jsonify({
-            "success": True,
-            "type": "standings"
+            "success": True
         })
 
     if parts[-1] == "extra":
-
         save_json_file(
             "extra.json",
             data
         )
 
         return jsonify({
-            "success": True,
-            "type": "extra"
+            "success": True
         })
 
     if (
         "freeagents" in parts
         and parts[-1] == "roster"
     ):
-
         save_json_file(
             "freeagents_roster.json",
             data
         )
 
         return jsonify({
-            "success": True,
-            "type": "freeagents"
+            "success": True
         })
 
     if (
         "team" in parts
         and parts[-1] == "roster"
     ):
-
-        team_index = (
-            parts.index(
-                "team"
-            )
+        team_index = parts.index(
+            "team"
         )
 
         team_id = parts[
@@ -1568,40 +1461,25 @@ def snallabot_receiver(subpath):
         )
 
         return jsonify({
-            "success": True,
-            "type": "roster",
-            "team_id": team_id
+            "success": True
         })
 
     if "week" in parts:
+        week_index = parts.index(
+            "week"
+        )
 
-        try:
+        season_type = parts[
+            week_index + 1
+        ]
 
-            week_index = (
-                parts.index(
-                    "week"
-                )
-            )
+        week_number = parts[
+            week_index + 2
+        ]
 
-            season_type = parts[
-                week_index + 1
-            ]
-
-            week_number = parts[
-                week_index + 2
-            ]
-
-            stat_type = parts[
-                week_index + 3
-            ]
-
-        except Exception:
-
-            return jsonify({
-                "success": False,
-                "error":
-                    "Invalid weekly export path"
-            }), 400
+        stat_type = parts[
+            week_index + 3
+        ]
 
         weekly_dir = os.path.join(
             DATA_DIR,
@@ -1623,7 +1501,6 @@ def snallabot_receiver(subpath):
             "w",
             encoding="utf-8"
         ) as f:
-
             json.dump(
                 data,
                 f,
@@ -1631,132 +1508,11 @@ def snallabot_receiver(subpath):
             )
 
         return jsonify({
-            "success": True,
-            "type": "weekly",
-            "season_type": season_type,
-            "week": week_number,
-            "stat_type": stat_type
+            "success": True
         })
 
     return jsonify({
-        "success": True,
-        "type": "unknown",
-        "path": subpath
-    })
-
-
-# =========================================================
-# PLAYER SEARCH
-# =========================================================
-
-@app.route("/api/players")
-def players_api():
-
-    team_name = (
-        request.args.get(
-            "team",
-            ""
-        )
-    )
-
-    query = (
-        request.args.get(
-            "q",
-            ""
-        ).lower()
-    )
-
-    try:
-
-        team, players = (
-            build_roster_index(
-                team_name
-            )
-        )
-
-    except Exception as e:
-
-        return jsonify({
-            "error": str(e)
-        }), 400
-
-    if query:
-
-        players = [
-            player
-            for player in players
-            if query
-            in player["name"]
-            .lower()
-        ]
-
-    return jsonify({
-        "team":
-            team.get("name"),
-
-        "player_count":
-            len(players),
-
-        "players":
-            players[:50]
-    })
-
-
-# =========================================================
-# RAW PLAYER INSPECTOR
-# =========================================================
-
-@app.route("/api/player-raw")
-def player_raw():
-
-    team_name = (
-        request.args.get(
-            "team",
-            ""
-        )
-    )
-
-    query = (
-        request.args.get(
-            "q",
-            ""
-        )
-    )
-
-    if not team_name or not query:
-
-        return jsonify({
-            "error":
-                "Use ?team=TEAM&q=PLAYER"
-        }), 400
-
-    try:
-
-        team, matches = (
-            find_raw_player_records(
-                team_name,
-                query
-            )
-        )
-
-    except Exception as e:
-
-        return jsonify({
-            "error": str(e)
-        }), 400
-
-    return jsonify({
-        "team":
-            team.get("name"),
-
-        "query":
-            query,
-
-        "match_count":
-            len(matches),
-
-        "matches":
-            matches[:10]
+        "success": True
     })
 
 
@@ -1767,7 +1523,6 @@ def player_raw():
 TRADE_PAGE = """
 <!DOCTYPE html>
 <html>
-
 <head>
 
 <meta name="viewport"
@@ -1802,34 +1557,13 @@ body {
     margin-bottom: 25px;
 }
 
-.card {
+.card,
+.result,
+.committee {
     background: #15171d;
     border: 1px solid #2c303b;
     border-radius: 14px;
     padding: 18px;
-    margin-bottom: 20px;
-}
-
-.committee {
-    background: #171b24;
-    border: 1px solid #5865f2;
-    border-radius: 14px;
-    padding: 20px;
-    margin-top: 20px;
-}
-
-.result {
-    background: #111812;
-    border: 1px solid #345a3c;
-    border-radius: 14px;
-    padding: 20px;
-}
-
-.error {
-    background: #43191c;
-    border: 1px solid #98343b;
-    padding: 15px;
-    border-radius: 10px;
     margin-bottom: 20px;
 }
 
@@ -1851,10 +1585,6 @@ textarea {
     min-height: 140px;
 }
 
-label {
-    font-weight: bold;
-}
-
 button {
     width: 100%;
     padding: 16px;
@@ -1866,25 +1596,16 @@ button {
     font-weight: bold;
 }
 
-.help {
-    color: #aaa;
-    font-size: 14px;
-    line-height: 1.5;
+.error {
+    background: #43191c;
+    padding: 15px;
+    border-radius: 10px;
 }
 
-.grade {
-    font-size: 22px;
-    font-weight: bold;
-}
-
-.decision {
-    font-size: 26px;
-    font-weight: 900;
-}
-
-.value {
-    color: #b9c0ff;
-    font-weight: bold;
+.success {
+    background: #14351b;
+    padding: 15px;
+    border-radius: 10px;
 }
 
 </style>
@@ -1900,20 +1621,13 @@ button {
 </div>
 
 <div class="subtitle">
-Trade Proposal & Committee Center
+Trade Proposal Center
 </div>
-
 
 {% if error %}
 
 <div class="error">
-
-<strong>Trade Error</strong>
-
-<br><br>
-
 {{ error }}
-
 </div>
 
 {% endif %}
@@ -1923,89 +1637,40 @@ Trade Proposal & Committee Center
 
 <div class="result">
 
-<h2>
-🚨 TRADE PROPOSED
-</h2>
+<h2>🚨 Trade Proposed</h2>
 
-<p>
-{{ analysis.team_a_mention }}
-↔
-{{ analysis.team_b_mention }}
-</p>
-
-
-<h3>
-{{ analysis.team_a }} Sends
-</h3>
+<h3>{{ analysis.team_a }} Sends</h3>
 
 {% for asset in analysis.team_a_sends %}
-
-<p>
-• {{ summarize(asset) }}
-</p>
-
+<p>• {{ summarize(asset) }}</p>
 {% endfor %}
 
-<p class="value">
-
-Package Value:
-{{ analysis.team_a_value_sent }}
-
-</p>
-
-
-<h3>
-{{ analysis.team_b }} Sends
-</h3>
+<h3>{{ analysis.team_b }} Sends</h3>
 
 {% for asset in analysis.team_b_sends %}
-
-<p>
-• {{ summarize(asset) }}
-</p>
-
+<p>• {{ summarize(asset) }}</p>
 {% endfor %}
 
-<p class="value">
-
-Package Value:
-{{ analysis.team_b_value_sent }}
-
-</p>
-
-
-<hr>
-
-
-<h3>
-📊 Analyst Trade Grades
-</h3>
-
-<p class="grade">
-
-{{ analysis.team_a }}:
-{{ analysis.team_a_grade.grade }}
-
-<br>
-
-{{ analysis.team_b }}:
-{{ analysis.team_b_grade.grade }}
-
-</p>
-
-
-<h3>
-🏆 First Take Verdict
-</h3>
+<h3>📊 Grades</h3>
 
 <p>
+{{ analysis.team_a }}:
 <strong>
-{{ analysis.verdict }}
+{{ analysis.team_a_grade.grade }}
 </strong>
 </p>
 
 <p>
-🎙️ {{ analysis.reaction }}
+{{ analysis.team_b }}:
+<strong>
+{{ analysis.team_b_grade.grade }}
+</strong>
+</p>
+
+<h3>🎙️ First Take</h3>
+
+<p>
+{{ analysis.reaction }}
 </p>
 
 </div>
@@ -2014,77 +1679,47 @@ Package Value:
 <div class="committee">
 
 <h2>
-🏛️ PROJECT MADDEN TRADE COMMITTEE
+🏛️ Trade Committee
 </h2>
 
-<div class="decision">
-
+<h2>
 {{ analysis.trade_committee.emoji }}
-
 {{ analysis.trade_committee.decision }}
-
-</div>
-
+</h2>
 
 <p>
-
-<strong>
-Trade Quality:
-</strong>
-
-{{ analysis.trade_committee.level }}
-
-</p>
-
-
-<p>
-
-<strong>
 Value Gap:
-</strong>
-
 {{ analysis.trade_committee.value_gap_percent }}%
-
 </p>
 
-
 <p>
-
-<strong>
-Committee Reason:
-</strong>
-
-<br><br>
-
 {{ analysis.trade_committee.reason }}
-
-</p>
-
-
-<p>
-
-<strong>
-Committee Statement:
-</strong>
-
-<br><br>
-
-{{ analysis.trade_committee.committee_comment }}
-
 </p>
 
 </div>
 
+
+{% if discord.sent %}
+
+<div class="success">
+✅ Trade automatically posted to Discord.
+</div>
+
+{% else %}
+
+<div class="error">
+⚠️ Trade saved, but Discord post failed:
+{{ discord.error }}
+</div>
+
+{% endif %}
 
 <br>
 
-
 <a href="/proposetrade">
-
 <button>
 Propose Another Trade
 </button>
-
 </a>
 
 
@@ -2093,36 +1728,25 @@ Propose Another Trade
 
 <form method="POST">
 
-
 <div class="card">
 
-<h2>
-TEAM A
-</h2>
+<h2>TEAM A</h2>
 
-<label>
-Team
-</label>
+<label>Team</label>
 
 <input
 name="team_a"
 placeholder="Ravens"
 required>
 
-
-<label>
-Discord @
-</label>
+<label>Discord @</label>
 
 <input
 name="team_a_mention"
 placeholder="@RavensOwner"
 required>
 
-
-<label>
-Assets Being Sent
-</label>
+<label>Assets</label>
 
 <textarea
 name="team_a_assets"
@@ -2131,70 +1755,28 @@ Zay Flowers
 2027 Round 2"
 required></textarea>
 
-
-<div class="help">
-
-Just type one asset per line.
-
-<br><br>
-
-Player:
-
-<br>
-
-<strong>
-Lamar Jackson
-</strong>
-
-<br><br>
-
-Pick:
-
-<br>
-
-<strong>
-2027 Round 2
-</strong>
-
-<br><br>
-
-OVR, age, position and dev are pulled automatically from Snallabot.
-
-</div>
-
 </div>
 
 
 <div class="card">
 
-<h2>
-TEAM B
-</h2>
+<h2>TEAM B</h2>
 
-
-<label>
-Team
-</label>
+<label>Team</label>
 
 <input
 name="team_b"
 placeholder="Chiefs"
 required>
 
-
-<label>
-Discord @
-</label>
+<label>Discord @</label>
 
 <input
 name="team_b_mention"
 placeholder="@ChiefsOwner"
 required>
 
-
-<label>
-Assets Being Sent
-</label>
+<label>Assets</label>
 
 <textarea
 name="team_b_assets"
@@ -2205,48 +1787,13 @@ required></textarea>
 </div>
 
 
-<div class="card">
-
-<h3>
-🏛️ Automatic Trade Committee
-</h3>
-
-<p class="help">
-
-✅ 0–10%:
-AUTO APPROVE
-
-<br>
-
-🟡 10–20%:
-COMMITTEE REVIEW
-
-<br>
-
-🟠 20–35%:
-STRONG REVIEW
-
-<br>
-
-❌ 35%+:
-AUTO DENY
-
-</p>
-
-</div>
-
-
 <button type="submit">
-
 🚨 PROPOSE TRADE
-
 </button>
-
 
 </form>
 
 {% endif %}
-
 
 </div>
 
@@ -2263,134 +1810,87 @@ AUTO DENY
     ]
 )
 def propose_trade():
-
     if request.method == "GET":
-
         return render_template_string(
             TRADE_PAGE,
             analysis=None,
             error=None,
+            discord=None,
             summarize=summarize_asset
         )
 
-    team_a = (
-        request.form.get(
-            "team_a",
-            ""
-        ).strip()
-    )
+    team_a = request.form.get(
+        "team_a",
+        ""
+    ).strip()
 
-    team_b = (
-        request.form.get(
-            "team_b",
-            ""
-        ).strip()
-    )
+    team_b = request.form.get(
+        "team_b",
+        ""
+    ).strip()
 
-    mention_a = (
-        request.form.get(
-            "team_a_mention",
-            ""
-        ).strip()
-    )
+    mention_a = request.form.get(
+        "team_a_mention",
+        ""
+    ).strip()
 
-    mention_b = (
-        request.form.get(
-            "team_b_mention",
-            ""
-        ).strip()
-    )
+    mention_b = request.form.get(
+        "team_b_mention",
+        ""
+    ).strip()
 
     if not mention_a.startswith("@"):
-
         return render_template_string(
             TRADE_PAGE,
             analysis=None,
-            error=(
-                "Team A must include "
-                "a Discord @."
-            ),
+            error="Team A must include a Discord @.",
+            discord=None,
             summarize=summarize_asset
         )
 
     if not mention_b.startswith("@"):
-
         return render_template_string(
             TRADE_PAGE,
             analysis=None,
-            error=(
-                "Team B must include "
-                "a Discord @."
-            ),
-            summarize=summarize_asset
-        )
-
-    if (
-        team_a.lower()
-        == team_b.lower()
-    ):
-
-        return render_template_string(
-            TRADE_PAGE,
-            analysis=None,
-            error=(
-                "A team cannot "
-                "trade with itself."
-            ),
+            error="Team B must include a Discord @.",
+            discord=None,
             summarize=summarize_asset
         )
 
     try:
-
-        team_a_assets = (
-            parse_trade_assets(
-                request.form.get(
-                    "team_a_assets",
-                    ""
-                ),
-                team_a
-            )
+        team_a_assets = parse_trade_assets(
+            request.form.get(
+                "team_a_assets",
+                ""
+            ),
+            team_a
         )
 
-        team_b_assets = (
-            parse_trade_assets(
-                request.form.get(
-                    "team_b_assets",
-                    ""
-                ),
-                team_b
-            )
+        team_b_assets = parse_trade_assets(
+            request.form.get(
+                "team_b_assets",
+                ""
+            ),
+            team_b
         )
 
     except Exception as e:
-
         return render_template_string(
             TRADE_PAGE,
             analysis=None,
             error=str(e),
+            discord=None,
             summarize=summarize_asset
         )
 
-    data = {
+    analysis = analyze_trade({
         "team_a": team_a,
         "team_b": team_b,
-
-        "team_a_mention":
-            mention_a,
-
-        "team_b_mention":
-            mention_b,
-
-        "team_a_sends":
-            team_a_assets,
-
-        "team_b_sends":
-            team_b_assets
-    }
-
-    analysis = analyze_trade(
-        data
-    )
+        "team_a_mention": mention_a,
+        "team_b_mention": mention_b,
+        "team_a_sends": team_a_assets,
+        "team_b_sends": team_b_assets
+    })
 
     proposals = load_json_file(
         "trade_proposals.json"
@@ -2400,7 +1900,6 @@ def propose_trade():
         proposals,
         list
     ):
-
         proposals = []
 
     proposals.append(
@@ -2412,10 +1911,17 @@ def propose_trade():
         proposals
     )
 
+    discord_result = (
+        post_trade_to_discord(
+            analysis
+        )
+    )
+
     return render_template_string(
         TRADE_PAGE,
         analysis=analysis,
         error=None,
+        discord=discord_result,
         summarize=summarize_asset
     )
 
@@ -2425,7 +1931,6 @@ def propose_trade():
 # =========================================================
 
 if __name__ == "__main__":
-
     app.run(
         host="0.0.0.0",
         port=10000
