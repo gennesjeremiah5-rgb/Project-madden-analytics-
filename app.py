@@ -87,14 +87,64 @@ def snallabot_receiver(subpath):
     # EXTRA DATA
     if parts[-1] == "extra":
 
-        save_json("extra.json", data)
-        update_latest("extra", subpath, data)
+        save_json(
+            "extra.json",
+            data
+        )
+
+        update_latest(
+            "extra",
+            subpath,
+            data
+        )
 
         print("Saved: EXTRA DATA")
 
         return jsonify({
             "success": True,
             "type": "extra"
+        }), 200
+
+    # STANDINGS
+    if parts[-1] == "standings":
+
+        save_json(
+            "standings.json",
+            data
+        )
+
+        update_latest(
+            "standings",
+            subpath,
+            data
+        )
+
+        print("Saved: STANDINGS")
+
+        return jsonify({
+            "success": True,
+            "type": "standings"
+        }), 200
+
+    # LEAGUE TEAMS
+    if parts[-1] == "leagueteams":
+
+        save_json(
+            "leagueteams.json",
+            data
+        )
+
+        update_latest(
+            "leagueteams",
+            subpath,
+            data
+        )
+
+        print("Saved: LEAGUE TEAMS")
+
+        return jsonify({
+            "success": True,
+            "type": "leagueteams"
         }), 200
 
     # TEAM ROSTER
@@ -256,6 +306,44 @@ def analytics_status():
     })
 
 
+@app.route("/analytics/standings")
+def analytics_standings():
+
+    filename = os.path.join(
+        DATA_DIR,
+        "standings.json"
+    )
+
+    if not os.path.exists(filename):
+        return jsonify({
+            "error": "Standings data not found"
+        }), 404
+
+    with open(filename, "r") as f:
+        data = json.load(f)
+
+    return jsonify(data)
+
+
+@app.route("/analytics/teams")
+def analytics_teams():
+
+    filename = os.path.join(
+        DATA_DIR,
+        "leagueteams.json"
+    )
+
+    if not os.path.exists(filename):
+        return jsonify({
+            "error": "League teams data not found"
+        }), 404
+
+    with open(filename, "r") as f:
+        data = json.load(f)
+
+    return jsonify(data)
+
+
 @app.route(
     "/analytics/week/<season_type>/<week_number>/<stat_type>"
 )
@@ -286,9 +374,6 @@ def view_weekly_data(
     return jsonify(data)
 
 
-#
-# INSPECT SNALLABOT DATA
-#
 @app.route(
     "/analytics/inspect/<season_type>/<week_number>/<stat_type>"
 )
@@ -323,9 +408,6 @@ def inspect_weekly_data(
         "top_level_type": type(data).__name__
     }
 
-    #
-    # If Snallabot sends a dictionary
-    #
     if isinstance(data, dict):
 
         result["top_level_keys"] = list(data.keys())
@@ -362,9 +444,6 @@ def inspect_weekly_data(
 
         result["lists_found"] = lists_found
 
-    #
-    # If Snallabot sends a list directly
-    #
     elif isinstance(data, list):
 
         result["count"] = len(data)
