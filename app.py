@@ -23,6 +23,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 ANALYST_HISTORY_FILE = "analyst_history.json"
 ANALYST_POST_HISTORY_FILE = "analyst_discord_posts.json"
 PROJECT_MADDEN_ANALYST = "Marcus Hayes"
+DISCORD_DEBUG_FILE = "discord_interaction_debug.json"
 
 
 # =========================================================
@@ -3644,20 +3645,66 @@ def process_trade_interaction_background(
     )
 
 
+
+def save_discord_debug(data):
+    try:
+        save_json_file(
+            DISCORD_DEBUG_FILE,
+            data
+        )
+    except Exception as e:
+        print(
+            "DISCORD DEBUG SAVE ERROR:",
+            str(e)
+        )
+
+
+def get_discord_debug():
+    data = load_json_file(
+        DISCORD_DEBUG_FILE
+    )
+
+    if not isinstance(data, dict):
+        data = {
+            "status": "no_interaction_received_yet"
+        }
+
+    return data
+
+
+@app.route(
+    "/discord/debug",
+    methods=["GET"]
+)
+def discord_debug():
+    return jsonify({
+        "configured": {
+            "application_id":
+                bool(discord_application_id()),
+            "public_key":
+                bool(discord_public_key()),
+            "bot_token":
+                bool(discord_bot_token()),
+            "trade_webhook":
+                bool(
+                    os.environ.get(
+                        "DISCORD_WEBHOOK_URL"
+                    )
+                )
+        },
+        "interactions_endpoint":
+            discord_interactions_url(),
+        "last_interaction":
+            get_discord_debug()
+    })
+
+
 @app.route(
     "/discord/interactions",
     methods=["POST"]
 )
 def discord_interactions():
     raw_body = request.get_data()
-
-    if not verify_discord_request(
-        raw_body
-    ):
-        return jsonify({
-            "error":
-                "invalid request signature"
-        }), 401
 
     interaction = request.get_json(
         silent=True
@@ -3666,6 +3713,60 @@ def discord_interactions():
     interaction_type = interaction.get(
         "type"
     )
+
+    command_name = (
+        interaction
+        .get("data", {})
+        .get("name")
+    )
+
+    verified = verify_discord_request(
+        raw_body
+    )
+
+    save_discord_debug({
+        "received_at_utc":
+            datetime.now(
+                timezone.utc
+            ).isoformat(),
+        "verified":
+            verified,
+        "interaction_type":
+            interaction_type,
+        "command_name":
+            command_name,
+        "has_signature_header":
+            bool(
+                request.headers.get(
+                    "X-Signature-Ed25519"
+                )
+            ),
+        "has_timestamp_header":
+            bool(
+                request.headers.get(
+                    "X-Signature-Timestamp"
+                )
+            ),
+        "content_type":
+            request.headers.get(
+                "Content-Type"
+            )
+    })
+
+    print(
+        "DISCORD INTERACTION:",
+        {
+            "verified": verified,
+            "type": interaction_type,
+            "command": command_name
+        }
+    )
+
+    if not verified:
+        return jsonify({
+            "error":
+                "invalid request signature"
+        }), 401
 
     # Discord endpoint validation / ping.
     if interaction_type == 1:
