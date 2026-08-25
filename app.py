@@ -1725,6 +1725,249 @@ def trade_card_image(
     )
 
 
+
+# =========================================================
+# MARCUS HAYES - TRADE REACTIONS
+# =========================================================
+
+MARCUS_TRADE_OPENERS = [
+    "We have a trade proposal on the table, and there is plenty to unpack here.",
+    "This one immediately caught my attention because the value is not landing evenly.",
+    "A proposal just hit the League Office, and this is exactly the kind of move that starts arguments.",
+    "Now this is interesting. Two teams are trying to change their direction with one deal.",
+    "The League Office has a new proposal, and the numbers are already telling a story.",
+    "This is the kind of trade where both sides need to be very clear about what they are trying to accomplish.",
+]
+
+MARCUS_TRADE_BALANCED = [
+    "I can understand the logic for both sides. Nobody is obviously getting robbed here, and that matters.",
+    "This is close enough that the fit and roster plan matter more than the raw value gap.",
+    "Both teams have a case. I may prefer one side, but this is a real negotiation rather than a giveaway.",
+]
+
+MARCUS_TRADE_QUESTIONABLE = [
+    "I see the idea, but one side is clearly paying a premium. That needs to be justified by team need and roster direction.",
+    "There is enough of a gap here that I would want the League Office to look closely before calling it clean.",
+    "This is not automatically a terrible deal, but the side giving up more value needs a very strong reason.",
+]
+
+MARCUS_TRADE_BAD = [
+    "I have a problem with this value. One side is giving up too much, and the grades are reflecting that.",
+    "This is where a proposal starts looking less like roster building and more like one team bailing the other out.",
+    "The value gap is too large to ignore. If this goes through, the team losing value needs to explain the plan.",
+]
+
+MARCUS_TRADE_DENY = [
+    "No. The gap is too large. The League Office is right to deny this unless the package changes significantly.",
+    "This proposal needs to go back to the negotiating table. The value simply is not close enough right now.",
+    "I would not approve this as submitted. One side is giving away far too much value.",
+]
+
+
+def load_marcus_trade_reaction_history():
+    history = load_json_file(
+        MARCUS_TRADE_REACTION_HISTORY_FILE
+    )
+
+    if not isinstance(history, list):
+        history = []
+
+    return history
+
+
+def save_marcus_trade_reaction_history(history):
+    save_json_file(
+        MARCUS_TRADE_REACTION_HISTORY_FILE,
+        history[-300:]
+    )
+
+
+def marcus_trade_reaction_key(analysis):
+    return str(
+        analysis.get(
+            "trade_id",
+            ""
+        )
+    ).strip()
+
+
+def build_marcus_trade_reaction(analysis):
+    team_a = analysis.get(
+        "team_a",
+        "Team A"
+    )
+
+    team_b = analysis.get(
+        "team_b",
+        "Team B"
+    )
+
+    review = analysis.get(
+        "trade_committee",
+        {}
+    )
+
+    decision = str(
+        review.get(
+            "decision",
+            ""
+        )
+    ).upper()
+
+    gap = review.get(
+        "gap_percentage"
+    )
+
+    grade_a = (
+        analysis.get(
+            "team_a_grade",
+            {}
+        ).get(
+            "grade",
+            "—"
+        )
+        if isinstance(
+            analysis.get("team_a_grade"),
+            dict
+        )
+        else "—"
+    )
+
+    grade_b = (
+        analysis.get(
+            "team_b_grade",
+            {}
+        ).get(
+            "grade",
+            "—"
+        )
+        if isinstance(
+            analysis.get("team_b_grade"),
+            dict
+        )
+        else "—"
+    )
+
+    key = (
+        f"{analysis.get('trade_id')}|"
+        f"{team_a}|{team_b}|"
+        f"{decision}|{gap}"
+    )
+
+    opener = stable_choice(
+        MARCUS_TRADE_OPENERS,
+        "trade-open-" + key
+    )
+
+    if "AUTO DENY" in decision:
+        body = stable_choice(
+            MARCUS_TRADE_DENY,
+            "trade-body-" + key
+        )
+    elif "STRONG" in decision:
+        body = stable_choice(
+            MARCUS_TRADE_BAD,
+            "trade-body-" + key
+        )
+    elif "REVIEW" in decision:
+        body = stable_choice(
+            MARCUS_TRADE_QUESTIONABLE,
+            "trade-body-" + key
+        )
+    else:
+        body = stable_choice(
+            MARCUS_TRADE_BALANCED,
+            "trade-body-" + key
+        )
+
+    return {
+        "headline":
+            f"{team_a} ↔ {team_b}",
+        "take":
+            f"{opener} {body}",
+        "team_a_grade":
+            grade_a,
+        "team_b_grade":
+            grade_b,
+        "decision":
+            decision,
+        "value_gap":
+            gap
+    }
+
+
+def post_marcus_trade_reaction(analysis):
+    if not analyst_webhook_configured():
+        return {
+            "sent": False,
+            "error": (
+                "ANALYST_DISCORD_WEBHOOK_URL "
+                "is not configured."
+            )
+        }
+
+    trade_key = marcus_trade_reaction_key(
+        analysis
+    )
+
+    if not trade_key:
+        return {
+            "sent": False,
+            "error":
+                "Trade ID missing."
+        }
+
+    history = load_marcus_trade_reaction_history()
+
+    if trade_key in history:
+        return {
+            "sent": False,
+            "skipped": True,
+            "reason":
+                "already_posted"
+        }
+
+    reaction = build_marcus_trade_reaction(
+        analysis
+    )
+
+    description = (
+        f"## {reaction['headline']}\n"
+        f"{reaction['take']}\n\n"
+        f"**Trade Grades**\n"
+        f"{analysis.get('team_a')}: "
+        f"**{reaction['team_a_grade']}**\n"
+        f"{analysis.get('team_b')}: "
+        f"**{reaction['team_b_grade']}**\n\n"
+        f"🏛️ **League Office Review:** "
+        f"{reaction['decision']}"
+    )
+
+    if reaction.get(
+        "value_gap"
+    ) is not None:
+        description += (
+            f"\n**Value Gap:** "
+            f"{reaction['value_gap']}%"
+        )
+
+    result = send_analyst_embed(
+        "💬 TRADE REACTION • Marcus Hayes",
+        description
+    )
+
+    if result.get("sent"):
+        history.append(
+            trade_key
+        )
+
+        save_marcus_trade_reaction_history(
+            history
+        )
+
+    return result
+
+
 def post_trade_to_discord(analysis):
     webhook_url = os.environ.get(
         "DISCORD_WEBHOOK_URL"
@@ -3436,6 +3679,7 @@ def analyst_post_stephen_a(
 
 STANDINGS_STORY_HISTORY_FILE = "standings_story_posts.json"
 STEPHEN_A_PARODY_HISTORY_FILE = "stephen_a_parody_posts.json"
+MARCUS_TRADE_REACTION_HISTORY_FILE = "marcus_trade_reaction_posts.json"
 
 
 def standing_records():
@@ -5098,11 +5342,33 @@ def build_discord_trade_result_text(interaction):
         analysis
     )
 
+    try:
+        post_marcus_trade_reaction(
+            analysis
+        )
+    except Exception as e:
+        print(
+            "MARCUS TRADE REACTION ERROR:",
+            str(e)
+        )
+
     if not discord_result.get("sent"):
         return (
             "⚠️ The trade was analyzed and saved, "
             "but the #trade-approval post failed.\n"
             f"{discord_result.get('error', 'Unknown error')[:1000]}"
+        )
+
+    # Marcus Hayes reacts in Project Madden Media after the
+    # League Office proposal has been posted successfully.
+    try:
+        post_marcus_trade_reaction(
+            analysis
+        )
+    except Exception as e:
+        print(
+            "MARCUS TRADE REACTION ERROR:",
+            str(e)
         )
 
     review = analysis[
@@ -5433,6 +5699,531 @@ def marcus_hayes_avatar():
     )
 
 
+
+# =========================================================
+# PROJECT MADDEN TEST CENTER
+# =========================================================
+
+TEST_CENTER_HTML = r"""
+<!doctype html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project Madden Test Center</title>
+<style>
+body {
+    margin: 0;
+    background: #0d0f14;
+    color: #f4f4f6;
+    font-family: Arial, Helvetica, sans-serif;
+}
+.wrap {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 18px;
+}
+h1 {
+    margin: 0 0 6px;
+    font-size: 30px;
+}
+.sub {
+    color: #b9bbc5;
+    margin-bottom: 22px;
+}
+.card {
+    background: #171922;
+    border: 1px solid #353847;
+    border-radius: 18px;
+    padding: 18px;
+    margin-bottom: 18px;
+}
+.card h2 {
+    margin-top: 0;
+}
+label {
+    display: block;
+    font-size: 13px;
+    color: #c9cad1;
+    margin: 12px 0 6px;
+}
+input, textarea, select {
+    width: 100%;
+    box-sizing: border-box;
+    background: #0f1118;
+    color: white;
+    border: 1px solid #444758;
+    border-radius: 10px;
+    padding: 12px;
+    font-size: 16px;
+}
+textarea {
+    min-height: 90px;
+}
+.row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+button {
+    width: 100%;
+    margin-top: 14px;
+    border: 0;
+    border-radius: 10px;
+    padding: 13px;
+    font-size: 16px;
+    font-weight: 700;
+    background: #7b4dff;
+    color: white;
+}
+.secondary {
+    background: #303441;
+}
+.result {
+    margin-top: 12px;
+    padding: 12px;
+    border-radius: 10px;
+    background: #0f1118;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: #d7d8de;
+}
+.note {
+    color: #aeb0ba;
+    font-size: 13px;
+}
+.badge {
+    display: inline-block;
+    background: #2a2442;
+    color: #c9b8ff;
+    border-radius: 999px;
+    padding: 5px 10px;
+    font-size: 12px;
+    margin-bottom: 10px;
+}
+@media (max-width: 650px) {
+    .row {
+        grid-template-columns: 1fr;
+    }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+    <h1>🧪 Project Madden Test Center</h1>
+    <div class="sub">
+        Test trades, Marcus Hayes, and the Stephen A. Smith AI parody segment
+        without waiting for a real game.
+    </div>
+
+    <div class="card">
+        <div class="badge">TRADE ENGINE</div>
+        <h2>Test a Trade</h2>
+        <div class="row">
+            <div>
+                <label>Team A</label>
+                <select id="team_a"></select>
+            </div>
+            <div>
+                <label>Team B</label>
+                <select id="team_b"></select>
+            </div>
+        </div>
+
+        <label>Team A Assets</label>
+        <textarea id="team_a_assets"
+        placeholder="Lamar Jackson&#10;2027 Round 2"></textarea>
+
+        <label>Team B Assets</label>
+        <textarea id="team_b_assets"
+        placeholder="Joe Burrow&#10;2027 Round 3"></textarea>
+
+        <button onclick="testTrade(false)">Preview Trade</button>
+        <button class="secondary" onclick="testTrade(true)">
+            Send Test Trade to Discord
+        </button>
+        <div id="trade_result" class="result">Ready.</div>
+    </div>
+
+    <div class="card">
+        <div class="badge">PROJECT MADDEN MEDIA</div>
+        <h2>Test Marcus Hayes</h2>
+
+        <label>Headline</label>
+        <input id="marcus_headline"
+        value="League Test Segment">
+
+        <label>Marcus Test Take</label>
+        <textarea id="marcus_take">This is a Project Madden Media test. Marcus Hayes is live and the analyst webhook is working.</textarea>
+
+        <button onclick="testMarcus()">Send Marcus Test</button>
+        <div id="marcus_result" class="result">Ready.</div>
+    </div>
+
+    <div class="card">
+        <div class="badge">AI PARODY SEGMENT</div>
+        <h2>Test Stephen A. Smith Segment</h2>
+
+        <p class="note">
+            This is always labeled as fictional AI parody and is not presented
+            as a real Stephen A. Smith statement.
+        </p>
+
+        <label>Headline</label>
+        <input id="stephen_headline"
+        value="Project Madden Test Debate">
+
+        <label>Parody Test Take</label>
+        <textarea id="stephen_take">Ladies and gentlemen, this is a Project Madden test segment. The parody webhook is connected and ready for debate.</textarea>
+
+        <button onclick="testStephen()">Send Parody Test</button>
+        <div id="stephen_result" class="result">Ready.</div>
+    </div>
+</div>
+
+<script>
+async function loadTeams() {
+    const res = await fetch('/api/teams');
+    const data = await res.json();
+    const teams = data.teams || [];
+    const a = document.getElementById('team_a');
+    const b = document.getElementById('team_b');
+
+    teams.forEach((team, i) => {
+        const name = team.displayName || team.name || team.abbrName;
+        const oa = document.createElement('option');
+        oa.value = name;
+        oa.textContent = name;
+        a.appendChild(oa);
+
+        const ob = document.createElement('option');
+        ob.value = name;
+        ob.textContent = name;
+        b.appendChild(ob);
+    });
+
+    if (b.options.length > 1) {
+        b.selectedIndex = 1;
+    }
+}
+
+async function testTrade(sendDiscord) {
+    const out = document.getElementById('trade_result');
+    out.textContent = 'Testing...';
+
+    const body = {
+        team_a: document.getElementById('team_a').value,
+        team_b: document.getElementById('team_b').value,
+        team_a_assets: document.getElementById('team_a_assets').value,
+        team_b_assets: document.getElementById('team_b_assets').value,
+        send_discord: sendDiscord
+    };
+
+    const res = await fetch('/test-center/trade', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+    });
+
+    const data = await res.json();
+    out.textContent = JSON.stringify(data, null, 2);
+}
+
+async function testMarcus() {
+    const out = document.getElementById('marcus_result');
+    out.textContent = 'Sending...';
+
+    const res = await fetch('/test-center/marcus', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            headline: document.getElementById('marcus_headline').value,
+            take: document.getElementById('marcus_take').value
+        })
+    });
+
+    const data = await res.json();
+    out.textContent = JSON.stringify(data, null, 2);
+}
+
+async function testStephen() {
+    const out = document.getElementById('stephen_result');
+    out.textContent = 'Sending...';
+
+    const res = await fetch('/test-center/stephen-a', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            headline: document.getElementById('stephen_headline').value,
+            take: document.getElementById('stephen_take').value
+        })
+    });
+
+    const data = await res.json();
+    out.textContent = JSON.stringify(data, null, 2);
+}
+
+loadTeams();
+</script>
+</body>
+</html>
+"""
+
+
+@app.route(
+    "/test-center",
+    methods=["GET"]
+)
+def test_center():
+    return render_template_string(
+        TEST_CENTER_HTML
+    )
+
+
+@app.route(
+    "/test-center/trade",
+    methods=["POST"]
+)
+def test_center_trade():
+    data = request.get_json(
+        silent=True
+    ) or {}
+
+    team_a = str(
+        data.get(
+            "team_a",
+            ""
+        )
+    ).strip()
+
+    team_b = str(
+        data.get(
+            "team_b",
+            ""
+        )
+    ).strip()
+
+    if not team_a or not team_b:
+        return jsonify({
+            "success": False,
+            "error":
+                "Select both teams."
+        }), 400
+
+    if team_a.lower() == team_b.lower():
+        return jsonify({
+            "success": False,
+            "error":
+                "Choose two different teams."
+        }), 400
+
+    try:
+        team_a_sends = parse_trade_assets(
+            str(
+                data.get(
+                    "team_a_assets",
+                    ""
+                )
+            ),
+            team_a
+        )
+
+        team_b_sends = parse_trade_assets(
+            str(
+                data.get(
+                    "team_b_assets",
+                    ""
+                )
+            ),
+            team_b
+        )
+
+        if not team_a_sends:
+            return jsonify({
+                "success": False,
+                "error":
+                    "Team A needs at least one asset."
+            }), 400
+
+        if not team_b_sends:
+            return jsonify({
+                "success": False,
+                "error":
+                    "Team B needs at least one asset."
+            }), 400
+
+        analysis = analyze_trade({
+            "team_a": team_a,
+            "team_b": team_b,
+            "team_a_mention":
+                "TEST TEAM A",
+            "team_b_mention":
+                "TEST TEAM B",
+            "team_a_sends":
+                team_a_sends,
+            "team_b_sends":
+                team_b_sends
+        })
+
+        trade_card_url = None
+
+        try:
+            generate_trade_card(
+                analysis
+            )
+
+            trade_card_url = (
+                request.host_url.rstrip("/")
+                + "/trade-card/"
+                + analysis["trade_id"]
+                + ".png"
+            )
+        except Exception as e:
+            print(
+                "TEST TRADE CARD ERROR:",
+                str(e)
+            )
+
+        result = {
+            "success": True,
+            "mode": "preview",
+            "analysis": analysis,
+            "trade_card_url":
+                trade_card_url
+        }
+
+        if bool(
+            data.get(
+                "send_discord"
+            )
+        ):
+            discord_result = (
+                post_trade_to_discord(
+                    analysis
+                )
+            )
+
+            result[
+                "mode"
+            ] = "discord_test"
+
+            result[
+                "trade_discord"
+            ] = discord_result
+
+            try:
+                result[
+                    "marcus_trade_reaction"
+                ] = (
+                    post_marcus_trade_reaction(
+                        analysis
+                    )
+                )
+            except Exception as e:
+                result[
+                    "marcus_trade_reaction"
+                ] = {
+                    "sent": False,
+                    "error": str(e)
+                }
+
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 400
+
+
+@app.route(
+    "/test-center/marcus",
+    methods=["POST"]
+)
+def test_center_marcus():
+    data = request.get_json(
+        silent=True
+    ) or {}
+
+    headline = str(
+        data.get(
+            "headline",
+            "League Test Segment"
+        )
+    ).strip()
+
+    take = str(
+        data.get(
+            "take",
+            "Project Madden Media test."
+        )
+    ).strip()
+
+    result = send_analyst_embed(
+        "🧪 TEST • Marcus Hayes",
+        (
+            f"## {headline}\n"
+            f"{take}\n\n"
+            "*Test message from the Project Madden Test Center.*"
+        )
+    )
+
+    return jsonify({
+        "success":
+            bool(result.get("sent")),
+        "result":
+            result
+    }), (
+        200
+        if result.get("sent")
+        else 400
+    )
+
+
+@app.route(
+    "/test-center/stephen-a",
+    methods=["POST"]
+)
+def test_center_stephen_a():
+    data = request.get_json(
+        silent=True
+    ) or {}
+
+    headline = str(
+        data.get(
+            "headline",
+            "Project Madden Test Debate"
+        )
+    ).strip()
+
+    take = str(
+        data.get(
+            "take",
+            "Project Madden AI parody test."
+        )
+    ).strip()
+
+    result = send_stephen_a_parody_embed(
+        "🧪 TEST • Stephen A. Smith — AI Parody",
+        (
+            f"## {headline}\n"
+            f"{take}\n\n"
+            "⚠️ *Fictional AI parody for Project Madden. "
+            "This is not a real Stephen A. Smith quote or statement.*"
+        )
+    )
+
+    return jsonify({
+        "success":
+            bool(result.get("sent")),
+        "result":
+            result
+    }), (
+        200
+        if result.get("sent")
+        else 400
+    )
+
+
 # =========================================================
 # HOME / HEALTH
 # =========================================================
@@ -5444,6 +6235,7 @@ def home():
         "service": "Project Madden Analytics",
         "snallabot": "connected",
         "trade_center": "/proposetrade",
+        "test_center": "/test-center",
         "team_api": "/api/teams",
         "player_search": "/api/players",
         "game_analyst": "/analyst/reactions/pre/1",
