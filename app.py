@@ -3110,6 +3110,13 @@ def discord_bot_token():
     ).strip()
 
 
+def discord_guild_id():
+    return os.environ.get(
+        "DISCORD_GUILD_ID",
+        ""
+    ).strip()
+
+
 def discord_bot_configured():
     return bool(
         discord_application_id()
@@ -3248,6 +3255,7 @@ def save_trade_proposal(analysis):
 def register_trade_slash_command():
     app_id = discord_application_id()
     token = discord_bot_token()
+    guild_id = discord_guild_id()
 
     if not app_id or not token:
         return {
@@ -3258,8 +3266,6 @@ def register_trade_slash_command():
             )
         }
 
-    # Discord limits a single string-choice option to 25 choices.
-    # Because the NFL has 32 teams, team fields use autocomplete.
     command = {
         "name": "trade",
         "description": (
@@ -3316,33 +3322,38 @@ def register_trade_slash_command():
         ]
     }
 
-    response = requests.put(
-        (
+    headers = {
+        "Authorization": f"Bot {token}",
+        "Content-Type": "application/json"
+    }
+
+    # Guild commands update in Discord almost immediately.
+    if guild_id:
+        url = (
+            f"{DISCORD_API_BASE}/applications/"
+            f"{app_id}/guilds/{guild_id}/commands"
+        )
+        scope = "guild"
+    else:
+        url = (
             f"{DISCORD_API_BASE}/applications/"
             f"{app_id}/commands"
-        ),
-        headers={
-            "Authorization":
-                f"Bot {token}",
-            "Content-Type":
-                "application/json"
-        },
-        json=[
-            command
-        ],
+        )
+        scope = "global"
+
+    response = requests.put(
+        url,
+        headers=headers,
+        json=[command],
         timeout=15
     )
 
-    if response.status_code not in [
-        200,
-        201
-    ]:
+    if response.status_code not in [200, 201]:
         return {
             "success": False,
-            "status_code":
-                response.status_code,
-            "error":
-                response.text[:500]
+            "status_code": response.status_code,
+            "scope": scope,
+            "error": response.text[:500]
         }
 
     try:
@@ -3356,10 +3367,13 @@ def register_trade_slash_command():
             item.get("name")
             for item in body
         ],
-        "scope": "global",
+        "scope": scope,
+        "guild_id_configured": bool(guild_id),
         "note": (
-            "Global slash commands can take "
-            "some time to appear in Discord."
+            "Guild command updates are nearly instant."
+            if guild_id
+            else
+            "Global slash commands can take time to refresh in Discord."
         )
     }
 
@@ -4054,6 +4068,8 @@ def discord_status():
             bool(discord_public_key()),
         "bot_token_configured":
             bool(discord_bot_token()),
+        "guild_id_configured":
+            bool(discord_guild_id()),
         "interactions_endpoint":
             discord_interactions_url(),
         "slash_command":
