@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template_string
 import json
 import os
 import hashlib
@@ -12,7 +12,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 
 # =========================================================
-# BASIC HELPERS
+# HELPERS
 # =========================================================
 
 def load_json_file(filename):
@@ -105,467 +105,7 @@ def stable_choice(options, key):
 
 
 # =========================================================
-# GAME STORY DETECTOR
-# =========================================================
-
-def classify_game_story(game, team_map):
-
-    home = team_map.get(
-        str(game.get("homeTeamId")),
-        {}
-    )
-
-    away = team_map.get(
-        str(game.get("awayTeamId")),
-        {}
-    )
-
-    home_score = game.get("homeScore", 0)
-    away_score = game.get("awayScore", 0)
-
-    home_ovr = home.get("overall")
-    away_ovr = away.get("overall")
-
-    result = {
-        "schedule_id": game.get("scheduleId"),
-
-        "away_team": away.get(
-            "name",
-            "Unknown"
-        ),
-
-        "home_team": home.get(
-            "name",
-            "Unknown"
-        ),
-
-        "away_score": away_score,
-        "home_score": home_score,
-
-        "away_overall": away_ovr,
-        "home_overall": home_ovr,
-
-        "away_user": away.get(
-            "user",
-            ""
-        ),
-
-        "home_user": home.get(
-            "user",
-            ""
-        ),
-
-        "stories": []
-    }
-
-    stories = result["stories"]
-
-    # Pregame
-    if home_score == 0 and away_score == 0:
-
-        if (
-            home_ovr is not None
-            and away_ovr is not None
-        ):
-
-            gap = abs(
-                home_ovr - away_ovr
-            )
-
-            if gap == 0:
-                stories.append({
-                    "type": "even_matchup",
-                    "severity": "medium",
-                    "headline": "Evenly matched teams"
-                })
-
-            elif gap >= 6:
-                stories.append({
-                    "type": "major_mismatch",
-                    "severity": "high",
-                    "headline": "Major overall mismatch"
-                })
-
-            elif gap >= 4:
-                stories.append({
-                    "type": "clear_favorite",
-                    "severity": "medium",
-                    "headline": "Clear favorite by overall"
-                })
-
-        if game.get(
-            "isGameOfTheWeek",
-            False
-        ):
-            stories.append({
-                "type": "game_of_the_week",
-                "severity": "high",
-                "headline": "Game of the Week"
-            })
-
-        if home.get("user") or away.get("user"):
-            stories.append({
-                "type": "user_game",
-                "severity": "medium",
-                "headline": "User-controlled matchup"
-            })
-
-        return result
-
-    # Postgame
-    margin = abs(
-        home_score - away_score
-    )
-
-    result["margin"] = margin
-
-    if home_score > away_score:
-        winner = home
-        loser = away
-        winner_location = "home"
-        loser_score = away_score
-
-    elif away_score > home_score:
-        winner = away
-        loser = home
-        winner_location = "away"
-        loser_score = home_score
-
-    else:
-        result["winner"] = "Tie"
-
-        stories.append({
-            "type": "tie",
-            "severity": "medium",
-            "headline": "Game ended in a tie"
-        })
-
-        return result
-
-    result["winner"] = winner.get(
-        "name",
-        "Unknown"
-    )
-
-    result["loser"] = loser.get(
-        "name",
-        "Unknown"
-    )
-
-    result["winner_location"] = (
-        winner_location
-    )
-
-    winner_ovr = winner.get("overall")
-    loser_ovr = loser.get("overall")
-
-    if margin >= 30:
-        stories.append({
-            "type": "embarrassing_blowout",
-            "severity": "critical",
-            "headline": "Embarrassing blowout"
-        })
-
-    elif margin >= 20:
-        stories.append({
-            "type": "blowout",
-            "severity": "high",
-            "headline": "Lopsided loss"
-        })
-
-    elif margin <= 3:
-        stories.append({
-            "type": "nail_biter",
-            "severity": "high",
-            "headline": "Nail-biter"
-        })
-
-    elif margin <= 7:
-        stories.append({
-            "type": "close_game",
-            "severity": "medium",
-            "headline": "One-score game"
-        })
-
-    if winner_location == "away":
-        stories.append({
-            "type": "road_win",
-            "severity": "medium",
-            "headline": "Road victory"
-        })
-
-    if (
-        winner_ovr is not None
-        and loser_ovr is not None
-        and winner_ovr < loser_ovr
-    ):
-
-        difference = (
-            loser_ovr - winner_ovr
-        )
-
-        severity = "medium"
-
-        if difference >= 5:
-            severity = "high"
-
-        if difference >= 8:
-            severity = "critical"
-
-        stories.append({
-            "type": "upset",
-            "severity": severity,
-            "headline": "Upset victory",
-            "overall_difference": difference
-        })
-
-    if (
-        winner_ovr is not None
-        and loser_ovr is not None
-        and loser_ovr > winner_ovr
-        and margin >= 14
-    ):
-
-        stories.append({
-            "type": "favorite_disappointment",
-            "severity": "high",
-            "headline": "Favorite failed to deliver"
-        })
-
-    if loser_score == 0:
-        stories.append({
-            "type": "shutout",
-            "severity": "high",
-            "headline": "Shutout"
-        })
-
-    return result
-
-
-# =========================================================
-# GAME ANALYST REACTIONS
-# =========================================================
-
-def generate_reaction(
-    game_data,
-    story,
-    season_type,
-    week_number
-):
-
-    away = game_data["away_team"]
-    home = game_data["home_team"]
-
-    away_ovr = game_data.get(
-        "away_overall"
-    )
-
-    home_ovr = game_data.get(
-        "home_overall"
-    )
-
-    story_type = story.get("type")
-
-    key = (
-        f"{season_type}-"
-        f"{week_number}-"
-        f"{game_data.get('schedule_id')}-"
-        f"{story_type}"
-    )
-
-    if story_type == "major_mismatch":
-
-        if away_ovr > home_ovr:
-            favorite = away
-            underdog = home
-        else:
-            favorite = home
-            underdog = away
-
-        return stable_choice([
-            (
-                f"{team_phrase_start(favorite)} should win this game. "
-                f"They've got the better roster and the talent edge. "
-                f"If they struggle with {team_phrase(underdog)}, "
-                f"we're going to have some serious questions."
-            ),
-
-            (
-                f"This is one of those games where "
-                f"{team_phrase(favorite)} cannot afford to play around. "
-                f"{team_phrase_start(underdog)} would love nothing more "
-                f"than to embarrass them."
-            )
-        ], key)
-
-    if story_type == "clear_favorite":
-
-        if away_ovr > home_ovr:
-            favorite = away
-            underdog = home
-        else:
-            favorite = home
-            underdog = away
-
-        return stable_choice([
-            (
-                f"I'm leaning toward {team_phrase(favorite)} here. "
-                f"They've got the roster edge, but they're still "
-                f"going to have to earn it. "
-                f"{team_phrase_start(underdog)} aren't handing anybody a win."
-            ),
-
-            (
-                f"{team_phrase_start(favorite)} have the advantage on paper. "
-                f"That's fine. Now show me it actually matters "
-                f"once the game starts."
-            )
-        ], key)
-
-    if story_type == "even_matchup":
-
-        return stable_choice([
-            (
-                f"I don't see much separating "
-                f"{team_phrase(away)} and {team_phrase(home)}. "
-                f"Turnovers and late-game execution are going "
-                f"to decide this one."
-            ),
-
-            (
-                f"If you want a matchup that could go either way, "
-                f"this is it. I can't give either side a comfortable edge."
-            )
-        ], key)
-
-    if story_type == "user_game":
-
-        if game_data.get("away_user"):
-            user_team = away
-            opponent = home
-            user_name = game_data.get(
-                "away_user"
-            )
-        else:
-            user_team = home
-            opponent = away
-            user_name = game_data.get(
-                "home_user"
-            )
-
-        return stable_choice([
-            (
-                f"I'm keeping a close eye on {team_phrase(user_team)}. "
-                f"{user_name} is on the sticks, so I'm not just looking "
-                f"at the ratings screen. A good user can erase a lot "
-                f"of advantages on paper."
-            ),
-
-            (
-                f"Don't dismiss {team_phrase(user_team)} because of the ratings. "
-                f"{user_name} is controlling this team, and that changes "
-                f"the conversation against {team_phrase(opponent)}."
-            )
-        ], key)
-
-    if story_type == "embarrassing_blowout":
-
-        loser = game_data.get("loser")
-        winner = game_data.get("winner")
-        margin = game_data.get("margin")
-
-        return stable_choice([
-            (
-                f"No. Absolutely not. "
-                f"{team_phrase_start(loser)} just lost by {margin} points. "
-                f"That's a complete breakdown from top to bottom."
-            ),
-
-            (
-                f"{team_phrase_start(loser)} got embarrassed. "
-                f"There's no softer way to say it. "
-                f"{team_phrase_start(winner)} controlled that game."
-            )
-        ], key)
-
-    if story_type == "blowout":
-
-        loser = game_data.get("loser")
-        winner = game_data.get("winner")
-
-        return (
-            f"{team_phrase_start(loser)} got handled. "
-            f"This wasn't one or two bad plays. "
-            f"{team_phrase_start(winner)} were simply better."
-        )
-
-    if story_type == "favorite_disappointment":
-
-        loser = game_data.get("loser")
-
-        return (
-            f"I don't want to hear about ratings after that. "
-            f"{team_phrase_start(loser)} were supposed to be the better team, "
-            f"and they didn't look like it."
-        )
-
-    if story_type == "upset":
-
-        winner = game_data.get("winner")
-        loser = game_data.get("loser")
-
-        return (
-            f"Now THAT is a statement. "
-            f"{team_phrase_start(winner)} just beat a team "
-            f"that was supposed to be better on paper. "
-            f"Everybody who picked {team_phrase(loser)} has some explaining to do."
-        )
-
-    if story_type == "shutout":
-
-        loser = game_data.get("loser")
-
-        return (
-            f"Zero points? That's unacceptable. "
-            f"{team_phrase_start(loser)} have to go back "
-            f"and figure out what went wrong offensively."
-        )
-
-    if story_type == "nail_biter":
-
-        winner = game_data.get("winner")
-
-        return (
-            f"That was a fight. "
-            f"{team_phrase_start(winner)} had to earn every bit of that win."
-        )
-
-    if story_type == "close_game":
-
-        winner = game_data.get("winner")
-
-        return (
-            f"It wasn't easy, but {team_phrase(winner)} "
-            f"found a way to finish the job."
-        )
-
-    if story_type == "road_win":
-
-        winner = game_data.get("winner")
-
-        return (
-            f"I give {team_phrase(winner)} credit. "
-            f"Going on the road and getting it done matters."
-        )
-
-    return (
-        f"{team_phrase_start(away)} against {team_phrase(home)} "
-        f"is one of the stories I'm watching."
-    )
-
-
-# =========================================================
-# TRADE VALUE ENGINE
+# TRADE VALUE SETTINGS
 # =========================================================
 
 DEV_VALUES = {
@@ -626,12 +166,11 @@ PICK_VALUES = {
 }
 
 
-def calculate_player_value(asset):
+# =========================================================
+# TRADE VALUE ENGINE
+# =========================================================
 
-    if asset.get("value_override") is not None:
-        return float(
-            asset.get("value_override")
-        )
+def calculate_player_value(asset):
 
     overall = float(
         asset.get("overall", 70)
@@ -649,19 +188,16 @@ def calculate_player_value(asset):
         asset.get("dev", "normal")
     ).lower()
 
-    # OVR is the main value
     value = max(
         1,
         (overall - 60) * 1.8
     )
 
-    # Development trait
     value += DEV_VALUES.get(
         dev,
         0
     )
 
-    # Age
     if age <= 22:
         value += 9
 
@@ -680,7 +216,6 @@ def calculate_player_value(asset):
     elif age >= 28:
         value -= 3
 
-    # Premium positions
     value *= POSITION_MULTIPLIERS.get(
         position,
         1.0
@@ -693,11 +228,6 @@ def calculate_player_value(asset):
 
 
 def calculate_pick_value(asset):
-
-    if asset.get("value_override") is not None:
-        return float(
-            asset.get("value_override")
-        )
 
     round_number = int(
         asset.get("round", 7)
@@ -712,7 +242,6 @@ def calculate_pick_value(asset):
         1
     )
 
-    # Future picks are worth a little less
     if years_away > 0:
         value *= (
             0.90 ** years_away
@@ -731,16 +260,9 @@ def calculate_asset_value(asset):
     ).lower()
 
     if asset_type == "pick":
-        value = calculate_pick_value(
-            asset
-        )
+        return calculate_pick_value(asset)
 
-    else:
-        value = calculate_player_value(
-            asset
-        )
-
-    return value
+    return calculate_player_value(asset)
 
 
 def calculate_package_value(assets):
@@ -767,12 +289,12 @@ def calculate_package_value(assets):
 def trade_grade(value_received, value_sent):
 
     difference = (
-        value_received
-        - value_sent
+        value_received - value_sent
     )
 
     if value_sent <= 0:
         percentage = 100
+
     else:
         percentage = (
             difference / value_sent
@@ -817,50 +339,103 @@ def trade_grade(value_received, value_sent):
 
 def summarize_asset(asset):
 
-    asset_type = str(
-        asset.get("type", "player")
-    ).lower()
-
-    if asset_type == "pick":
-
-        year = asset.get(
-            "year",
-            "Future"
-        )
-
-        round_number = asset.get(
-            "round",
-            "?"
-        )
+    if asset.get("type") == "pick":
 
         return (
-            f"{year} Round {round_number} Pick"
+            f"{asset.get('year')} "
+            f"Round {asset.get('round')} Pick"
         )
 
-    name = asset.get(
-        "name",
-        "Unknown Player"
+    return (
+        f"{asset.get('name')} "
+        f"({asset.get('overall')} OVR "
+        f"{asset.get('position')})"
     )
-
-    overall = asset.get(
-        "overall"
-    )
-
-    position = asset.get(
-        "position",
-        ""
-    )
-
-    if overall is not None:
-        return (
-            f"{name} ({overall} OVR {position})"
-        )
-
-    return f"{name} ({position})"
 
 
 # =========================================================
-# TRADE ANALYST REACTION
+# PARSE BROWSER TRADE ASSETS
+# =========================================================
+
+def parse_trade_assets(text):
+
+    assets = []
+
+    lines = text.splitlines()
+
+    for line in lines:
+
+        line = line.strip()
+
+        if not line:
+            continue
+
+        parts = [
+            p.strip()
+            for p in line.split("|")
+        ]
+
+        asset_type = (
+            parts[0].lower()
+            if parts
+            else ""
+        )
+
+        # player|Name|POS|OVR|AGE|DEV
+
+        if asset_type == "player":
+
+            if len(parts) < 6:
+                raise ValueError(
+                    "Player format must be: "
+                    "player|Name|POS|OVR|Age|Dev"
+                )
+
+            assets.append({
+                "type": "player",
+                "name": parts[1],
+                "position": parts[2],
+                "overall": int(parts[3]),
+                "age": int(parts[4]),
+                "dev": parts[5]
+            })
+
+        # pick|2027|2|1
+
+        elif asset_type == "pick":
+
+            if len(parts) < 3:
+                raise ValueError(
+                    "Pick format must be: "
+                    "pick|Year|Round|YearsAway"
+                )
+
+            years_away = 0
+
+            if len(parts) >= 4:
+                years_away = int(
+                    parts[3]
+                )
+
+            assets.append({
+                "type": "pick",
+                "year": int(parts[1]),
+                "round": int(parts[2]),
+                "years_away": years_away
+            })
+
+        else:
+
+            raise ValueError(
+                "Every asset must start with "
+                "'player' or 'pick'."
+            )
+
+    return assets
+
+
+# =========================================================
+# TRADE REACTION
 # =========================================================
 
 def generate_trade_reaction(
@@ -870,79 +445,62 @@ def generate_trade_reaction(
     grade_b,
     value_a_received,
     value_b_received,
-    assets_a,
-    assets_b,
     trade_id
 ):
 
-    gap = abs(
-        value_a_received
-        - value_b_received
-    )
-
     if value_a_received > value_b_received:
+
         winner = team_a
         loser = team_b
-        winner_grade = grade_a["grade"]
 
     elif value_b_received > value_a_received:
+
         winner = team_b
         loser = team_a
-        winner_grade = grade_b["grade"]
 
     else:
-        winner = None
-        loser = None
-        winner_grade = "C+"
 
-    if winner is None:
-
-        verdict = "Even trade"
-
-        reaction = stable_choice([
+        return (
+            "Even trade",
             (
-                f"I don't have a problem with this deal. "
-                f"{team_phrase_start(team_a)} got something they needed, "
-                f"{team_phrase(team_b)} got something they needed, "
-                f"and neither side got taken to the cleaners."
-            ),
-
-            (
-                f"This is one of those trades where I can understand "
-                f"the thinking on both sides. I don't see a clear robbery here."
+                "I can understand this deal from both sides. "
+                "The value is close enough that nobody got robbed here."
             )
-        ], trade_id)
+        )
 
-        return verdict, reaction
-
-    percentage_gap = max(
+    gap = max(
         abs(grade_a["percentage"]),
         abs(grade_b["percentage"])
     )
 
-    if percentage_gap >= 35:
+    if gap >= 35:
 
         verdict = (
-            f"{winner} won the trade — major steal"
+            f"{winner} won — major steal"
         )
 
         reaction = stable_choice([
             (
-                f"Hold on. What are {team_phrase(loser)} doing here? "
-                f"I look at this deal and I see {team_phrase(winner)} "
-                f"walking away with the better value by a mile. "
-                f"That's not a small difference. That's a robbery."
+                f"Hold on. What are {team_phrase(loser)} doing? "
+                f"{team_phrase_start(winner)} just walked away "
+                f"with significantly better value. "
+                f"I'm calling this a robbery."
             ),
 
             (
-                f"I do not like this for {team_phrase(loser)} at all. "
-                f"{team_phrase_start(winner)} got the better end of this deal, "
-                f"and it isn't particularly close. "
-                f"If I'm running {team_phrase(loser)}, somebody has to explain this to me."
+                f"I do not like this deal for {team_phrase(loser)}. "
+                f"Not even a little bit. "
+                f"{team_phrase_start(winner)} clearly got the better package."
+            ),
+
+            (
+                f"Somebody needs to explain this one to me. "
+                f"{team_phrase_start(winner)} got the better end of this deal "
+                f"and it really isn't close."
             )
         ], trade_id)
 
-    elif percentage_gap >= 20:
+    elif gap >= 20:
 
         verdict = (
             f"{winner} won the trade"
@@ -950,47 +508,38 @@ def generate_trade_reaction(
 
         reaction = stable_choice([
             (
-                f"I understand what both teams were trying to do, "
-                f"but I'm giving this one to {team_phrase(winner)}. "
-                f"They got the better overall value, and I think "
-                f"{team_phrase(loser)} paid too much."
+                f"I understand the thinking on both sides, "
+                f"but I'm giving this deal to {team_phrase(winner)}. "
+                f"{team_phrase_start(loser)} gave up more value than I would've liked."
             ),
 
             (
-                f"{team_phrase_start(winner)} came out ahead here. "
-                f"I don't necessarily hate the deal for {team_phrase(loser)}, "
-                f"but they gave up more than I would've been comfortable giving."
+                f"{team_phrase_start(winner)} came out ahead. "
+                f"I wouldn't call it a robbery, but they definitely "
+                f"got the better end of the deal."
             )
         ], trade_id)
 
-    elif percentage_gap >= 8:
+    elif gap >= 8:
 
         verdict = (
             f"Slight edge to {winner}"
         )
 
-        reaction = stable_choice([
-            (
-                f"This is pretty close, but if you're making me pick a winner, "
-                f"I'm taking {team_phrase(winner)}. "
-                f"They squeezed a little more value out of the deal."
-            ),
-
-            (
-                f"I can live with this for both teams. "
-                f"I just think {team_phrase(winner)} came away "
-                f"with the slightly better package."
-            )
-        ], trade_id)
+        reaction = (
+            f"This is pretty close. "
+            f"If you're forcing me to pick a winner, "
+            f"I'm taking {team_phrase(winner)} by a small margin."
+        )
 
     else:
 
         verdict = "Fair trade"
 
         reaction = (
-            f"I don't see a loser here. "
-            f"The value is close enough that this is going to come down "
-            f"to how these players actually perform."
+            "I don't see a clear loser here. "
+            "The value is close enough that this is going to come down "
+            "to how these players actually perform."
         )
 
     return verdict, reaction
@@ -998,25 +547,16 @@ def generate_trade_reaction(
 
 def analyze_trade(data):
 
-    team_a = data.get(
-        "team_a",
-        "Team A"
-    )
+    team_a = data["team_a"]
+    team_b = data["team_b"]
 
-    team_b = data.get(
-        "team_b",
-        "Team B"
-    )
+    team_a_sends = data[
+        "team_a_sends"
+    ]
 
-    team_a_sends = data.get(
-        "team_a_sends",
-        []
-    )
-
-    team_b_sends = data.get(
-        "team_b_sends",
-        []
-    )
+    team_b_sends = data[
+        "team_b_sends"
+    ]
 
     value_a_sent, breakdown_a = (
         calculate_package_value(
@@ -1030,11 +570,13 @@ def analyze_trade(data):
         )
     )
 
-    # Team A receives Team B's package
-    value_a_received = value_b_sent
+    value_a_received = (
+        value_b_sent
+    )
 
-    # Team B receives Team A's package
-    value_b_received = value_a_sent
+    value_b_received = (
+        value_a_sent
+    )
 
     grade_a = trade_grade(
         value_a_received,
@@ -1047,13 +589,9 @@ def analyze_trade(data):
     )
 
     trade_id = data.get(
-        "trade_id"
+        "trade_id",
+        str(uuid.uuid4())[:8]
     )
-
-    if not trade_id:
-        trade_id = str(
-            uuid.uuid4()
-        )[:8]
 
     verdict, reaction = (
         generate_trade_reaction(
@@ -1063,8 +601,6 @@ def analyze_trade(data):
             grade_b,
             value_a_received,
             value_b_received,
-            breakdown_a,
-            breakdown_b,
             trade_id
         )
     )
@@ -1084,23 +620,53 @@ def analyze_trade(data):
         "team_a": team_a,
         "team_b": team_b,
 
-        "team_a_sends": breakdown_a,
-        "team_b_sends": breakdown_b,
+        "team_a_mention":
+            data.get(
+                "team_a_mention",
+                ""
+            ),
 
-        "team_a_value_sent": value_a_sent,
-        "team_a_value_received": value_a_received,
+        "team_b_mention":
+            data.get(
+                "team_b_mention",
+                ""
+            ),
 
-        "team_b_value_sent": value_b_sent,
-        "team_b_value_received": value_b_received,
+        "team_a_sends":
+            breakdown_a,
 
-        "team_a_grade": grade_a,
-        "team_b_grade": grade_b,
+        "team_b_sends":
+            breakdown_b,
 
-        "winner": winner,
+        "team_a_value_sent":
+            value_a_sent,
 
-        "verdict": verdict,
+        "team_a_value_received":
+            value_a_received,
 
-        "reaction": reaction,
+        "team_b_value_sent":
+            value_b_sent,
+
+        "team_b_value_received":
+            value_b_received,
+
+        "team_a_grade":
+            grade_a,
+
+        "team_b_grade":
+            grade_b,
+
+        "winner":
+            winner,
+
+        "verdict":
+            verdict,
+
+        "reaction":
+            reaction,
+
+        "status":
+            "PROPOSED",
 
         "created_at":
             datetime.now(
@@ -1118,11 +684,18 @@ def home():
 
     return jsonify({
         "status": "online",
-        "service": "Project Madden Analytics",
-        "analyst_system": "online",
-        "trade_analyst": "online",
-        "player_system":
-            "waiting_for_completed_game_data"
+
+        "service":
+            "Project Madden Analytics",
+
+        "snallabot":
+            "connected",
+
+        "trade_desk":
+            "online",
+
+        "propose_trade_page":
+            "/proposetrade"
     })
 
 
@@ -1169,6 +742,7 @@ def snallabot_receiver(subpath):
         subpath
     )
 
+    # League teams
     if parts[-1] == "leagueteams":
 
         save_json_file(
@@ -1181,6 +755,7 @@ def snallabot_receiver(subpath):
             "type": "leagueteams"
         }), 200
 
+    # Standings
     if parts[-1] == "standings":
 
         save_json_file(
@@ -1193,6 +768,7 @@ def snallabot_receiver(subpath):
             "type": "standings"
         }), 200
 
+    # Extra
     if parts[-1] == "extra":
 
         save_json_file(
@@ -1205,6 +781,7 @@ def snallabot_receiver(subpath):
             "type": "extra"
         }), 200
 
+    # Free agents
     if (
         "freeagents" in parts
         and parts[-1] == "roster"
@@ -1220,6 +797,7 @@ def snallabot_receiver(subpath):
             "type": "freeagents"
         }), 200
 
+    # Team rosters
     if (
         "team" in parts
         and parts[-1] == "roster"
@@ -1244,6 +822,7 @@ def snallabot_receiver(subpath):
             "team_id": team_id
         }), 200
 
+    # Weekly Snallabot exports
     if "week" in parts:
 
         try:
@@ -1314,224 +893,628 @@ def snallabot_receiver(subpath):
 
 
 # =========================================================
-# GAME ANALYST REACTIONS
+# PROPOSE TRADE WEBSITE
 # =========================================================
 
+TRADE_PAGE = """
+<!DOCTYPE html>
+<html>
+<head>
+
+<meta name="viewport"
+content="width=device-width, initial-scale=1">
+
+<title>Project Madden Trade Center</title>
+
+<style>
+
+body {
+    margin: 0;
+    background: #0c0c0f;
+    color: white;
+    font-family: Arial, sans-serif;
+}
+
+.container {
+    max-width: 800px;
+    margin: auto;
+    padding: 20px;
+}
+
+.logo {
+    text-align: center;
+    font-size: 30px;
+    font-weight: bold;
+    margin-bottom: 5px;
+}
+
+.subtitle {
+    text-align: center;
+    color: #aaa;
+    margin-bottom: 30px;
+}
+
+.card {
+    background: #17171c;
+    border: 1px solid #2d2d34;
+    border-radius: 14px;
+    padding: 18px;
+    margin-bottom: 20px;
+}
+
+h2 {
+    margin-top: 0;
+}
+
+label {
+    display: block;
+    font-weight: bold;
+    margin-top: 15px;
+    margin-bottom: 6px;
+}
+
+input,
+textarea {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 13px;
+    border-radius: 8px;
+    border: 1px solid #444;
+    background: #0e0e12;
+    color: white;
+    font-size: 16px;
+}
+
+textarea {
+    min-height: 140px;
+}
+
+button {
+    width: 100%;
+    margin-top: 20px;
+    padding: 16px;
+    border: none;
+    border-radius: 9px;
+    background: #5865F2;
+    color: white;
+    font-size: 18px;
+    font-weight: bold;
+}
+
+.help {
+    color: #aaa;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.error {
+    background: #461919;
+    border: 1px solid #a33434;
+    border-radius: 10px;
+    padding: 15px;
+    margin-bottom: 20px;
+}
+
+.result {
+    background: #151a15;
+    border: 1px solid #325a32;
+    border-radius: 12px;
+    padding: 20px;
+}
+
+.grade {
+    font-size: 24px;
+    font-weight: bold;
+}
+
+.mention {
+    color: #9da7ff;
+    font-weight: bold;
+}
+
+.assets {
+    white-space: pre-line;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="container">
+
+<div class="logo">
+🏈 PROJECT MADDEN
+</div>
+
+<div class="subtitle">
+Trade Proposal Center
+</div>
+
+
+{% if error %}
+
+<div class="error">
+<strong>Trade could not be submitted.</strong><br><br>
+{{ error }}
+</div>
+
+{% endif %}
+
+
+{% if analysis %}
+
+<div class="result">
+
+<h2>🚨 Trade Proposed</h2>
+
+<p>
+<span class="mention">
+{{ analysis.team_a_mention }}
+</span>
+
+and
+
+<span class="mention">
+{{ analysis.team_b_mention }}
+</span>
+</p>
+
+<hr>
+
+<h3>{{ analysis.team_a }} SENDS</h3>
+
+<div class="assets">
+{% for asset in analysis.team_a_sends %}
+• {{ summarize(asset) }}
+{% endfor %}
+</div>
+
+
+<h3>{{ analysis.team_b }} SENDS</h3>
+
+<div class="assets">
+{% for asset in analysis.team_b_sends %}
+• {{ summarize(asset) }}
+{% endfor %}
+</div>
+
+<hr>
+
+<h3>📊 Analyst Grades</h3>
+
+<p class="grade">
+{{ analysis.team_a }}:
+{{ analysis.team_a_grade.grade }}
+</p>
+
+<p class="grade">
+{{ analysis.team_b }}:
+{{ analysis.team_b_grade.grade }}
+</p>
+
+<h3>🏆 Verdict</h3>
+
+<p>
+<strong>
+{{ analysis.verdict }}
+</strong>
+</p>
+
+<h3>🎙️ Project Madden First Take</h3>
+
+<p>
+{{ analysis.reaction }}
+</p>
+
+<p>
+<strong>Status:</strong>
+PROPOSED — waiting for approval
+</p>
+
+</div>
+
+<br>
+
+<a href="/proposetrade">
+<button>
+Propose Another Trade
+</button>
+</a>
+
+
+{% else %}
+
+
+<form method="POST">
+
+<div class="card">
+
+<h2>Team A</h2>
+
+<label>Team</label>
+
+<input
+name="team_a"
+placeholder="Example: Ravens"
+required
+>
+
+<label>Your Discord @</label>
+
+<input
+name="team_a_mention"
+placeholder="@EBKJayyyyy"
+required
+>
+
+<label>Team A Sends</label>
+
+<textarea
+name="team_a_assets"
+placeholder="player|Example WR|WR|85|24|star
+pick|2027|2|1"
+required
+></textarea>
+
+<p class="help">
+
+Player format:<br>
+player|Name|Position|OVR|Age|Dev
+
+<br><br>
+
+Example:<br>
+player|Zay Flowers|WR|88|25|superstar
+
+<br><br>
+
+Pick format:<br>
+pick|Year|Round|YearsAway
+
+<br><br>
+
+Example:<br>
+pick|2027|2|1
+
+</p>
+
+</div>
+
+
+<div class="card">
+
+<h2>Team B</h2>
+
+<label>Team</label>
+
+<input
+name="team_b"
+placeholder="Example: Chiefs"
+required
+>
+
+<label>Other Owner's Discord @</label>
+
+<input
+name="team_b_mention"
+placeholder="@ChiefsOwner"
+required
+>
+
+<label>Team B Sends</label>
+
+<textarea
+name="team_b_assets"
+placeholder="player|Example CB|CB|90|23|superstar
+pick|2027|1|1"
+required
+></textarea>
+
+</div>
+
+
+<button type="submit">
+
+🚨 PROPOSE TRADE
+
+</button>
+
+</form>
+
+
+{% endif %}
+
+</div>
+
+</body>
+</html>
+"""
+
+
 @app.route(
-    "/analyst/reactions/<season_type>/<week_number>"
+    "/proposetrade",
+    methods=["GET", "POST"]
 )
-def analyst_reactions(
-    season_type,
-    week_number
-):
+def propose_trade():
 
-    filename = get_schedule_file(
-        season_type,
-        week_number
-    )
+    if request.method == "GET":
 
-    if not os.path.exists(filename):
-
-        return jsonify({
-            "error": "Schedule data not found"
-        }), 404
-
-    with open(filename, "r") as f:
-        schedule_data = json.load(f)
-
-    team_map = get_team_map()
-
-    reactions = []
-
-    for game in schedule_data.get(
-        "gameScheduleInfoList",
-        []
-    ):
-
-        game_data = classify_game_story(
-            game,
-            team_map
+        return render_template_string(
+            TRADE_PAGE,
+            analysis=None,
+            error=None,
+            summarize=summarize_asset
         )
 
-        for story in game_data["stories"]:
+    team_a = request.form.get(
+        "team_a",
+        ""
+    ).strip()
 
-            reactions.append({
-                "matchup":
-                    (
-                        f"{game_data['away_team']} "
-                        f"@ {game_data['home_team']}"
-                    ),
+    team_b = request.form.get(
+        "team_b",
+        ""
+    ).strip()
 
-                "story_type":
-                    story["type"],
+    mention_a = request.form.get(
+        "team_a_mention",
+        ""
+    ).strip()
 
-                "headline":
-                    story["headline"],
+    mention_b = request.form.get(
+        "team_b_mention",
+        ""
+    ).strip()
 
-                "severity":
-                    story["severity"],
-
-                "reaction":
-                    generate_reaction(
-                        game_data,
-                        story,
-                        season_type,
-                        week_number
-                    )
-            })
-
-    return jsonify({
-        "analyst":
-            "Project Madden First Take",
-
-        "season_type":
-            season_type,
-
-        "week":
-            week_number,
-
-        "reaction_count":
-            len(reactions),
-
-        "reactions":
-            reactions
-    })
-
-
-# =========================================================
-# TRADE ANALYST
-# =========================================================
-
-@app.route(
-    "/analyst/trade",
-    methods=["POST"]
-)
-def analyst_trade():
-
-    data = request.get_json(
-        silent=True
+    assets_a_text = request.form.get(
+        "team_a_assets",
+        ""
     )
 
-    if not data:
+    assets_b_text = request.form.get(
+        "team_b_assets",
+        ""
+    )
 
-        return jsonify({
-            "error": "Trade JSON required"
-        }), 400
+    # Require @ mentions
 
-    required = [
-        "team_a",
-        "team_b",
-        "team_a_sends",
-        "team_b_sends"
-    ]
+    if not mention_a.startswith("@"):
 
-    missing = [
-        field
-        for field in required
-        if field not in data
-    ]
+        return render_template_string(
+            TRADE_PAGE,
+            analysis=None,
+            error=(
+                "Team A owner must be tagged "
+                "with an @ mention."
+            ),
+            summarize=summarize_asset
+        )
 
-    if missing:
+    if not mention_b.startswith("@"):
 
-        return jsonify({
-            "error":
-                "Missing required fields",
+        return render_template_string(
+            TRADE_PAGE,
+            analysis=None,
+            error=(
+                "Team B owner must be tagged "
+                "with an @ mention."
+            ),
+            summarize=summarize_asset
+        )
 
-            "missing":
-                missing
-        }), 400
+    if team_a.lower() == team_b.lower():
+
+        return render_template_string(
+            TRADE_PAGE,
+            analysis=None,
+            error=(
+                "A team cannot trade with itself."
+            ),
+            summarize=summarize_asset
+        )
+
+    try:
+
+        team_a_sends = parse_trade_assets(
+            assets_a_text
+        )
+
+        team_b_sends = parse_trade_assets(
+            assets_b_text
+        )
+
+    except Exception as e:
+
+        return render_template_string(
+            TRADE_PAGE,
+            analysis=None,
+            error=str(e),
+            summarize=summarize_asset
+        )
+
+    if not team_a_sends:
+
+        return render_template_string(
+            TRADE_PAGE,
+            analysis=None,
+            error=(
+                f"{team_a} must send at least one asset."
+            ),
+            summarize=summarize_asset
+        )
+
+    if not team_b_sends:
+
+        return render_template_string(
+            TRADE_PAGE,
+            analysis=None,
+            error=(
+                f"{team_b} must send at least one asset."
+            ),
+            summarize=summarize_asset
+        )
+
+    trade_data = {
+        "team_a":
+            team_a,
+
+        "team_b":
+            team_b,
+
+        "team_a_mention":
+            mention_a,
+
+        "team_b_mention":
+            mention_b,
+
+        "team_a_sends":
+            team_a_sends,
+
+        "team_b_sends":
+            team_b_sends
+    }
 
     analysis = analyze_trade(
-        data
+        trade_data
     )
 
-    history = load_json_file(
-        "trades.json"
+    proposals = load_json_file(
+        "trade_proposals.json"
     )
 
     if not isinstance(
-        history,
+        proposals,
         list
     ):
-        history = []
+        proposals = []
 
-    history.append(
+    proposals.append(
         analysis
     )
 
     save_json_file(
-        "trades.json",
-        history
+        "trade_proposals.json",
+        proposals
     )
 
-    return jsonify({
-        "analyst":
-            "Project Madden First Take",
+    return render_template_string(
+        TRADE_PAGE,
+        analysis=analysis,
+        error=None,
+        summarize=summarize_asset
+    )
 
-        "analysis":
-            analysis
+
+# =========================================================
+# TRADE PROPOSALS JSON
+# =========================================================
+
+@app.route("/analyst/trade-proposals")
+def trade_proposals():
+
+    proposals = load_json_file(
+        "trade_proposals.json"
+    )
+
+    if not isinstance(
+        proposals,
+        list
+    ):
+        proposals = []
+
+    return jsonify({
+        "proposal_count":
+            len(proposals),
+
+        "proposals":
+            proposals
     })
 
 
-@app.route(
-    "/analyst/trade/embed",
-    methods=["POST"]
-)
-def analyst_trade_embed():
+# =========================================================
+# TRADE EMBED JSON
+# =========================================================
 
-    data = request.get_json(
-        silent=True
+@app.route(
+    "/analyst/trade/<trade_id>/embed"
+)
+def trade_proposal_embed(
+    trade_id
+):
+
+    proposals = load_json_file(
+        "trade_proposals.json"
     )
 
-    if not data:
+    if not isinstance(
+        proposals,
+        list
+    ):
+        proposals = []
+
+    trade = None
+
+    for proposal in proposals:
+
+        if (
+            proposal.get("trade_id")
+            == trade_id
+        ):
+
+            trade = proposal
+            break
+
+    if trade is None:
 
         return jsonify({
-            "error": "Trade JSON required"
-        }), 400
+            "error":
+                "Trade proposal not found"
+        }), 404
 
-    analysis = analyze_trade(
-        data
-    )
-
-    team_a_assets = "\n".join(
+    a_assets = "\n".join(
         f"• {summarize_asset(asset)}"
-        for asset in analysis[
+        for asset in trade[
             "team_a_sends"
         ]
     )
 
-    team_b_assets = "\n".join(
+    b_assets = "\n".join(
         f"• {summarize_asset(asset)}"
-        for asset in analysis[
+        for asset in trade[
             "team_b_sends"
         ]
     )
 
     return jsonify({
+        "content":
+            (
+                f"{trade['team_a_mention']} "
+                f"{trade['team_b_mention']}"
+            ),
+
         "embeds": [
             {
                 "title":
-                    "🚨 PROJECT MADDEN TRADE ALERT",
+                    "🚨 PROJECT MADDEN TRADE PROPOSAL",
 
                 "description":
                     (
-                        f"**{analysis['verdict']}**\n\n"
-                        f"🎙️ {analysis['reaction']}"
+                        f"**{trade['team_a']} ↔ "
+                        f"{trade['team_b']}**\n\n"
+                        f"Status: **PROPOSED**"
                     ),
 
                 "fields": [
                     {
                         "name":
                             (
-                                f"{analysis['team_a']} sends"
+                                f"{trade['team_a']} sends"
                             ),
 
                         "value":
-                            (
-                                team_a_assets
-                                if team_a_assets
-                                else "Nothing listed"
-                            ),
+                            a_assets,
 
                         "inline":
                             True
@@ -1540,15 +1523,11 @@ def analyst_trade_embed():
                     {
                         "name":
                             (
-                                f"{analysis['team_b']} sends"
+                                f"{trade['team_b']} sends"
                             ),
 
                         "value":
-                            (
-                                team_b_assets
-                                if team_b_assets
-                                else "Nothing listed"
-                            ),
+                            b_assets,
 
                         "inline":
                             True
@@ -1556,15 +1535,37 @@ def analyst_trade_embed():
 
                     {
                         "name":
-                            "📊 Trade Grades",
+                            "📊 Analyst Grades",
 
                         "value":
                             (
-                                f"**{analysis['team_a']}:** "
-                                f"{analysis['team_a_grade']['grade']}\n"
-                                f"**{analysis['team_b']}:** "
-                                f"{analysis['team_b_grade']['grade']}"
+                                f"**{trade['team_a']}:** "
+                                f"{trade['team_a_grade']['grade']}\n"
+                                f"**{trade['team_b']}:** "
+                                f"{trade['team_b_grade']['grade']}"
                             ),
+
+                        "inline":
+                            False
+                    },
+
+                    {
+                        "name":
+                            "🏆 Verdict",
+
+                        "value":
+                            trade["verdict"],
+
+                        "inline":
+                            False
+                    },
+
+                    {
+                        "name":
+                            "🎙️ Project Madden First Take",
+
+                        "value":
+                            trade["reaction"],
 
                         "inline":
                             False
@@ -1574,36 +1575,13 @@ def analyst_trade_embed():
                 "footer": {
                     "text":
                         (
-                            "Project Madden • "
-                            "First Take Trade Desk"
+                            f"Trade ID: "
+                            f"{trade['trade_id']} "
+                            f"• Project Madden"
                         )
                 }
             }
         ]
-    })
-
-
-@app.route(
-    "/analyst/trades"
-)
-def trade_history():
-
-    history = load_json_file(
-        "trades.json"
-    )
-
-    if not isinstance(
-        history,
-        list
-    ):
-        history = []
-
-    return jsonify({
-        "trade_count":
-            len(history),
-
-        "trades":
-            history
     })
 
 
@@ -1655,7 +1633,10 @@ def player_status(
                         value,
                         list
                     ):
-                        records += len(value)
+
+                        records += len(
+                            value
+                        )
 
         categories[stat_type] = {
             "file_received":
@@ -1689,7 +1670,7 @@ def player_status(
 
 
 # =========================================================
-# PLAYER SCHEMA INSPECTOR
+# PLAYER SCHEMA
 # =========================================================
 
 @app.route(
@@ -1710,25 +1691,37 @@ def player_schema(
         stat_type
     )
 
-    if not os.path.exists(filename):
+    if not os.path.exists(
+        filename
+    ):
 
         return jsonify({
             "error":
                 "Stat file not found"
         }), 404
 
-    with open(filename, "r") as f:
+    with open(
+        filename,
+        "r"
+    ) as f:
+
         data = json.load(f)
 
     lists_found = {}
     first_record = None
     first_list_name = None
 
-    if isinstance(data, dict):
+    if isinstance(
+        data,
+        dict
+    ):
 
         for key, value in data.items():
 
-            if isinstance(value, list):
+            if isinstance(
+                value,
+                list
+            ):
 
                 lists_found[key] = {
                     "count":
@@ -1740,8 +1733,13 @@ def player_schema(
                     and first_record is None
                 ):
 
-                    first_record = value[0]
-                    first_list_name = key
+                    first_record = (
+                        value[0]
+                    )
+
+                    first_list_name = (
+                        key
+                    )
 
     response = {
         "season_type":
@@ -1763,10 +1761,6 @@ def player_schema(
             "ready_for_player_mapping"
         ] = False
 
-        response["message"] = (
-            "No completed player stat records yet."
-        )
-
     else:
 
         response[
@@ -1787,113 +1781,13 @@ def player_schema(
             "first_record"
         ] = first_record
 
-    return jsonify(response)
-
-
-# =========================================================
-# MATCHUPS
-# =========================================================
-
-@app.route(
-    "/analytics/matchups/"
-    "<season_type>/"
-    "<week_number>"
-)
-def weekly_matchups(
-    season_type,
-    week_number
-):
-
-    filename = get_schedule_file(
-        season_type,
-        week_number
+    return jsonify(
+        response
     )
 
-    if not os.path.exists(filename):
-
-        return jsonify({
-            "error":
-                "Schedule data not found"
-        }), 404
-
-    with open(filename, "r") as f:
-        schedule_data = json.load(f)
-
-    team_map = get_team_map()
-
-    games = []
-
-    for game in schedule_data.get(
-        "gameScheduleInfoList",
-        []
-    ):
-
-        away = team_map.get(
-            str(game.get("awayTeamId")),
-            {}
-        )
-
-        home = team_map.get(
-            str(game.get("homeTeamId")),
-            {}
-        )
-
-        games.append({
-            "schedule_id":
-                game.get("scheduleId"),
-
-            "away": {
-                "team":
-                    away.get(
-                        "name",
-                        "Unknown"
-                    ),
-
-                "overall":
-                    away.get("overall"),
-
-                "score":
-                    game.get(
-                        "awayScore",
-                        0
-                    )
-            },
-
-            "home": {
-                "team":
-                    home.get(
-                        "name",
-                        "Unknown"
-                    ),
-
-                "overall":
-                    home.get("overall"),
-
-                "score":
-                    game.get(
-                        "homeScore",
-                        0
-                    )
-            }
-        })
-
-    return jsonify({
-        "season_type":
-            season_type,
-
-        "week":
-            week_number,
-
-        "game_count":
-            len(games),
-
-        "games":
-            games
-    })
-
 
 # =========================================================
-# START
+# START SERVER
 # =========================================================
 
 if __name__ == "__main__":
