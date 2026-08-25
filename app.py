@@ -3627,6 +3627,62 @@ def weekly_show_embed_fields(
     return fields
 
 
+
+WEEKLY_SHOW_TEST_MARCUS_LINES = [
+    "I am not handing out praise just because a roster looks good on paper. If your team has talent and still looks disorganized, that is a coaching problem.",
+    "Some owners are going to learn quickly that overall rating does not excuse bad decisions. You still have to manage the game.",
+    "If you keep making the same mistakes every week, eventually it stops being bad luck and starts becoming your identity.",
+    "I want to see discipline. Talent matters, but bad clock management and careless turnovers will get exposed in this league.",
+    "There are teams with enough talent to win right now, but they are going to waste it if they keep playing reckless football.",
+]
+
+WEEKLY_SHOW_TEST_STEPHEN_LINES = [
+    "I am sorry, but I am not buying the excuses. If you have a loaded roster and you still cannot execute, somebody has to answer for that.",
+    "This is exactly what I mean when I say reputation cannot carry you. At some point, you have to actually perform.",
+    "You cannot keep calling yourself a contender while making losing decisions. That is not how championship teams operate.",
+    "If the game plan is failing and you refuse to adjust, then the problem is no longer the matchup — it is you.",
+    "Somebody in that locker room needs to demand better, because sloppy football is not going to survive against serious competition.",
+]
+
+WEEKLY_SHOW_TEST_PAT_LINES = [
+    "There is a difference between aggressive and reckless, and some teams are going to find that line the hard way.",
+    "If your offense is predictable, everybody in the league is going to smell it by the second quarter.",
+    "I love confidence, but if you are talking big and then giving the ball away, people are going to come for you.",
+    "Special teams, field position, clock management — the boring stuff becomes real important when the flashy stuff stops working.",
+    "You can have all the stars you want. If nobody is doing the little things right, the whole thing can fall apart fast.",
+]
+
+
+def build_weekly_show_test_panel(
+    headline
+):
+    key = (
+        f"weekly-show-test-{headline}-"
+        f"{datetime.now().strftime('%Y%m%d%H')}"
+    )
+
+    marcus = stable_choice(
+        WEEKLY_SHOW_TEST_MARCUS_LINES,
+        key + "-marcus"
+    )
+
+    stephen = stable_choice(
+        WEEKLY_SHOW_TEST_STEPHEN_LINES,
+        key + "-stephen"
+    )
+
+    pat = stable_choice(
+        WEEKLY_SHOW_TEST_PAT_LINES,
+        key + "-pat"
+    )
+
+    return {
+        "marcus": marcus,
+        "stephen": stephen,
+        "pat": pat
+    }
+
+
 def send_weekly_show_embed(
     title,
     description,
@@ -6347,29 +6403,43 @@ def process_test_weekly_show_background(
             "Project Madden Weekly Show Test"
         )
 
+    panel = build_weekly_show_test_panel(
+        headline
+    )
+
     result = send_weekly_show_embed(
         "📺 PROJECT MADDEN WEEKLY SHOW • TEST",
         (
             f"## {headline}\n"
-            "🎙️ **Marcus Hayes** is at the desk.\n"
-            "🎙️ **Stephen A. Smith — AI Parody** is ready for the debate segment.\n"
-            "🎙️ **Pat McAfee — AI Parody** is ready for the reaction segment.\n\n"
-            "*This is a Discord test post. Stephen A. Smith and Pat McAfee content is fictional AI parody and not real statements from either person.*"
+            "This is a studio test of the Weekly Show panel. "
+            "No game results or player stats are being invented."
         ),
         [
             {
-                "name": "🔥 Games of the Week",
-                "value": "Test matchup section is working.",
+                "name": "🎙️ Marcus Hayes",
+                "value": panel["marcus"],
                 "inline": False
             },
             {
-                "name": "⭐ Players of the Week",
-                "value": "Test player section is working.",
+                "name": (
+                    "🎙️ Stephen A. Smith — AI Parody"
+                ),
+                "value": (
+                    panel["stephen"]
+                    + "\n\n*Fictional AI parody — not a real "
+                    "Stephen A. Smith statement.*"
+                ),
                 "inline": False
             },
             {
-                "name": "📈 Top 5 Power Rankings",
-                "value": "Test rankings section is working.",
+                "name": (
+                    "🎙️ Pat McAfee — AI Parody"
+                ),
+                "value": (
+                    panel["pat"]
+                    + "\n\n*Fictional AI parody — not a real "
+                    "Pat McAfee statement.*"
+                ),
                 "inline": False
             }
         ]
@@ -6377,7 +6447,8 @@ def process_test_weekly_show_background(
 
     if result.get("sent"):
         content = (
-            "✅ Weekly Show test sent to the dedicated Weekly Show channel."
+            "✅ Weekly Show panel test sent to the "
+            "dedicated Weekly Show channel."
         )
     else:
         content = (
