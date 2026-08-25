@@ -2660,6 +2660,253 @@ def post_marcus_trade_reaction(analysis):
     return result
 
 
+
+def load_trade_history():
+    history = load_json_file(TRADE_HISTORY_FILE)
+    return history if isinstance(history, list) else []
+
+
+def save_trade_history(history):
+    save_json_file(
+        TRADE_HISTORY_FILE,
+        history[-1000:]
+    )
+
+
+def grade_trade_winner(trade):
+    grade_order = {
+        "A+": 7, "A": 6, "B+": 5, "B": 4,
+        "C+": 3, "C": 2, "D": 1, "F": 0,
+    }
+
+    grade_a = (
+        trade.get("team_a_grade", {}).get("grade", "C")
+        if isinstance(trade.get("team_a_grade"), dict)
+        else "C"
+    )
+    grade_b = (
+        trade.get("team_b_grade", {}).get("grade", "C")
+        if isinstance(trade.get("team_b_grade"), dict)
+        else "C"
+    )
+
+    score_a = grade_order.get(grade_a, 2)
+    score_b = grade_order.get(grade_b, 2)
+
+    if score_a > score_b:
+        winner = trade.get("team_a")
+    elif score_b > score_a:
+        winner = trade.get("team_b")
+    else:
+        winner = "EVEN"
+
+    return {
+        "winner": winner,
+        "team_a_grade": grade_a,
+        "team_b_grade": grade_b,
+        "method": "initial League Office trade grades",
+        "note": (
+            "This first version tracks the winner from the original trade grades. "
+            "Later we can re-grade old trades using post-trade player production "
+            "once enough historical stat snapshots are stored."
+        ),
+    }
+
+
+def trade_history_upsert(analysis, status=None):
+    history = load_trade_history()
+
+    trade_id = str(
+        analysis.get("trade_id", "")
+    ).strip()
+
+    if not trade_id:
+        return
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    entry = {
+        "trade_id": trade_id,
+        "created_at": analysis.get("created_at", now),
+        "updated_at": now,
+        "team_a": analysis.get("team_a"),
+        "team_b": analysis.get("team_b"),
+        "team_a_sends": analysis.get("team_a_sends", []),
+        "team_b_sends": analysis.get("team_b_sends", []),
+        "team_a_grade": analysis.get("team_a_grade", {}),
+        "team_b_grade": analysis.get("team_b_grade", {}),
+        "league_office": analysis.get("trade_committee", {}),
+        "status": status or (
+            analysis.get("trade_committee", {}).get("decision", "PROPOSED")
+            if isinstance(analysis.get("trade_committee"), dict)
+            else "PROPOSED"
+        ),
+    }
+
+    entry["winner_tracker"] = grade_trade_winner(entry)
+
+    replaced = False
+    for index, old in enumerate(history):
+        if str(old.get("trade_id", "")) == trade_id:
+            history[index] = entry
+            replaced = True
+            break
+
+    if not replaced:
+        history.append(entry)
+
+    save_trade_history(history)
+
+
+def refresh_trade_winner_tracker():
+    history = load_trade_history()
+
+    for trade in history:
+        trade["winner_tracker"] = grade_trade_winner(trade)
+
+    save_trade_history(history)
+    return history
+
+
+@app.route("/analyst/trade-history")
+def analyst_trade_history():
+    history = refresh_trade_winner_tracker()
+
+    return jsonify({
+        "trade_count": len(history),
+        "trades": list(reversed(history)),
+    })
+
+
+
+def post_trade_to_logs(analysis):
+    webhook_url = get_trade_logs_webhook()
+
+    if not webhook_url:
+        return {
+            "sent": False,
+            "skipped": True,
+            "reason": "TRADE_LOGS_DISCORD_WEBHOOK_URL not configured"
+        }
+
+    review = analysis.get("trade_committee", {})
+    team_a = analysis.get("team_a", "Team A")
+    team_b = analysis.get("team_b", "Team B")
+    trade_id = analysis.get("trade_id", "Unknown")
+
+    def format_assets(assets):
+        if not assets:
+            return "None"
+
+        return "\n".join(
+            "• " + format_trade_card_asset(asset)
+            for asset in assets
+        )[:1024]
+
+    grade_a = (
+        analysis.get("team_a_grade", {}).get("grade", "—")
+        if isinstance(analysis.get("team_a_grade"), dict)
+        else "—"
+    )
+
+    grade_b = (
+        analysis.get("team_b_grade", {}).get("grade", "—")
+        if isinstance(analysis.get("team_b_grade"), dict)
+        else "—"
+    )
+
+    avatar_url = (
+        "https://project-madden-analytics.onrender.com/"
+        "assets/project-madden-league-office.jpeg"
+    )
+
+    payload = {
+        "username": "Project Madden Trade Logs",
+        "avatar_url": avatar_url,
+        "embeds": [
+            {
+                "title": "📚 TRADE LOG",
+                "description": (
+                    f"**{team_a} ↔ {team_b}**\n"
+                    f"Trade ID: `{trade_id}`"
+                ),
+                "fields": [
+                    {
+                        "name": f"{team_a} Sends",
+                        "value": format_assets(
+                            analysis.get("team_a_sends", [])
+                        ),
+                        "inline": False
+                    },
+                    {
+                        "name": f"{team_b} Sends",
+                        "value": format_assets(
+                            analysis.get("team_b_sends", [])
+                        ),
+                        "inline": False
+                    },
+                    {
+                        "name": "📊 Trade Grades",
+                        "value": (
+                            f"**{team_a}:** {grade_a}\n"
+                            f"**{team_b}:** {grade_b}"
+                        ),
+                        "inline": False
+                    },
+                    {
+                        "name": "🏛️ League Office Review V2",
+                        "value": (
+                            f"**{review.get('decision', 'UNKNOWN')}**\n"
+                            f"Fairness Score: "
+                            f"{review.get('fairness_score', '—')}/100\n"
+                            f"Value Gap: "
+                            f"{review.get('value_gap_percent', '—')}%"
+                        ),
+                        "inline": False
+                    }
+                ],
+                "footer": {
+                    "text": "Project Madden • Permanent Trade Log"
+                }
+            }
+        ]
+    }
+
+    screenshot_url = str(
+        analysis.get("trade_screenshot_url", "")
+    ).strip()
+
+    if screenshot_url:
+        payload["embeds"].append({
+            "title": "📸 Madden Trade Screen",
+            "image": {"url": screenshot_url}
+        })
+
+    try:
+        response = requests.post(
+            webhook_url,
+            json=payload,
+            timeout=15
+        )
+
+        if response.status_code not in [200, 204]:
+            return {
+                "sent": False,
+                "error": (
+                    f"Discord returned {response.status_code}: "
+                    f"{response.text[:500]}"
+                )
+            }
+
+        return {"sent": True}
+
+    except Exception as e:
+        return {
+            "sent": False,
+            "error": str(e)
+        }
+
+
 def post_trade_to_discord(analysis):
     webhook_url = os.environ.get(
         "DISCORD_WEBHOOK_URL"
@@ -4486,6 +4733,176 @@ def build_weekly_panel_takes(
 
 
 
+
+def build_fraud_watch():
+    standings = normalize_standings()
+    if not standings:
+        return []
+
+    out = []
+
+    for team in standings:
+        games = int(team.get("games", 0) or 0)
+        if games < 3:
+            continue
+
+        wins = int(team.get("wins", 0) or 0)
+        losses = int(team.get("losses", 0) or 0)
+        overall = int(team.get("overall", 80) or 80)
+        point_diff = float(team.get("point_diff", 0) or 0)
+        win_pct = wins / games if games else 0.0
+
+        score = 0.0
+        reasons = []
+
+        if overall >= 84:
+            score += (overall - 83) * 5
+
+        if win_pct < 0.500:
+            score += (0.500 - win_pct) * 65
+            reasons.append(f"{wins}-{losses} record")
+
+        if point_diff < 0:
+            score += min(
+                30,
+                abs(point_diff) / max(games, 1) * 3.5
+            )
+            reasons.append(f"{int(point_diff)} point differential")
+
+        if overall >= 85 and wins <= losses:
+            reasons.append(f"{overall} OVR roster is underperforming")
+
+        if overall >= 84 and score >= 22:
+            out.append({
+                "team": team.get("team"),
+                "team_id": team.get("team_id"),
+                "record": f"{wins}-{losses}",
+                "overall": overall,
+                "point_diff": int(point_diff),
+                "fraud_score": round(score, 1),
+                "reasons": reasons[:4],
+            })
+
+    out.sort(key=lambda x: x["fraud_score"], reverse=True)
+    return out[:5]
+
+
+def build_dark_horse_watch():
+    standings = normalize_standings()
+    if not standings:
+        return []
+
+    out = []
+
+    for team in standings:
+        games = int(team.get("games", 0) or 0)
+        if games < 3:
+            continue
+
+        wins = int(team.get("wins", 0) or 0)
+        losses = int(team.get("losses", 0) or 0)
+        overall = int(team.get("overall", 80) or 80)
+        point_diff = float(team.get("point_diff", 0) or 0)
+        streak = str(team.get("streak", "") or "").upper()
+        win_pct = wins / games if games else 0.0
+
+        score = 0.0
+        reasons = []
+
+        if overall <= 82:
+            score += (83 - overall) * 5
+
+        if win_pct >= 0.600:
+            score += (win_pct - 0.500) * 70
+            reasons.append(f"{wins}-{losses} record")
+
+        if point_diff > 0:
+            score += min(
+                25,
+                point_diff / max(games, 1) * 2.5
+            )
+            reasons.append(f"+{int(point_diff)} point differential")
+
+        if streak.startswith("W"):
+            try:
+                streak_count = int(streak[1:])
+            except Exception:
+                streak_count = 0
+
+            if streak_count >= 2:
+                score += min(streak_count, 5) * 4
+                reasons.append(f"{streak} streak")
+
+        if overall <= 82:
+            reasons.append(f"only {overall} OVR")
+
+        if overall <= 82 and win_pct >= 0.600 and score >= 20:
+            out.append({
+                "team": team.get("team"),
+                "team_id": team.get("team_id"),
+                "record": f"{wins}-{losses}",
+                "overall": overall,
+                "point_diff": int(point_diff),
+                "streak": streak,
+                "dark_horse_score": round(score, 1),
+                "reasons": reasons[:4],
+            })
+
+    out.sort(key=lambda x: x["dark_horse_score"], reverse=True)
+    return out[:5]
+
+
+def build_watch_panel_takes(fraud_watch, dark_horses):
+    result = {
+        "fraud_watch": None,
+        "dark_horse": None,
+    }
+
+    if fraud_watch:
+        team = fraud_watch[0]
+        result["fraud_watch"] = {
+            "team": team["team"],
+            "marcus": (
+                f"**{team['team']}** is on Fraud Watch. "
+                f"A {team['overall']} OVR roster cannot keep producing "
+                f"a {team['record']} record with a {team['point_diff']} "
+                "point differential and expect nobody to question it."
+            ),
+            "stephen": (
+                f"I am looking at **{team['team']}** and I am not impressed. "
+                "If the roster says contender and the results say mediocre, "
+                "that is when the criticism gets louder."
+            ),
+            "pat": (
+                f"**{team['team']}** has the dudes on paper. "
+                "Now they need to stop giving games away and play "
+                "like the roster rating says they should."
+            ),
+        }
+
+    if dark_horses:
+        team = dark_horses[0]
+        result["dark_horse"] = {
+            "team": team["team"],
+            "marcus": (
+                f"Keep an eye on **{team['team']}**. "
+                f"They are only {team['overall']} OVR but they are sitting at "
+                f"{team['record']}. That is outperforming expectations."
+            ),
+            "stephen": (
+                f"Nobody better overlook **{team['team']}**. "
+                "They may not have the prettiest roster rating, but wins count "
+                "the same no matter what your OVR says."
+            ),
+            "pat": (
+                f"**{team['team']}** is my sneaky team right now. "
+                "They are finding ways to win, and that makes them dangerous."
+            ),
+        }
+
+    return result
+
+
 def build_hot_seat_rankings():
     standings = normalize_standings()
 
@@ -5088,6 +5505,21 @@ def build_weekly_show_summary(
         build_hot_seat_rankings()
     )
 
+    fraud_watch = (
+        build_fraud_watch()
+    )
+
+    dark_horse_watch = (
+        build_dark_horse_watch()
+    )
+
+    watch_panel_takes = (
+        build_watch_panel_takes(
+            fraud_watch,
+            dark_horse_watch
+        )
+    )
+
     top_games = sorted(
         game_reactions,
         key=lambda item: (
@@ -5192,6 +5624,12 @@ def build_weekly_show_summary(
             build_hot_seat_panel_take(
                 hot_seat
             ),
+        "fraud_watch":
+            fraud_watch,
+        "dark_horse_watch":
+            dark_horse_watch,
+        "watch_panel_takes":
+            watch_panel_takes,
         "stephen_a_parody_segment":
             stephen_segment[:2],
         "pat_mcafee_parody_segment":
@@ -5343,6 +5781,89 @@ def weekly_show_embed_fields(
                 "\n\n".join(lines)[:1024],
             "inline":
                 False
+        })
+
+    fraud_watch = show.get(
+        "fraud_watch",
+        []
+    )
+
+    if fraud_watch:
+        lines = []
+        for index, item in enumerate(fraud_watch, start=1):
+            lines.append(
+                f"{index}. **{item.get('team')}** — "
+                f"{item.get('record')} | {item.get('overall')} OVR | "
+                f"Point Diff {item.get('point_diff')}\n"
+                + "; ".join(item.get("reasons", []))
+            )
+
+        fields.append({
+            "name": "🚨 Fraud Watch",
+            "value": "\n\n".join(lines)[:1024],
+            "inline": False,
+        })
+
+    dark_horses = show.get(
+        "dark_horse_watch",
+        []
+    )
+
+    if dark_horses:
+        lines = []
+        for index, item in enumerate(dark_horses, start=1):
+            lines.append(
+                f"{index}. **{item.get('team')}** — "
+                f"{item.get('record')} | {item.get('overall')} OVR | "
+                f"Point Diff {item.get('point_diff')}\n"
+                + "; ".join(item.get("reasons", []))
+            )
+
+        fields.append({
+            "name": "🐎 Dark Horse Watch",
+            "value": "\n\n".join(lines)[:1024],
+            "inline": False,
+        })
+
+    watch_takes = show.get(
+        "watch_panel_takes",
+        {}
+    )
+
+    fraud_take = (
+        watch_takes.get("fraud_watch")
+        if isinstance(watch_takes, dict)
+        else None
+    )
+
+    dark_take = (
+        watch_takes.get("dark_horse")
+        if isinstance(watch_takes, dict)
+        else None
+    )
+
+    if fraud_take:
+        fields.append({
+            "name": "🚨 Fraud Watch — Panel",
+            "value": (
+                f"**Marcus Hayes:** {fraud_take.get('marcus', '')}\n\n"
+                f"**Stephen A. Smith — AI Parody:** {fraud_take.get('stephen', '')}\n\n"
+                f"**Pat McAfee — AI Parody:** {fraud_take.get('pat', '')}\n\n"
+                "*Stephen A. Smith and Pat McAfee content is fictional AI parody.*"
+            )[:1024],
+            "inline": False,
+        })
+
+    if dark_take:
+        fields.append({
+            "name": "🐎 Dark Horse Watch — Panel",
+            "value": (
+                f"**Marcus Hayes:** {dark_take.get('marcus', '')}\n\n"
+                f"**Stephen A. Smith — AI Parody:** {dark_take.get('stephen', '')}\n\n"
+                f"**Pat McAfee — AI Parody:** {dark_take.get('pat', '')}\n\n"
+                "*Stephen A. Smith and Pat McAfee content is fictional AI parody.*"
+            )[:1024],
+            "inline": False,
         })
 
     hot_seat = show.get(
@@ -5670,6 +6191,252 @@ def send_weekly_show_to_discord(
         "show":
             show
     }
+
+
+
+def load_record_book():
+    data = load_json_file(
+        PROJECT_MADDEN_RECORD_BOOK_FILE
+    )
+
+    if not isinstance(data, dict):
+        data = {}
+
+    data.setdefault("champions", [])
+    data.setdefault("mvps", [])
+    data.setdefault("single_game_records", {})
+    data.setdefault("longest_win_streak", None)
+    data.setdefault("biggest_blowout", None)
+    data.setdefault("best_user_season", None)
+    data.setdefault("legendary_trades", [])
+
+    return data
+
+
+def save_record_book(data):
+    save_json_file(
+        PROJECT_MADDEN_RECORD_BOOK_FILE,
+        data
+    )
+
+
+def load_hall_of_fame():
+    data = load_json_file(
+        PROJECT_MADDEN_HALL_OF_FAME_FILE
+    )
+    return data if isinstance(data, list) else []
+
+
+def save_hall_of_fame(data):
+    save_json_file(
+        PROJECT_MADDEN_HALL_OF_FAME_FILE,
+        data
+    )
+
+
+def update_record_book_from_week(
+    season_type,
+    week_number
+):
+    book = load_record_book()
+    games = build_week_game_reactions(
+        season_type,
+        week_number
+    )
+    players = build_week_player_reactions(
+        season_type,
+        week_number
+    )
+
+    for game in games:
+        margin = int(game.get("margin", 0) or 0)
+        existing = book.get("biggest_blowout") or {}
+        if margin > int(existing.get("margin", -1) or -1):
+            book["biggest_blowout"] = {
+                "season_type": season_type,
+                "week": week_number,
+                "game": game.get("game"),
+                "winner": game.get("winner"),
+                "loser": game.get("loser"),
+                "margin": margin,
+            }
+
+    records = book.setdefault("single_game_records", {})
+    category_map = {
+        "passing": [
+            ("passing_yards", "yards"),
+            ("passing_tds", "touchdowns"),
+        ],
+        "rushing": [
+            ("rushing_yards", "yards"),
+            ("rushing_tds", "touchdowns"),
+        ],
+        "receiving": [
+            ("receiving_yards", "yards"),
+            ("receiving_tds", "touchdowns"),
+        ],
+        "defense": [
+            ("sacks", "sacks"),
+            ("interceptions", "interceptions"),
+            ("forced_fumbles", "forced_fumbles"),
+        ],
+    }
+
+    for player in players:
+        category = player.get("category", "")
+        stats = player.get("stats", {})
+
+        for record_key, stat_key in category_map.get(category, []):
+            value = int(stats.get(stat_key, 0) or 0)
+            existing = records.get(record_key) or {}
+
+            if value > int(existing.get("value", -1) or -1):
+                records[record_key] = {
+                    "player": player.get("player"),
+                    "value": value,
+                    "season_type": season_type,
+                    "week": week_number,
+                }
+
+    standings = normalize_standings()
+
+    for team in standings:
+        streak = str(team.get("streak", "") or "").upper()
+        if streak.startswith("W"):
+            try:
+                streak_count = int(streak[1:])
+            except Exception:
+                streak_count = 0
+
+            existing = book.get("longest_win_streak") or {}
+            if streak_count > int(existing.get("wins", 0) or 0):
+                book["longest_win_streak"] = {
+                    "team": team.get("team"),
+                    "wins": streak_count,
+                    "recorded_week": week_number,
+                }
+
+    for team in standings:
+        games_count = int(team.get("games", 0) or 0)
+        if games_count == 0:
+            continue
+
+        wins = int(team.get("wins", 0) or 0)
+        win_pct = wins / games_count
+        existing = book.get("best_user_season") or {}
+
+        if win_pct > float(existing.get("win_pct", -1) or -1):
+            team_info = team_by_id(team.get("team_id")) or {}
+            book["best_user_season"] = {
+                "team": team.get("team"),
+                "user": team_info.get("user"),
+                "record": (
+                    f"{team.get('wins', 0)}-"
+                    f"{team.get('losses', 0)}"
+                ),
+                "win_pct": round(win_pct, 3),
+            }
+
+    trades = refresh_trade_winner_tracker()
+    grade_points = {
+        "A+": 7, "A": 6, "B+": 5, "B": 4,
+        "C+": 3, "C": 2, "D": 1, "F": 0,
+    }
+
+    legendary = []
+
+    for trade in trades:
+        grade_a = (
+            trade.get("team_a_grade", {}).get("grade", "C")
+            if isinstance(trade.get("team_a_grade"), dict)
+            else "C"
+        )
+        grade_b = (
+            trade.get("team_b_grade", {}).get("grade", "C")
+            if isinstance(trade.get("team_b_grade"), dict)
+            else "C"
+        )
+
+        separation = abs(
+            grade_points.get(grade_a, 2)
+            - grade_points.get(grade_b, 2)
+        )
+
+        if separation >= 4:
+            legendary.append({
+                "trade_id": trade.get("trade_id"),
+                "team_a": trade.get("team_a"),
+                "team_b": trade.get("team_b"),
+                "team_a_grade": grade_a,
+                "team_b_grade": grade_b,
+                "winner": (
+                    trade.get("winner_tracker", {}).get("winner")
+                    if isinstance(trade.get("winner_tracker"), dict)
+                    else None
+                ),
+            })
+
+    book["legendary_trades"] = legendary[-20:]
+
+    save_record_book(book)
+    return book
+
+
+@app.route("/analyst/record-book")
+def analyst_record_book():
+    return jsonify(load_record_book())
+
+
+@app.route("/analyst/hall-of-fame")
+def analyst_hall_of_fame():
+    return jsonify({
+        "hall_of_fame": load_hall_of_fame()
+    })
+
+
+@app.route(
+    "/analyst/record-book/update/"
+    "<season_type>/<int:week_number>",
+    methods=["GET", "POST"]
+)
+def analyst_record_book_update(
+    season_type,
+    week_number
+):
+    return jsonify(
+        update_record_book_from_week(
+            season_type,
+            week_number
+        )
+    )
+
+
+@app.route("/analyst/fraud-watch")
+def analyst_fraud_watch():
+    fraud = build_fraud_watch()
+    panel = build_watch_panel_takes(
+        fraud,
+        []
+    ).get("fraud_watch")
+
+    return jsonify({
+        "fraud_watch": fraud,
+        "panel": panel,
+    })
+
+
+@app.route("/analyst/dark-horse-watch")
+def analyst_dark_horse_watch():
+    dark_horses = build_dark_horse_watch()
+    panel = build_watch_panel_takes(
+        [],
+        dark_horses
+    ).get("dark_horse")
+
+    return jsonify({
+        "dark_horse_watch": dark_horses,
+        "panel": panel,
+    })
 
 
 @app.route(
@@ -6404,6 +7171,9 @@ STANDINGS_STORY_HISTORY_FILE = "standings_story_posts.json"
 STEPHEN_A_PARODY_HISTORY_FILE = "stephen_a_parody_posts.json"
 MARCUS_TRADE_REACTION_HISTORY_FILE = "marcus_trade_reaction_posts.json"
 WEEKLY_SHOW_HISTORY_FILE = "weekly_show_posts.json"
+TRADE_HISTORY_FILE = "trade_history.json"
+PROJECT_MADDEN_RECORD_BOOK_FILE = "project_madden_record_book.json"
+PROJECT_MADDEN_HALL_OF_FAME_FILE = "project_madden_hall_of_fame.json"
 
 
 def standing_records():
@@ -7285,6 +8055,19 @@ def trade_committee_role_id():
     ).strip()
 
 
+def get_trade_logs_webhook():
+    return os.environ.get(
+        "TRADE_LOGS_DISCORD_WEBHOOK_URL",
+        ""
+    ).strip()
+
+
+def trade_logs_webhook_configured():
+    return bool(
+        get_trade_logs_webhook()
+    )
+
+
 def discord_bot_configured():
     return bool(
         discord_application_id()
@@ -8164,6 +8947,16 @@ def build_discord_trade_result_text(interaction):
         analysis
     )
 
+    try:
+        trade_history_upsert(
+            analysis
+        )
+    except Exception as e:
+        print(
+            "TRADE HISTORY ERROR:",
+            str(e)
+        )
+
     discord_result = post_trade_to_discord(
         analysis
     )
@@ -8184,6 +8977,11 @@ def build_discord_trade_result_text(interaction):
             "but the #trade-approval post failed.\n"
             f"{discord_result.get('error', 'Unknown error')[:1000]}"
         )
+
+    try:
+        post_trade_to_logs(analysis)
+    except Exception as e:
+        print("TRADE LOG DISCORD ERROR:", str(e))
 
     # Marcus Hayes reacts in Project Madden Media after the
     # League Office proposal has been posted successfully.
@@ -8807,6 +9605,9 @@ def discord_status():
             bool(
                 trade_committee_role_id()
             )
+,
+        "trade_logs_webhook_configured":
+            trade_logs_webhook_configured()
     })
 
 
@@ -10928,6 +11729,16 @@ def propose_trade():
     save_trade_proposal(
         analysis
     )
+
+    try:
+        trade_history_upsert(
+            analysis
+        )
+    except Exception as e:
+        print(
+            "TRADE HISTORY ERROR:",
+            str(e)
+        )
 
     discord_result = post_trade_to_discord(
         analysis
