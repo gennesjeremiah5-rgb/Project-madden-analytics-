@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 import json
 import os
+import random
 
 app = Flask(__name__)
 
@@ -29,7 +30,6 @@ def get_team_map():
         return {}
 
     teams = data.get("leagueTeamInfoList", [])
-
     team_map = {}
 
     for team in teams:
@@ -58,18 +58,8 @@ def get_schedule_file(season_type, week_number):
     )
 
 
-def get_weekly_file(season_type, week_number, stat_type):
-    return os.path.join(
-        DATA_DIR,
-        "weekly",
-        season_type,
-        f"week_{week_number}",
-        f"{stat_type}.json"
-    )
-
-
 # =========================================================
-# STORY DETECTOR
+# GAME STORY DETECTOR
 # =========================================================
 
 def classify_game_story(game, team_map):
@@ -86,8 +76,6 @@ def classify_game_story(game, team_map):
     home_ovr = home.get("overall")
     away_ovr = away.get("overall")
 
-    stories = []
-
     result = {
         "schedule_id": game.get("scheduleId"),
 
@@ -101,114 +89,99 @@ def classify_game_story(game, team_map):
             "Unknown"
         ),
 
+        "away_abbr": away.get("abbr"),
+        "home_abbr": home.get("abbr"),
+
         "away_score": away_score,
         "home_score": home_score,
 
         "away_overall": away_ovr,
         "home_overall": home_ovr,
 
-        "stories": stories
+        "away_user": away.get("user", ""),
+        "home_user": home.get("user", ""),
+
+        "stories": []
     }
 
-    # Pregame only
+    stories = result["stories"]
+
+    # =====================================================
+    # PREGAME
+    # =====================================================
+
     if home_score == 0 and away_score == 0:
 
         if (
             home_ovr is not None
             and away_ovr is not None
         ):
-
-            gap = abs(
-                home_ovr - away_ovr
-            )
+            gap = abs(home_ovr - away_ovr)
 
             if gap == 0:
-
                 stories.append({
                     "type": "even_matchup",
                     "severity": "medium",
-                    "headline":
-                        "Evenly matched teams"
+                    "headline": "Evenly matched teams"
                 })
 
             elif gap >= 6:
-
                 stories.append({
                     "type": "major_mismatch",
                     "severity": "high",
-                    "headline":
-                        "Major overall mismatch"
+                    "headline": "Major overall mismatch"
                 })
 
             elif gap >= 4:
-
                 stories.append({
                     "type": "clear_favorite",
                     "severity": "medium",
-                    "headline":
-                        "Clear favorite by overall"
+                    "headline": "Clear favorite by overall"
                 })
 
-        if game.get(
-            "isGameOfTheWeek",
-            False
-        ):
-
+        if game.get("isGameOfTheWeek", False):
             stories.append({
                 "type": "game_of_the_week",
                 "severity": "high",
-                "headline":
-                    "Game of the Week"
+                "headline": "Game of the Week"
             })
 
-        if (
-            home.get("user")
-            or away.get("user")
-        ):
-
+        if home.get("user") or away.get("user"):
             stories.append({
                 "type": "user_game",
                 "severity": "medium",
-                "headline":
-                    "User-controlled team involved"
+                "headline": "User-controlled team involved"
             })
 
         return result
 
-    # Postgame
-    margin = abs(
-        home_score - away_score
-    )
+    # =====================================================
+    # POSTGAME
+    # =====================================================
+
+    margin = abs(home_score - away_score)
 
     result["margin"] = margin
 
     if home_score > away_score:
-
         winner = home
         loser = away
-
-        winner_score = home_score
+        winner_location = "home"
         loser_score = away_score
 
-        winner_location = "home"
-
     elif away_score > home_score:
-
         winner = away
         loser = home
-
-        winner_score = away_score
+        winner_location = "away"
         loser_score = home_score
 
-        winner_location = "away"
-
     else:
+        result["winner"] = "Tie"
 
         stories.append({
             "type": "tie",
             "severity": "medium",
-            "headline":
-                "Game ended in a tie"
+            "headline": "Game ended in a tie"
         })
 
         return result
@@ -223,434 +196,289 @@ def classify_game_story(game, team_map):
         "Unknown"
     )
 
-    result["winner_location"] = (
-        winner_location
-    )
+    result["winner_location"] = winner_location
 
-    # Blowout logic
+    winner_ovr = winner.get("overall")
+    loser_ovr = loser.get("overall")
+
+    # Blowout
     if margin >= 30:
-
         stories.append({
             "type": "embarrassing_blowout",
             "severity": "critical",
-            "headline":
-                "Embarrassing blowout"
+            "headline": "Embarrassing blowout"
         })
 
     elif margin >= 20:
-
         stories.append({
             "type": "blowout",
             "severity": "high",
-            "headline":
-                "Lopsided loss"
+            "headline": "Lopsided loss"
         })
 
     elif margin <= 3:
-
         stories.append({
             "type": "nail_biter",
             "severity": "high",
-            "headline":
-                "Nail-biter"
+            "headline": "Nail-biter"
         })
 
     elif margin <= 7:
-
         stories.append({
             "type": "close_game",
             "severity": "medium",
-            "headline":
-                "One-score game"
+            "headline": "One-score game"
         })
 
-    # Road win
+    # Road victory
     if winner_location == "away":
-
         stories.append({
             "type": "road_win",
             "severity": "medium",
-            "headline":
-                "Road victory"
+            "headline": "Road victory"
         })
 
     # Upset
-    winner_ovr = winner.get(
-        "overall"
-    )
-
-    loser_ovr = loser.get(
-        "overall"
-    )
-
     if (
         winner_ovr is not None
         and loser_ovr is not None
         and winner_ovr < loser_ovr
     ):
-
-        difference = (
-            loser_ovr - winner_ovr
-        )
-
-        severity = "medium"
-
-        if difference >= 5:
-            severity = "high"
+        difference = loser_ovr - winner_ovr
 
         if difference >= 8:
             severity = "critical"
 
+        elif difference >= 5:
+            severity = "high"
+
+        else:
+            severity = "medium"
+
         stories.append({
             "type": "upset",
             "severity": severity,
-            "headline":
-                "Upset victory",
-
-            "overall_difference":
-                difference
+            "headline": "Upset victory",
+            "overall_difference": difference
         })
 
-    # Favorite failed badly
+    # Favorite got embarrassed
     if (
         winner_ovr is not None
         and loser_ovr is not None
+        and loser_ovr > winner_ovr
+        and margin >= 14
     ):
-
-        if (
-            loser_ovr > winner_ovr
-            and margin >= 14
-        ):
-
-            stories.append({
-                "type":
-                    "favorite_disappointment",
-
-                "severity":
-                    "high",
-
-                "headline":
-                    "Favorite failed to deliver"
-            })
+        stories.append({
+            "type": "favorite_disappointment",
+            "severity": "high",
+            "headline": "Favorite failed to deliver"
+        })
 
     # Shutout
     if loser_score == 0:
-
         stories.append({
             "type": "shutout",
             "severity": "high",
-            "headline":
-                "Shutout"
+            "headline": "Shutout"
         })
 
     return result
 
 
 # =========================================================
-# PLAYER PERFORMANCE DETECTORS
+# ANALYST REACTION GENERATOR
 # =========================================================
 
-def qb_story(
-    name,
-    yards,
-    touchdowns,
-    interceptions,
-    completion_pct=None
-):
-
-    stories = []
-
-    grade = "C"
-
-    if (
-        touchdowns >= 5
-        and interceptions == 0
-    ):
-        grade = "A+"
-
-        stories.append({
-            "type": "elite_qb_game",
-            "severity": "critical",
-            "headline":
-                "Elite quarterback performance"
-        })
-
-    elif (
-        touchdowns >= 4
-        and interceptions <= 1
-    ):
-        grade = "A"
-
-        stories.append({
-            "type": "great_qb_game",
-            "severity": "high",
-            "headline":
-                "Outstanding quarterback performance"
-        })
-
-    elif interceptions >= 4:
-
-        grade = "F"
-
-        stories.append({
-            "type": "qb_disaster",
-            "severity": "critical",
-            "headline":
-                "Quarterback disaster"
-        })
-
-    elif interceptions >= 3:
-
-        grade = "D"
-
-        stories.append({
-            "type": "bad_qb_game",
-            "severity": "high",
-            "headline":
-                "Turnover-heavy quarterback performance"
-        })
-
-    elif (
-        yards < 150
-        and touchdowns == 0
-    ):
-
-        grade = "D"
-
-        stories.append({
-            "type": "ineffective_qb_game",
-            "severity": "medium",
-            "headline":
-                "Ineffective quarterback performance"
-        })
-
-    elif yards >= 350:
-
-        grade = "A"
-
-        stories.append({
-            "type": "big_passing_game",
-            "severity": "high",
-            "headline":
-                "Huge passing performance"
-        })
-
-    if (
-        completion_pct is not None
-        and completion_pct < 50
-    ):
-
-        stories.append({
-            "type": "poor_accuracy",
-            "severity": "medium",
-            "headline":
-                "Poor passing accuracy"
-        })
-
-    return {
-        "player": name,
-        "grade": grade,
-        "stories": stories
-    }
-
-
-def rushing_story(
-    name,
-    yards,
-    touchdowns,
-    carries=None
-):
-
-    stories = []
-    grade = "C"
-
-    if yards >= 200:
-
-        grade = "A+"
-
-        stories.append({
-            "type": "monster_rushing_game",
-            "severity": "critical",
-            "headline":
-                "Monster rushing performance"
-        })
-
-    elif yards >= 150:
-
-        grade = "A"
-
-        stories.append({
-            "type": "dominant_rushing_game",
-            "severity": "high",
-            "headline":
-                "Dominant rushing performance"
-        })
-
-    elif (
-        yards < 30
-        and carries is not None
-        and carries >= 10
-    ):
-
-        grade = "D"
-
-        stories.append({
-            "type": "poor_rushing_game",
-            "severity": "medium",
-            "headline":
-                "Ineffective rushing performance"
-        })
-
-    if touchdowns >= 3:
-
-        stories.append({
-            "type": "multi_td_rushing_game",
-            "severity": "high",
-            "headline":
-                "Three-touchdown rushing game"
-        })
-
-    return {
-        "player": name,
-        "grade": grade,
-        "stories": stories
-    }
-
+def generate_reaction(game_data, story):
 
-def receiving_story(
-    name,
-    yards,
-    touchdowns,
-    receptions=None
-):
-
-    stories = []
-    grade = "C"
+    away = game_data["away_team"]
+    home = game_data["home_team"]
 
-    if yards >= 200:
+    away_ovr = game_data.get("away_overall")
+    home_ovr = game_data.get("home_overall")
 
-        grade = "A+"
+    story_type = story.get("type")
 
-        stories.append({
-            "type": "monster_receiving_game",
-            "severity": "critical",
-            "headline":
-                "Monster receiving performance"
-        })
-
-    elif yards >= 150:
-
-        grade = "A"
-
-        stories.append({
-            "type": "dominant_receiving_game",
-            "severity": "high",
-            "headline":
-                "Dominant receiving performance"
-        })
-
-    elif (
-        yards < 30
-        and receptions is not None
-        and receptions >= 4
-    ):
-
-        grade = "D"
-
-        stories.append({
-            "type": "quiet_receiving_game",
-            "severity": "medium",
-            "headline":
-                "Disappointing receiving performance"
-        })
-
-    if touchdowns >= 3:
-
-        stories.append({
-            "type": "multi_td_receiving_game",
-            "severity": "high",
-            "headline":
-                "Three-touchdown receiving game"
-        })
-
-    return {
-        "player": name,
-        "grade": grade,
-        "stories": stories
-    }
-
-
-def defense_story(
-    name,
-    sacks=0,
-    interceptions=0,
-    forced_fumbles=0
-):
-
-    stories = []
-    grade = "C"
-
-    if sacks >= 4:
-
-        grade = "A+"
-
-        stories.append({
-            "type": "historic_pass_rush",
-            "severity": "critical",
-            "headline":
-                "Historic pass-rushing performance"
-        })
-
-    elif sacks >= 3:
-
-        grade = "A"
-
-        stories.append({
-            "type": "dominant_pass_rush",
-            "severity": "high",
-            "headline":
-                "Dominant pass-rushing performance"
-        })
-
-    if interceptions >= 2:
-
-        grade = "A"
-
-        stories.append({
-            "type": "ballhawk_game",
-            "severity": "high",
-            "headline":
-                "Ballhawk defensive performance"
-        })
-
-    if forced_fumbles >= 2:
-
-        grade = "A"
-
-        stories.append({
-            "type": "turnover_creator",
-            "severity": "high",
-            "headline":
-                "Turnover-forcing performance"
-        })
-
-    return {
-        "player": name,
-        "grade": grade,
-        "stories": stories
-    }
+    # -----------------------------------------------------
+    # PREGAME
+    # -----------------------------------------------------
+
+    if story_type == "major_mismatch":
+
+        if away_ovr > home_ovr:
+            favorite = away
+            underdog = home
+        else:
+            favorite = home
+            underdog = away
+
+        choices = [
+            (
+                f"I'm looking at {favorite} against {underdog}, "
+                f"and there is a serious talent gap here. "
+                f"If {favorite} doesn't handle business, "
+                f"we are going to have some questions."
+            ),
+
+            (
+                f"{favorite} has the better roster on paper. "
+                f"No excuses. This is the type of matchup "
+                f"they are supposed to control."
+            )
+        ]
+
+        return random.choice(choices)
+
+    if story_type == "clear_favorite":
+
+        if away_ovr > home_ovr:
+            favorite = away
+        else:
+            favorite = home
+
+        return (
+            f"I've got my eyes on {favorite}. "
+            f"They have the roster advantage, so now "
+            f"it's time to prove that rating actually means something."
+        )
+
+    if story_type == "even_matchup":
+
+        return (
+            f"This is about as even as it gets. "
+            f"{away} and {home} are evenly matched on paper, "
+            f"so execution is going to decide this one."
+        )
+
+    if story_type == "user_game":
+
+        user_team = None
+
+        if game_data.get("away_user"):
+            user_team = away
+
+        if game_data.get("home_user"):
+            user_team = home
+
+        return (
+            f"This is a matchup I'm watching closely. "
+            f"{user_team} is user-controlled, so the pressure is on "
+            f"to outperform what the roster ratings say on paper."
+        )
+
+    if story_type == "game_of_the_week":
+
+        return (
+            f"This is the Game of the Week for a reason. "
+            f"{away} versus {home} has my attention."
+        )
+
+    # -----------------------------------------------------
+    # POSTGAME NEGATIVE
+    # -----------------------------------------------------
+
+    if story_type == "embarrassing_blowout":
+
+        loser = game_data.get("loser")
+        winner = game_data.get("winner")
+        margin = game_data.get("margin")
+
+        return (
+            f"That was embarrassing. {loser} didn't just lose "
+            f"to {winner} — they got beat by {margin}. "
+            f"You cannot put that kind of performance on the field "
+            f"and pretend everything is fine."
+        )
+
+    if story_type == "blowout":
+
+        loser = game_data.get("loser")
+        winner = game_data.get("winner")
+
+        return (
+            f"{loser} has some explaining to do. "
+            f"{winner} controlled this game, and this was not "
+            f"the kind of performance you can just brush aside."
+        )
+
+    if story_type == "favorite_disappointment":
+
+        loser = game_data.get("loser")
+
+        return (
+            f"This is exactly why ratings don't win football games. "
+            f"{loser} came in with the talent advantage and still "
+            f"failed to deliver. That's unacceptable."
+        )
+
+    if story_type == "upset":
+
+        winner = game_data.get("winner")
+        loser = game_data.get("loser")
+
+        return (
+            f"Now THIS got my attention. {winner} just took down "
+            f"a more talented {loser} team on paper. "
+            f"That's a statement win."
+        )
+
+    if story_type == "shutout":
+
+        loser = game_data.get("loser")
+
+        return (
+            f"Zero points? ZERO? {loser} has to go back to the drawing "
+            f"board because an offense cannot show up and give you nothing."
+        )
+
+    # -----------------------------------------------------
+    # POSTGAME POSITIVE / NEUTRAL
+    # -----------------------------------------------------
+
+    if story_type == "nail_biter":
+
+        winner = game_data.get("winner")
+
+        return (
+            f"That one came down to the wire. "
+            f"{winner} found a way to survive when the pressure was highest."
+        )
+
+    if story_type == "close_game":
+
+        winner = game_data.get("winner")
+
+        return (
+            f"It wasn't easy, but {winner} got the job done "
+            f"in a one-score game."
+        )
+
+    if story_type == "road_win":
+
+        winner = game_data.get("winner")
+
+        return (
+            f"Going on the road and getting a win matters. "
+            f"{winner} deserves credit for handling business away from home."
+        )
+
+    return (
+        f"{away} versus {home} is one of the stories "
+        f"to watch around Project Madden."
+    )
 
 
 # =========================================================
-# HOME / HEALTH
+# HOME
 # =========================================================
 
 @app.route("/")
 def home():
     return jsonify({
         "status": "online",
-        "service":
-            "Project Madden Analytics"
+        "service": "Project Madden Analytics",
+        "analyst_system": "online"
     })
 
 
@@ -672,18 +500,14 @@ def health():
 def snallabot_receiver(subpath):
 
     if request.method == "GET":
-
         return jsonify({
             "working": True,
             "path": subpath
         })
 
-    data = request.get_json(
-        silent=True
-    )
+    data = request.get_json(silent=True)
 
     if data is None:
-
         return jsonify({
             "success": False,
             "error": "No JSON received"
@@ -691,10 +515,7 @@ def snallabot_receiver(subpath):
 
     parts = subpath.split("/")
 
-    print(
-        "PROJECT MADDEN EXPORT:",
-        subpath
-    )
+    print("PROJECT MADDEN EXPORT:", subpath)
 
     # League teams
     if parts[-1] == "leagueteams":
@@ -706,12 +527,7 @@ def snallabot_receiver(subpath):
             ),
             "w"
         ) as f:
-
-            json.dump(
-                data,
-                f,
-                indent=2
-            )
+            json.dump(data, f, indent=2)
 
         return jsonify({
             "success": True,
@@ -728,12 +544,7 @@ def snallabot_receiver(subpath):
             ),
             "w"
         ) as f:
-
-            json.dump(
-                data,
-                f,
-                indent=2
-            )
+            json.dump(data, f, indent=2)
 
         return jsonify({
             "success": True,
@@ -750,12 +561,7 @@ def snallabot_receiver(subpath):
             ),
             "w"
         ) as f:
-
-            json.dump(
-                data,
-                f,
-                indent=2
-            )
+            json.dump(data, f, indent=2)
 
         return jsonify({
             "success": True,
@@ -775,12 +581,7 @@ def snallabot_receiver(subpath):
             ),
             "w"
         ) as f:
-
-            json.dump(
-                data,
-                f,
-                indent=2
-            )
+            json.dump(data, f, indent=2)
 
         return jsonify({
             "success": True,
@@ -793,13 +594,8 @@ def snallabot_receiver(subpath):
         and parts[-1] == "roster"
     ):
 
-        team_index = parts.index(
-            "team"
-        )
-
-        team_id = parts[
-            team_index + 1
-        ]
+        team_index = parts.index("team")
+        team_id = parts[team_index + 1]
 
         with open(
             os.path.join(
@@ -808,12 +604,7 @@ def snallabot_receiver(subpath):
             ),
             "w"
         ) as f:
-
-            json.dump(
-                data,
-                f,
-                indent=2
-            )
+            json.dump(data, f, indent=2)
 
         return jsonify({
             "success": True,
@@ -821,14 +612,11 @@ def snallabot_receiver(subpath):
             "team_id": team_id
         }), 200
 
-    # Weekly data
+    # Weekly stats/schedules
     if "week" in parts:
 
         try:
-
-            week_index = parts.index(
-                "week"
-            )
+            week_index = parts.index("week")
 
             season_type = parts[
                 week_index + 1
@@ -843,11 +631,9 @@ def snallabot_receiver(subpath):
             ]
 
         except Exception:
-
             return jsonify({
                 "success": False,
-                "error":
-                    "Invalid weekly export path"
+                "error": "Invalid weekly export path"
             }), 400
 
         weekly_dir = os.path.join(
@@ -869,22 +655,14 @@ def snallabot_receiver(subpath):
             ),
             "w"
         ) as f:
-
-            json.dump(
-                data,
-                f,
-                indent=2
-            )
+            json.dump(data, f, indent=2)
 
         return jsonify({
             "success": True,
             "type": "weekly",
-            "season_type":
-                season_type,
-            "week":
-                week_number,
-            "stat_type":
-                stat_type
+            "season_type": season_type,
+            "week": week_number,
+            "stat_type": stat_type
         }), 200
 
     return jsonify({
@@ -895,13 +673,11 @@ def snallabot_receiver(subpath):
 
 
 # =========================================================
-# STORY DETECTOR ENDPOINT
+# STORIES
 # =========================================================
 
 @app.route(
-    "/analytics/stories/"
-    "<season_type>/"
-    "<week_number>"
+    "/analytics/stories/<season_type>/<week_number>"
 )
 def weekly_stories(
     season_type,
@@ -913,23 +689,13 @@ def weekly_stories(
         week_number
     )
 
-    if not os.path.exists(
-        filename
-    ):
-
+    if not os.path.exists(filename):
         return jsonify({
-            "error":
-                "Schedule data not found"
+            "error": "Schedule data not found"
         }), 404
 
-    with open(
-        filename,
-        "r"
-    ) as f:
-
-        schedule_data = json.load(
-            f
-        )
+    with open(filename, "r") as f:
+        schedule_data = json.load(f)
 
     team_map = get_team_map()
 
@@ -938,80 +704,32 @@ def weekly_stories(
         []
     )
 
-    stories = []
+    output = []
 
     for game in games:
-
-        stories.append(
+        output.append(
             classify_game_story(
                 game,
                 team_map
             )
         )
 
-    important_stories = []
-
-    for game_story in stories:
-
-        for story in game_story[
-            "stories"
-        ]:
-
-            if story[
-                "severity"
-            ] in [
-                "high",
-                "critical"
-            ]:
-
-                important_stories.append({
-                    "away_team":
-                        game_story[
-                            "away_team"
-                        ],
-
-                    "home_team":
-                        game_story[
-                            "home_team"
-                        ],
-
-                    "story":
-                        story
-                })
-
     return jsonify({
-        "league":
-            "Project Madden",
-
-        "season_type":
-            season_type,
-
-        "week":
-            week_number,
-
-        "important_story_count":
-            len(
-                important_stories
-            ),
-
-        "important_stories":
-            important_stories,
-
-        "games":
-            stories
+        "league": "Project Madden",
+        "season_type": season_type,
+        "week": week_number,
+        "games": output
     })
 
 
 # =========================================================
-# PREVIEW ANALYST FEED
+# ANALYST REACTIONS
 # =========================================================
 
 @app.route(
-    "/analyst/pregame/"
-    "<season_type>/"
-    "<week_number>"
+    "/analyst/reactions/<season_type>/<week_number>"
 )
-def analyst_pregame(
+def analyst_reactions(
     season_type,
     week_number
 ):
@@ -1021,23 +739,13 @@ def analyst_pregame(
         week_number
     )
 
-    if not os.path.exists(
-        filename
-    ):
-
+    if not os.path.exists(filename):
         return jsonify({
-            "error":
-                "Schedule data not found"
+            "error": "Schedule data not found"
         }), 404
 
-    with open(
-        filename,
-        "r"
-    ) as f:
-
-        schedule_data = json.load(
-            f
-        )
+    with open(filename, "r") as f:
+        schedule_data = json.load(f)
 
     team_map = get_team_map()
 
@@ -1046,29 +754,46 @@ def analyst_pregame(
         []
     )
 
-    feed = []
+    reactions = []
 
     for game in games:
 
-        story_data = (
-            classify_game_story(
-                game,
-                team_map
+        game_data = classify_game_story(
+            game,
+            team_map
+        )
+
+        for story in game_data["stories"]:
+
+            reaction = generate_reaction(
+                game_data,
+                story
             )
-        )
 
-        if not story_data[
-            "stories"
-        ]:
-            continue
+            reactions.append({
+                "matchup":
+                    f"{game_data['away_team']} @ "
+                    f"{game_data['home_team']}",
 
-        feed.append(
-            story_data
-        )
+                "story_type":
+                    story["type"],
+
+                "headline":
+                    story["headline"],
+
+                "severity":
+                    story["severity"],
+
+                "reaction":
+                    reaction
+            })
 
     return jsonify({
         "analyst":
             "Project Madden Analyst",
+
+        "note":
+            "Generated fictional league commentary",
 
         "season_type":
             season_type,
@@ -1076,12 +801,105 @@ def analyst_pregame(
         "week":
             week_number,
 
-        "story_count":
-            len(feed),
+        "reaction_count":
+            len(reactions),
 
-        "stories":
-            feed
+        "reactions":
+            reactions
     })
+
+
+# =========================================================
+# DISCOHOOK / DISCORD EMBED PREVIEW
+# =========================================================
+
+@app.route(
+    "/analyst/embed/<season_type>/<week_number>"
+)
+def analyst_embed(
+    season_type,
+    week_number
+):
+
+    filename = get_schedule_file(
+        season_type,
+        week_number
+    )
+
+    if not os.path.exists(filename):
+        return jsonify({
+            "error": "Schedule data not found"
+        }), 404
+
+    with open(filename, "r") as f:
+        schedule_data = json.load(f)
+
+    team_map = get_team_map()
+
+    games = schedule_data.get(
+        "gameScheduleInfoList",
+        []
+    )
+
+    fields = []
+
+    for game in games:
+
+        game_data = classify_game_story(
+            game,
+            team_map
+        )
+
+        if not game_data["stories"]:
+            continue
+
+        for story in game_data["stories"]:
+
+            reaction = generate_reaction(
+                game_data,
+                story
+            )
+
+            fields.append({
+                "name":
+                    f"🏈 {game_data['away_team']} @ "
+                    f"{game_data['home_team']}",
+
+                "value":
+                    f"**{story['headline']}**\n"
+                    f"{reaction}",
+
+                "inline":
+                    False
+            })
+
+    # Discord allows max 25 embed fields
+    fields = fields[:25]
+
+    embed = {
+        "embeds": [
+            {
+                "title":
+                    "🎙️ PROJECT MADDEN — AROUND THE LEAGUE",
+
+                "description":
+                    (
+                        f"Analyst reactions for "
+                        f"{season_type.upper()} Week {week_number}"
+                    ),
+
+                "fields":
+                    fields,
+
+                "footer": {
+                    "text":
+                        "Project Madden • Fictional Analyst Commentary"
+                }
+            }
+        ]
+    }
+
+    return jsonify(embed)
 
 
 # =========================================================
@@ -1089,9 +907,7 @@ def analyst_pregame(
 # =========================================================
 
 @app.route(
-    "/analytics/matchups/"
-    "<season_type>/"
-    "<week_number>"
+    "/analytics/matchups/<season_type>/<week_number>"
 )
 def weekly_matchups(
     season_type,
@@ -1103,23 +919,13 @@ def weekly_matchups(
         week_number
     )
 
-    if not os.path.exists(
-        filename
-    ):
-
+    if not os.path.exists(filename):
         return jsonify({
-            "error":
-                "Schedule data not found"
+            "error": "Schedule data not found"
         }), 404
 
-    with open(
-        filename,
-        "r"
-    ) as f:
-
-        schedule_data = json.load(
-            f
-        )
+    with open(filename, "r") as f:
+        schedule_data = json.load(f)
 
     team_map = get_team_map()
 
@@ -1132,78 +938,53 @@ def weekly_matchups(
 
     for game in games:
 
-        away_id = str(
-            game.get(
-                "awayTeamId"
-            )
-        )
-
-        home_id = str(
-            game.get(
-                "homeTeamId"
-            )
-        )
-
         away = team_map.get(
-            away_id,
+            str(game.get("awayTeamId")),
             {}
         )
 
         home = team_map.get(
-            home_id,
+            str(game.get("homeTeamId")),
             {}
         )
 
         matchups.append({
             "away": {
-                "team":
-                    away.get(
-                        "name",
-                        "Unknown"
-                    ),
-                "overall":
-                    away.get(
-                        "overall"
-                    ),
-                "score":
-                    game.get(
-                        "awayScore",
-                        0
-                    )
+                "team": away.get(
+                    "name",
+                    "Unknown"
+                ),
+                "overall": away.get(
+                    "overall"
+                ),
+                "score": game.get(
+                    "awayScore",
+                    0
+                )
             },
 
             "home": {
-                "team":
-                    home.get(
-                        "name",
-                        "Unknown"
-                    ),
-                "overall":
-                    home.get(
-                        "overall"
-                    ),
-                "score":
-                    game.get(
-                        "homeScore",
-                        0
-                    )
+                "team": home.get(
+                    "name",
+                    "Unknown"
+                ),
+                "overall": home.get(
+                    "overall"
+                ),
+                "score": game.get(
+                    "homeScore",
+                    0
+                )
             },
 
             "status":
-                game.get(
-                    "status"
-                )
+                game.get("status")
         })
 
     return jsonify({
-        "season_type":
-            season_type,
-
-        "week":
-            week_number,
-
-        "games":
-            matchups
+        "season_type": season_type,
+        "week": week_number,
+        "games": matchups
     })
 
 
@@ -1212,7 +993,6 @@ def weekly_matchups(
 # =========================================================
 
 if __name__ == "__main__":
-
     app.run(
         host="0.0.0.0",
         port=10000
