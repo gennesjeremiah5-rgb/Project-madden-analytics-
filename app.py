@@ -1084,6 +1084,13 @@ def post_trade_to_discord(analysis):
         analysis.get("team_b_mention")
     )
 
+    screenshot_url = str(
+        analysis.get(
+            "trade_screenshot_url",
+            ""
+        )
+    ).strip()
+
     payload = {
         "username": "Project Madden League Office",
         "avatar_url": (
@@ -1143,6 +1150,14 @@ def post_trade_to_discord(analysis):
             }
         ]
     }
+
+    if screenshot_url:
+        try:
+            payload["embeds"][0]["image"] = {
+                "url": screenshot_url
+            }
+        except Exception:
+            pass
 
     try:
         response = requests.post(
@@ -3799,6 +3814,14 @@ def register_trade_slash_command():
                 "Team B player or draft pick #1",
                 True
             ),
+            {
+                "type": 11,
+                "name": "trade_screenshot",
+                "description": (
+                    "Optional Madden trade-screen screenshot"
+                ),
+                "required": False
+            },
 
             # Optional extra assets.
             asset_option(
@@ -3912,7 +3935,8 @@ def register_trade_slash_command():
         "guild_id_configured": bool(guild_id),
         "old_global_command_removed": bool(guild_id),
         "trade_ui": (
-            "5 clean player/pick asset slots per team"
+            "5 clean player/pick asset slots per team "
+            "+ optional Madden trade screenshot"
         ),
         "note": (
             "Guild command updates are nearly instant."
@@ -4215,6 +4239,34 @@ def build_discord_trade_result_text(interaction):
         )
     ).strip()
 
+    screenshot_attachment_id = str(
+        options.get(
+            "trade_screenshot",
+            ""
+        )
+    ).strip()
+
+    screenshot_url = ""
+
+    if screenshot_attachment_id:
+        attachment = (
+            interaction
+            .get("data", {})
+            .get("resolved", {})
+            .get("attachments", {})
+            .get(
+                screenshot_attachment_id,
+                {}
+            )
+        )
+
+        screenshot_url = str(
+            attachment.get(
+                "url",
+                ""
+            )
+        ).strip()
+
     team_a_assets_list = [
         str(
             options.get(
@@ -4334,6 +4386,11 @@ def build_discord_trade_result_text(interaction):
     analysis["submitted_by_discord_id"] = (
         invoking_id
     )
+
+    if screenshot_url:
+        analysis["trade_screenshot_url"] = (
+            screenshot_url
+        )
 
     save_trade_proposal(
         analysis
