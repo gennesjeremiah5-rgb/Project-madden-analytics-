@@ -3745,6 +3745,384 @@ def build_weekly_panel_takes(
     }
 
 
+
+def build_super_bowl_favorites():
+    standings = extract_standings()
+
+    if not standings:
+        return []
+
+    candidates = []
+
+    # Normalize all available league teams into a projection score.
+    for team in standings:
+        games = int(
+            team.get(
+                "games",
+                0
+            ) or 0
+        )
+
+        wins = int(
+            team.get(
+                "wins",
+                0
+            ) or 0
+        )
+
+        losses = int(
+            team.get(
+                "losses",
+                0
+            ) or 0
+        )
+
+        win_pct = (
+            wins / games
+            if games > 0
+            else 0.0
+        )
+
+        point_diff = float(
+            team.get(
+                "point_diff",
+                0
+            ) or 0
+        )
+
+        overall = float(
+            team.get(
+                "overall",
+                80
+            ) or 80
+        )
+
+        streak = str(
+            team.get(
+                "streak",
+                ""
+            )
+        ).upper()
+
+        seed = int(
+            team.get(
+                "playoff_seed",
+                0
+            ) or 0
+        )
+
+        streak_bonus = 0.0
+
+        if streak.startswith("W"):
+            try:
+                streak_count = int(
+                    streak[1:]
+                )
+            except Exception:
+                streak_count = 0
+
+            streak_bonus = min(
+                streak_count,
+                5
+            ) * 1.75
+
+        elif streak.startswith("L"):
+            try:
+                streak_count = int(
+                    streak[1:]
+                )
+            except Exception:
+                streak_count = 0
+
+            streak_bonus = -min(
+                streak_count,
+                5
+            ) * 1.5
+
+        # Before games are played, roster OVR matters more.
+        if games == 0:
+            score = (
+                (overall - 75) * 3.0
+            )
+        else:
+            score = (
+                win_pct * 70
+                + max(
+                    -25,
+                    min(
+                        25,
+                        point_diff / max(
+                            games,
+                            1
+                        )
+                    )
+                )
+                + (overall - 80) * 1.7
+                + streak_bonus
+            )
+
+            if 1 <= seed <= 7:
+                score += (
+                    8 - seed
+                ) * 1.5
+
+        candidates.append({
+            "team":
+                team.get(
+                    "team",
+                    "Unknown"
+                ),
+            "wins":
+                wins,
+            "losses":
+                losses,
+            "games":
+                games,
+            "win_pct":
+                round(
+                    win_pct,
+                    3
+                ),
+            "point_diff":
+                point_diff,
+            "overall":
+                overall,
+            "streak":
+                streak,
+            "playoff_seed":
+                seed,
+            "projection_score":
+                score
+        })
+
+    candidates.sort(
+        key=lambda item:
+            item["projection_score"],
+        reverse=True
+    )
+
+    top = candidates[:8]
+
+    if not top:
+        return []
+
+    # Softmax-style normalization into a clean "Project Madden projection"
+    # percentage. This is not betting odds.
+    max_score = max(
+        item[
+            "projection_score"
+        ]
+        for item in top
+    )
+
+    weights = []
+
+    for item in top:
+        weight = math.exp(
+            (
+                item[
+                    "projection_score"
+                ]
+                - max_score
+            ) / 12.0
+        )
+
+        weights.append(
+            weight
+        )
+
+    weight_total = sum(
+        weights
+    ) or 1.0
+
+    favorites = []
+
+    for index, (
+        item,
+        weight
+    ) in enumerate(
+        zip(
+            top,
+            weights
+        ),
+        start=1
+    ):
+        chance = (
+            weight
+            / weight_total
+            * 100
+        )
+
+        reason_parts = []
+
+        if item["games"] == 0:
+            reason_parts.append(
+                f"{int(item['overall'])} OVR roster"
+            )
+        else:
+            reason_parts.append(
+                f"{item['wins']}-{item['losses']} record"
+            )
+
+            if item["point_diff"] > 0:
+                reason_parts.append(
+                    f"+{int(item['point_diff'])} point differential"
+                )
+
+            if item["streak"].startswith(
+                "W"
+            ):
+                reason_parts.append(
+                    f"{item['streak']} streak"
+                )
+
+            if 1 <= item[
+                "playoff_seed"
+            ] <= 7:
+                reason_parts.append(
+                    f"current #{item['playoff_seed']} seed"
+                )
+
+            reason_parts.append(
+                f"{int(item['overall'])} OVR"
+            )
+
+        favorites.append({
+            "rank":
+                index,
+            "team":
+                item["team"],
+            "projected_chance":
+                round(
+                    chance,
+                    1
+                ),
+            "record":
+                (
+                    f"{item['wins']}-"
+                    f"{item['losses']}"
+                ),
+            "overall":
+                int(
+                    item["overall"]
+                ),
+            "streak":
+                item["streak"],
+            "playoff_seed":
+                item["playoff_seed"],
+            "reason":
+                ", ".join(
+                    reason_parts
+                )
+        })
+
+    return favorites
+
+
+def build_super_bowl_panel_picks(
+    favorites,
+    season_type,
+    week_number
+):
+    if not favorites:
+        return {}
+
+    top = favorites[:5]
+
+    # Marcus leans toward the current #1 projection.
+    marcus_pick = top[0]
+
+    # Stephen A. parody favors the strongest blend of record/OVR,
+    # usually the current top projection but not always.
+    stephen_pick = max(
+        top,
+        key=lambda item: (
+            item.get(
+                "overall",
+                0
+            ),
+            item.get(
+                "projected_chance",
+                0
+            )
+        )
+    )
+
+    # Pat parody gets a slightly different angle:
+    # among the top 5, prefer a team on the best win streak,
+    # otherwise the highest projection.
+    def streak_value(item):
+        streak = str(
+            item.get(
+                "streak",
+                ""
+            )
+        ).upper()
+
+        if streak.startswith(
+            "W"
+        ):
+            try:
+                return int(
+                    streak[1:]
+                )
+            except Exception:
+                return 0
+
+        return 0
+
+    pat_pick = max(
+        top,
+        key=lambda item: (
+            streak_value(
+                item
+            ),
+            item.get(
+                "projected_chance",
+                0
+            )
+        )
+    )
+
+    return {
+        "marcus": {
+            "team":
+                marcus_pick[
+                    "team"
+                ],
+            "take": (
+                f"My Super Bowl favorite right now is "
+                f"**{marcus_pick['team']}**. "
+                f"They lead the Project Madden projection at "
+                f"{marcus_pick['projected_chance']}%, and the case is "
+                f"{marcus_pick['reason']}."
+            )
+        },
+        "stephen": {
+            "team":
+                stephen_pick[
+                    "team"
+                ],
+            "take": (
+                f"I am putting **{stephen_pick['team']}** at the top of my list. "
+                "If you have that kind of roster and you are producing, "
+                "I expect you to look like a championship team every single week."
+            )
+        },
+        "pat": {
+            "team":
+                pat_pick[
+                    "team"
+                ],
+            "take": (
+                f"I am riding with **{pat_pick['team']}** right now. "
+                "Momentum matters, roster talent matters, and if they keep "
+                "stacking good weeks they are going to be a problem in the postseason."
+            )
+        }
+    }
+
+
 def build_weekly_show_summary(
     season_type,
     week_number
@@ -3770,6 +4148,10 @@ def build_weekly_show_summary(
 
     trade_proposals = (
         weekly_trade_proposals()
+    )
+
+    super_bowl_favorites = (
+        build_super_bowl_favorites()
     )
 
     top_games = sorted(
@@ -3868,6 +4250,8 @@ def build_weekly_show_summary(
             game_predictions,
         "trade_proposals":
             trade_proposals,
+        "super_bowl_favorites":
+            super_bowl_favorites,
         "stephen_a_parody_segment":
             stephen_segment[:2],
         "pat_mcafee_parody_segment":
@@ -3879,6 +4263,14 @@ def build_weekly_show_summary(
     show["panel_takes"] = (
         build_weekly_panel_takes(
             show,
+            season_type,
+            week_number
+        )
+    )
+
+    show["super_bowl_panel_picks"] = (
+        build_super_bowl_panel_picks(
+            super_bowl_favorites,
             season_type,
             week_number
         )
@@ -4009,6 +4401,55 @@ def weekly_show_embed_fields(
                 "🎯 Weekly Picks & Favorites",
             "value":
                 "\n\n".join(lines)[:1024],
+            "inline":
+                False
+        })
+
+    favorites = show.get(
+        "super_bowl_favorites",
+        []
+    )
+
+    if favorites:
+        lines = []
+
+        for item in favorites[:5]:
+            lines.append(
+                f"{item.get('rank')}. "
+                f"**{item.get('team')}** — "
+                f"{item.get('projected_chance')}%\n"
+                f"{item.get('reason')}"
+            )
+
+        fields.append({
+            "name":
+                "🏆 Super Bowl Favorites",
+            "value":
+                "\n\n".join(lines)[:1024],
+            "inline":
+                False
+        })
+
+    sb_picks = show.get(
+        "super_bowl_panel_picks",
+        {}
+    )
+
+    if sb_picks:
+        fields.append({
+            "name":
+                "🏆 Championship Picks — Panel",
+            "value": (
+                f"**Marcus Hayes:** "
+                f"{sb_picks.get('marcus', {}).get('take', '')}\n\n"
+                f"**Stephen A. Smith — AI Parody:** "
+                f"{sb_picks.get('stephen', {}).get('take', '')}\n\n"
+                f"**Pat McAfee — AI Parody:** "
+                f"{sb_picks.get('pat', {}).get('take', '')}\n\n"
+                "*Stephen A. Smith and Pat McAfee content is fictional "
+                "AI parody and not real statements from either person. "
+                "Percentages are Project Madden projections, not betting odds.*"
+            )[:1024],
             "inline":
                 False
         })
@@ -4234,6 +4675,30 @@ def send_weekly_show_to_discord(
         "show":
             show
     }
+
+
+@app.route(
+    "/analyst/super-bowl-favorites"
+)
+def analyst_super_bowl_favorites():
+    favorites = build_super_bowl_favorites()
+
+    return jsonify({
+        "brand":
+            "Project Madden Media",
+        "projection_type":
+            "Project Madden championship projection",
+        "not_betting_odds":
+            True,
+        "favorites":
+            favorites,
+        "panel_picks":
+            build_super_bowl_panel_picks(
+                favorites,
+                "reg",
+                0
+            )
+    })
 
 
 @app.route(
