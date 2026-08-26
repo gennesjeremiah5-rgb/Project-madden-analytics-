@@ -50,6 +50,7 @@ PERSISTENT_JSON_FILES = {
     "project_madden_hall_of_fame.json",
     "analyst_receipts.json",
     "rivalry_history.json",
+    "gotw_poll_history.json",
 }
 
 PERSISTENT_DB_LOCK = threading.Lock()
@@ -58,6 +59,9 @@ PERSISTENT_DB_LAST_ERROR = None
 
 # Only members with this Discord role may use commands beginning with /test.
 LEAGUE_OWNER_TEST_ROLE_ID = "1538749830111694910"
+
+GOTW_POLL_HISTORY_FILE = "gotw_poll_history.json"
+GOTW_POLL_CLOSE_SECONDS = 300
 
 
 # =========================================================
@@ -6793,6 +6797,1179 @@ def analyst_accuracy_route():
     })
 
 
+
+# =========================================================
+# FAN POLLS / GAME OF THE WEEK VOTING
+# =========================================================
+
+def gotw_channel_id():
+    return os.environ.get(
+        "GOTW_CHANNEL_ID",
+        ""
+    ).strip()
+
+
+def gotw_poll_configured():
+    return bool(
+        discord_bot_token()
+        and gotw_channel_id()
+    )
+
+
+def load_gotw_poll_history():
+    data = load_json_file(
+        GOTW_POLL_HISTORY_FILE
+    )
+
+    if not isinstance(
+        data,
+        dict
+    ):
+        data = {}
+
+    data.setdefault(
+        "polls",
+        []
+    )
+
+    return data
+
+
+def save_gotw_poll_history(
+    data
+):
+    polls = data.get(
+        "polls",
+        []
+    )
+
+    if not isinstance(
+        polls,
+        list
+    ):
+        polls = []
+
+    data[
+        "polls"
+    ] = polls[-500:]
+
+    save_json_file(
+        GOTW_POLL_HISTORY_FILE,
+        data
+    )
+
+
+def gotw_poll_key(
+    season_type,
+    week_number,
+    test=False
+):
+    return (
+        f"{'test:' if test else ''}"
+        f"{season_type}:{week_number}"
+    )
+
+
+def get_gotw_poll_record(
+    season_type,
+    week_number,
+    test=False
+):
+    key = gotw_poll_key(
+        season_type,
+        week_number,
+        test=test
+    )
+
+    for item in reversed(
+        load_gotw_poll_history().get(
+            "polls",
+            []
+        )
+    ):
+        if item.get(
+            "key"
+        ) == key:
+            return item
+
+    return None
+
+
+def gotw_team_story_score(
+    team_name,
+    team_id,
+    opponent_name,
+    opponent_id,
+    game,
+    standings_map
+):
+    team_ovr = safe_team_overall(
+        team_id
+    )
+    opp_ovr = safe_team_overall(
+        opponent_id
+    )
+
+    standing = standings_map.get(
+        str(
+            team_name
+        ).lower(),
+        {}
+    )
+
+    opponent_standing = standings_map.get(
+        str(
+            opponent_name
+        ).lower(),
+        {}
+    )
+
+    score = 0.0
+    reasons = []
+
+    if team_ovr is not None:
+        score += max(
+            0,
+            team_ovr - 78
+        ) * 1.6
+
+    games = int(
+        standing.get(
+            "games",
+            0
+        )
+        or 0
+    )
+
+    wins = int(
+        standing.get(
+            "wins",
+            0
+        )
+        or 0
+    )
+
+    if games:
+        win_pct = float(
+            standing.get(
+                "win_pct",
+                0
+            )
+            or 0
+        )
+
+        score += (
+            win_pct
+            * 18
+        )
+
+        if win_pct >= 0.650:
+            reasons.append(
+                "strong record"
+            )
+
+    seed = standing.get(
+        "playoff_seed"
+    )
+
+    if (
+        seed is not None
+        and 1
+        <= int(
+            seed
+        )
+        <= 7
+    ):
+        score += 12
+        reasons.append(
+            f"playoff seed #{seed}"
+        )
+
+    conference_rank = (
+        standing.get(
+            "conference_rank"
+        )
+    )
+
+    if (
+        conference_rank is not None
+        and int(
+            conference_rank
+        )
+        <= 10
+    ):
+        score += 6
+        reasons.append(
+            "conference race"
+        )
+
+    if (
+        team_ovr is not None
+        and opp_ovr is not None
+    ):
+        ovr_gap = abs(
+            team_ovr
+            - opp_ovr
+        )
+
+        if ovr_gap <= 2:
+            score += 10
+            reasons.append(
+                "close OVR matchup"
+            )
+        elif ovr_gap <= 4:
+            score += 6
+
+    try:
+        team_align = team_alignment(
+            standing
+        )
+
+        opp_align = team_alignment(
+            opponent_standing
+        )
+
+        if (
+            team_align.get(
+                "division"
+            )
+            and team_align
+            == opp_align
+        ):
+            score += 8
+            reasons.append(
+                "division matchup"
+            )
+    except Exception:
+        pass
+
+    try:
+        owner_a = team_owner_name(
+            team_id
+        )
+
+        owner_b = team_owner_name(
+            opponent_id
+        )
+
+        if (
+            owner_a
+            and owner_b
+        ):
+            rivalry = (
+                build_rivalry_summary(
+                    owner_a,
+                    owner_b
+                )
+            )
+
+            meetings = int(
+                rivalry.get(
+                    "meetings",
+                    0
+                )
+                or 0
+            )
+
+            if meetings >= 2:
+                score += min(
+                    12,
+                    meetings * 2
+                )
+
+                reasons.append(
+                    f"{meetings}-game user rivalry"
+                )
+    except Exception:
+        pass
+
+    if games >= 10:
+        score += (
+            wins
+            * 0.7
+        )
+
+    return {
+        "team":
+            team_name,
+        "team_id":
+            team_id,
+        "opponent":
+            opponent_name,
+        "opponent_id":
+            opponent_id,
+        "score":
+            round(
+                score,
+                2
+            ),
+        "reasons":
+            reasons[:4],
+        "matchup":
+            (
+                f"{safe_team_name(game.get('awayTeamId'))} @ "
+                f"{safe_team_name(game.get('homeTeamId'))}"
+            )
+    }
+
+
+def choose_gotw_poll_candidates(
+    season_type,
+    week_number
+):
+    schedule_data = load_weekly_data(
+        season_type,
+        week_number,
+        "schedules"
+    )
+
+    if not schedule_data:
+        return []
+
+    standings_map = {
+        str(
+            team.get(
+                "team",
+                ""
+            )
+        ).lower():
+            team
+        for team in normalize_standings()
+    }
+
+    matchup_candidates = []
+
+    for game in schedule_data.get(
+        "gameScheduleInfoList",
+        []
+    ):
+        if game_looks_completed(
+            game
+        ):
+            continue
+
+        away_id = game.get(
+            "awayTeamId"
+        )
+
+        home_id = game.get(
+            "homeTeamId"
+        )
+
+        away_name = safe_team_name(
+            away_id
+        )
+
+        home_name = safe_team_name(
+            home_id
+        )
+
+        away = gotw_team_story_score(
+            away_name,
+            away_id,
+            home_name,
+            home_id,
+            game,
+            standings_map
+        )
+
+        home = gotw_team_story_score(
+            home_name,
+            home_id,
+            away_name,
+            away_id,
+            game,
+            standings_map
+        )
+
+        if away.get(
+            "score",
+            0
+        ) > home.get(
+            "score",
+            0
+        ):
+            headline_team = away
+        elif home.get(
+            "score",
+            0
+        ) > away.get(
+            "score",
+            0
+        ):
+            headline_team = home
+        else:
+            headline_team = stable_choice(
+                [
+                    away,
+                    home
+                ],
+                (
+                    f"gotw-headline-{season_type}-"
+                    f"{week_number}-"
+                    f"{game.get('scheduleId')}"
+                )
+            )
+
+        headline_team = dict(
+            headline_team
+        )
+
+        headline_team[
+            "matchup_score"
+        ] = round(
+            away.get(
+                "score",
+                0
+            )
+            + home.get(
+                "score",
+                0
+            ),
+            2
+        )
+
+        headline_team[
+            "schedule_id"
+        ] = game.get(
+            "scheduleId"
+        )
+
+        matchup_candidates.append(
+            headline_team
+        )
+
+    matchup_candidates.sort(
+        key=lambda item: (
+            item.get(
+                "matchup_score",
+                0
+            ),
+            item.get(
+                "score",
+                0
+            )
+        ),
+        reverse=True
+    )
+
+    selected = []
+    seen_teams = set()
+    seen_games = set()
+
+    for item in matchup_candidates:
+        team_key = str(
+            item.get(
+                "team"
+            )
+        ).lower()
+
+        game_key = str(
+            item.get(
+                "schedule_id"
+            )
+        )
+
+        if (
+            team_key in seen_teams
+            or game_key in seen_games
+        ):
+            continue
+
+        selected.append(
+            item
+        )
+
+        seen_teams.add(
+            team_key
+        )
+
+        seen_games.add(
+            game_key
+        )
+
+        if len(
+            selected
+        ) >= 3:
+            break
+
+    return selected
+
+
+def create_discord_gotw_poll(
+    season_type,
+    week_number,
+    test=False,
+    force=False
+):
+    if not gotw_poll_configured():
+        return {
+            "success":
+                False,
+            "error": (
+                "GOTW requires DISCORD_BOT_TOKEN "
+                "and GOTW_CHANNEL_ID."
+            )
+        }
+
+    existing = get_gotw_poll_record(
+        season_type,
+        week_number,
+        test=test
+    )
+
+    if (
+        existing
+        and not force
+    ):
+        return {
+            "success":
+                True,
+            "skipped":
+                True,
+            "reason":
+                "poll_already_created",
+            "poll":
+                existing
+        }
+
+    candidates = (
+        choose_gotw_poll_candidates(
+            season_type,
+            week_number
+        )
+    )
+
+    if len(
+        candidates
+    ) < 3:
+        return {
+            "success":
+                False,
+            "error": (
+                "Need at least three unplayed "
+                "matchups to create the GOTW vote."
+            ),
+            "candidates":
+                candidates
+        }
+
+    channel_id = (
+        gotw_channel_id()
+    )
+
+    token = discord_bot_token()
+
+    question = (
+        f"{'TEST • ' if test else ''}"
+        f"PROJECT MADDEN GOTW • "
+        f"{season_type.upper()} WEEK {week_number} — "
+        "Which team should headline Game of the Week?"
+    )
+
+    payload = {
+        "content": (
+            "🏆 **GAME OF THE WEEK FAN VOTE**\n"
+            "Project Madden Analytics selected the **3 strongest "
+            "team candidates** from three different scheduled games.\n\n"
+            + "\n".join(
+                (
+                    f"**{index}. {item.get('team')}** — "
+                    f"{item.get('matchup')}\n"
+                    f"Why selected: "
+                    + (
+                        ", ".join(
+                            item.get(
+                                "reasons",
+                                []
+                            )
+                        )
+                        or "high-value weekly matchup"
+                    )
+                )
+                for index, item in enumerate(
+                    candidates[:3],
+                    start=1
+                )
+            )
+            + "\n\n⏱️ **Voting closes in 5 minutes.** "
+            "One vote per person."
+        ),
+        "poll": {
+            "question": {
+                "text":
+                    question[:300]
+            },
+            "answers": [
+                {
+                    "poll_media": {
+                        "text":
+                            str(
+                                item.get(
+                                    "team",
+                                    "Team"
+                                )
+                            )[:55]
+                    }
+                }
+                for item
+                in candidates[:3]
+            ],
+            # Discord requires poll duration in whole hours.
+            # We create a 1-hour poll and explicitly expire it after 5 minutes.
+            "duration":
+                1,
+            "allow_multiselect":
+                False,
+            "layout_type":
+                1
+        },
+        "allowed_mentions": {
+            "parse": []
+        }
+    }
+
+    response = requests.post(
+        (
+            "https://discord.com/api/v10/"
+            f"channels/{channel_id}/messages"
+        ),
+        headers={
+            "Authorization":
+                f"Bot {token}",
+            "Content-Type":
+                "application/json"
+        },
+        json=payload,
+        timeout=15
+    )
+
+    if response.status_code not in [
+        200,
+        201
+    ]:
+        return {
+            "success":
+                False,
+            "status_code":
+                response.status_code,
+            "error":
+                response.text[:1000]
+        }
+
+    message = response.json()
+
+    message_id = str(
+        message.get(
+            "id",
+            ""
+        )
+    )
+
+    record = {
+        "key":
+            gotw_poll_key(
+                season_type,
+                week_number,
+                test=test
+            ),
+        "season_type":
+            season_type,
+        "week":
+            week_number,
+        "test":
+            bool(
+                test
+            ),
+        "message_id":
+            message_id,
+        "channel_id":
+            channel_id,
+        "created_at":
+            datetime.now(
+                timezone.utc
+            ).isoformat(),
+        "close_after_seconds":
+            GOTW_POLL_CLOSE_SECONDS,
+        "status":
+            "open",
+        "candidates":
+            candidates[:3],
+        "winner":
+            None,
+        "vote_counts":
+            {}
+    }
+
+    history = (
+        load_gotw_poll_history()
+    )
+
+    history[
+        "polls"
+    ].append(
+        record
+    )
+
+    save_gotw_poll_history(
+        history
+    )
+
+    worker = threading.Thread(
+        target=close_gotw_poll_after_delay,
+        args=(
+            message_id,
+            channel_id,
+            season_type,
+            week_number,
+            test
+        ),
+        daemon=True
+    )
+
+    worker.start()
+
+    return {
+        "success":
+            True,
+        "message_id":
+            message_id,
+        "channel_id":
+            channel_id,
+        "closes_in_seconds":
+            GOTW_POLL_CLOSE_SECONDS,
+        "candidates":
+            candidates[:3]
+    }
+
+
+def get_discord_gotw_message(
+    channel_id,
+    message_id
+):
+    token = discord_bot_token()
+
+    response = requests.get(
+        (
+            "https://discord.com/api/v10/"
+            f"channels/{channel_id}/messages/{message_id}"
+        ),
+        headers={
+            "Authorization":
+                f"Bot {token}"
+        },
+        timeout=15
+    )
+
+    if response.status_code != 200:
+        return None
+
+    try:
+        return response.json()
+    except Exception:
+        return None
+
+
+def update_gotw_poll_result(
+    message,
+    season_type,
+    week_number,
+    test=False
+):
+    if not isinstance(
+        message,
+        dict
+    ):
+        return None
+
+    poll = message.get(
+        "poll",
+        {}
+    )
+
+    answer_text = {
+        str(
+            answer.get(
+                "answer_id"
+            )
+        ):
+            answer.get(
+                "poll_media",
+                {}
+            ).get(
+                "text"
+            )
+        for answer in poll.get(
+            "answers",
+            []
+        )
+    }
+
+    vote_counts = {}
+
+    for count in (
+        poll.get(
+            "results",
+            {}
+        ).get(
+            "answer_counts",
+            []
+        )
+    ):
+        answer_id = str(
+            count.get(
+                "id"
+            )
+        )
+
+        team = answer_text.get(
+            answer_id,
+            f"Answer {answer_id}"
+        )
+
+        vote_counts[
+            team
+        ] = int(
+            count.get(
+                "count",
+                0
+            )
+            or 0
+        )
+
+    winner = None
+
+    if vote_counts:
+        max_votes = max(
+            vote_counts.values()
+        )
+
+        tied = [
+            team
+            for team, votes
+            in vote_counts.items()
+            if votes
+            == max_votes
+        ]
+
+        winner = (
+            tied[0]
+            if len(
+                tied
+            ) == 1
+            else stable_choice(
+                tied,
+                (
+                    f"gotw-tiebreak-{season_type}-"
+                    f"{week_number}"
+                )
+            )
+        )
+
+    history = (
+        load_gotw_poll_history()
+    )
+
+    key = gotw_poll_key(
+        season_type,
+        week_number,
+        test=test
+    )
+
+    updated = None
+
+    for item in history.get(
+        "polls",
+        []
+    ):
+        if (
+            item.get(
+                "key"
+            )
+            == key
+            and str(
+                item.get(
+                    "message_id"
+                )
+            )
+            == str(
+                message.get(
+                    "id"
+                )
+            )
+        ):
+            item[
+                "status"
+            ] = "closed"
+
+            item[
+                "closed_at"
+            ] = datetime.now(
+                timezone.utc
+            ).isoformat()
+
+            item[
+                "winner"
+            ] = winner
+
+            item[
+                "vote_counts"
+            ] = vote_counts
+
+            updated = item
+            break
+
+    save_gotw_poll_history(
+        history
+    )
+
+    return updated
+
+
+def announce_gotw_winner(
+    record
+):
+    if not record:
+        return {
+            "sent":
+                False,
+            "error":
+                "No GOTW record."
+        }
+
+    winner = record.get(
+        "winner"
+    )
+
+    candidates = record.get(
+        "candidates",
+        []
+    )
+
+    winner_item = next(
+        (
+            item
+            for item in candidates
+            if item.get(
+                "team"
+            ) == winner
+        ),
+        {}
+    )
+
+    if winner:
+        content = (
+            "🏆 **PROJECT MADDEN GAME OF THE WEEK**\n"
+            f"Fan vote winner: **{winner}**\n"
+            f"Featured matchup: **{winner_item.get('matchup', '—')}**\n"
+            f"Votes: **{record.get('vote_counts', {}).get(winner, 0)}**\n\n"
+            "The fans have spoken. This matchup is officially "
+            "the Project Madden Game of the Week."
+        )
+    else:
+        content = (
+            "🏆 **GOTW VOTING CLOSED**\n"
+            "The poll closed without a valid winner."
+        )
+
+    response = requests.post(
+        (
+            "https://discord.com/api/v10/"
+            f"channels/{record.get('channel_id')}/messages"
+        ),
+        headers={
+            "Authorization":
+                f"Bot {discord_bot_token()}",
+            "Content-Type":
+                "application/json"
+        },
+        json={
+            "content":
+                content,
+            "allowed_mentions": {
+                "parse": []
+            }
+        },
+        timeout=15
+    )
+
+    return {
+        "sent":
+            response.status_code
+            in [
+                200,
+                201
+            ],
+        "status_code":
+            response.status_code
+    }
+
+
+def close_gotw_poll(
+    message_id,
+    channel_id,
+    season_type,
+    week_number,
+    test=False
+):
+    response = requests.post(
+        (
+            "https://discord.com/api/v10/"
+            f"channels/{channel_id}/polls/{message_id}/expire"
+        ),
+        headers={
+            "Authorization":
+                f"Bot {discord_bot_token()}",
+            "Content-Type":
+                "application/json"
+        },
+        timeout=15
+    )
+
+    if response.status_code != 200:
+        return {
+            "success":
+                False,
+            "status_code":
+                response.status_code,
+            "error":
+                response.text[:1000]
+        }
+
+    message = response.json()
+
+    time.sleep(
+        2
+    )
+
+    refreshed = (
+        get_discord_gotw_message(
+            channel_id,
+            message_id
+        )
+    )
+
+    if refreshed:
+        message = refreshed
+
+    record = update_gotw_poll_result(
+        message,
+        season_type,
+        week_number,
+        test=test
+    )
+
+    return {
+        "success":
+            True,
+        "record":
+            record,
+        "announcement":
+            announce_gotw_winner(
+                record
+            )
+    }
+
+
+def close_gotw_poll_after_delay(
+    message_id,
+    channel_id,
+    season_type,
+    week_number,
+    test=False
+):
+    time.sleep(
+        GOTW_POLL_CLOSE_SECONDS
+    )
+
+    try:
+        close_gotw_poll(
+            message_id,
+            channel_id,
+            season_type,
+            week_number,
+            test=test
+        )
+    except Exception as e:
+        print(
+            "GOTW POLL CLOSE ERROR:",
+            str(
+                e
+            )
+        )
+
+
+def latest_closed_gotw(
+    season_type,
+    week_number
+):
+    record = get_gotw_poll_record(
+        season_type,
+        week_number,
+        test=False
+    )
+
+    if (
+        record
+        and record.get(
+            "status"
+        ) == "closed"
+    ):
+        return record
+
+    return None
+
+
+@app.route(
+    "/gotw/status"
+)
+def gotw_status_route():
+    return jsonify({
+        "configured":
+            gotw_poll_configured(),
+        "channel_id_configured":
+            bool(
+                gotw_channel_id()
+            ),
+        "bot_token_configured":
+            bool(
+                discord_bot_token()
+            ),
+        "close_seconds":
+            GOTW_POLL_CLOSE_SECONDS,
+        "history":
+            list(
+                reversed(
+                    load_gotw_poll_history().get(
+                        "polls",
+                        []
+                    )
+                )
+            )[:20]
+    })
+
+
+@app.route(
+    "/gotw/post/<season_type>/<int:week_number>",
+    methods=[
+        "GET",
+        "POST"
+    ]
+)
+def gotw_manual_post_route(
+    season_type,
+    week_number
+):
+    return jsonify(
+        create_discord_gotw_poll(
+            season_type,
+            week_number,
+            test=False,
+            force=False
+        )
+    )
+
+
 # =========================================================
 # PROJECT MADDEN WEEKLY SHOW
 # =========================================================
@@ -9870,6 +11047,13 @@ def build_weekly_show_summary(
         weekly_trade_proposals()
     )
 
+    fan_gotw = (
+        latest_closed_gotw(
+            season_type,
+            week_number
+        )
+    )
+
     # Keep rivalry history current as completed games appear.
     try:
         record_rivalry_week(
@@ -10030,6 +11214,8 @@ def build_weekly_show_summary(
             receipts_callout,
         "trade_proposals":
             trade_proposals,
+        "fan_gotw":
+            fan_gotw,
         "playoff_race":
             playoff_race,
         "rivalry_spotlight":
@@ -10505,6 +11691,43 @@ def weekly_show_embed_fields(
                 "\n".join(
                     lines
                 )[:1024],
+            "inline":
+                False
+        })
+
+    fan_gotw = show.get(
+        "fan_gotw"
+    )
+
+    if fan_gotw:
+        winner = fan_gotw.get(
+            "winner"
+        )
+
+        winner_item = next(
+            (
+                item
+                for item in fan_gotw.get(
+                    "candidates",
+                    []
+                )
+                if item.get(
+                    "team"
+                ) == winner
+            ),
+            {}
+        )
+
+        fields.append({
+            "name":
+                "🏆 Fan-Voted Game of the Week",
+            "value": (
+                f"**{winner}** won the fan vote.\n"
+                f"Featured matchup: "
+                f"**{winner_item.get('matchup', '—')}**\n"
+                f"Votes: "
+                f"**{fan_gotw.get('vote_counts', {}).get(winner, 0)}**"
+            )[:1024],
             "inline":
                 False
         })
@@ -13698,6 +14921,38 @@ def register_trade_slash_command():
         ]
     }
 
+
+    test_gotw_command = {
+        "name": "testgotw",
+        "description": "League Owner: post a 5-minute GOTW test poll",
+        "options": [
+            {
+                "type": 3,
+                "name": "season_type",
+                "description": "Season type",
+                "required": True,
+                "choices": [
+                    {
+                        "name": "Preseason",
+                        "value": "pre"
+                    },
+                    {
+                        "name": "Regular Season",
+                        "value": "reg"
+                    }
+                ]
+            },
+            {
+                "type": 4,
+                "name": "week",
+                "description": "Week number",
+                "required": True,
+                "min_value": 1,
+                "max_value": 25
+            }
+        ]
+    }
+
     test_system_command = {
         "name": "testsystem",
         "description": "League Owner: test Project Madden systems in Discord",
@@ -13785,7 +15040,8 @@ def register_trade_slash_command():
         test_weekly_show_command,
         test_josh_pate_command,
         test_pat_command,
-        test_system_command
+        test_system_command,
+        test_gotw_command
     ]
 
     headers = {
@@ -15456,6 +16712,53 @@ def discord_interactions():
                 }
             })
 
+        if command_name == "testgotw":
+            options = discord_option_map(
+                interaction
+            )
+
+            season_type = str(
+                options.get(
+                    "season_type",
+                    "reg"
+                )
+            ).strip().lower()
+
+            try:
+                week_number = int(
+                    options.get(
+                        "week",
+                        1
+                    )
+                )
+            except Exception:
+                week_number = 1
+
+            result = create_discord_gotw_poll(
+                season_type,
+                week_number,
+                test=True,
+                force=True
+            )
+
+            if result.get(
+                "success"
+            ):
+                return discord_ephemeral(
+                    "✅ GOTW test poll posted in #gotw. "
+                    "It will close automatically in 5 minutes."
+                )
+
+            return discord_ephemeral(
+                "❌ GOTW test poll failed: "
+                + str(
+                    result.get(
+                        "error",
+                        "Unknown error"
+                    )
+                )[:900]
+            )
+
         if command_name == "testpat":
             options = discord_option_map(
                 interaction
@@ -15668,7 +16971,8 @@ def discord_status():
             "/testpat",
             "/testjoshpate",
             "/testweeklyshow",
-            "/testsystem"
+            "/testsystem",
+            "/testgotw"
         ],
         "test_commands_locked_to_role":
             "League owner",
@@ -15688,6 +16992,14 @@ def discord_status():
         ],
         "weekly_show_command":
             "/weeklyshow",
+        "gotw_poll_configured":
+            gotw_poll_configured(),
+        "gotw_channel_id_configured":
+            bool(
+                gotw_channel_id()
+            ),
+        "gotw_poll_close_seconds":
+            GOTW_POLL_CLOSE_SECONDS,
         "weekly_show_discord_webhook_configured": (
             weekly_show_webhook_configured()
         ),
@@ -16504,6 +17816,28 @@ def snallabot_receiver(subpath):
             )
 
         auto_post = None
+        gotw_auto_post = None
+
+        # Create the weekly GOTW fan poll as soon as schedules arrive.
+        if stat_type == "schedules":
+            try:
+                gotw_auto_post = create_discord_gotw_poll(
+                    season_type,
+                    int(
+                        week_number
+                    ),
+                    test=False,
+                    force=False
+                )
+            except Exception as e:
+                gotw_auto_post = {
+                    "success":
+                        False,
+                    "error":
+                        str(
+                            e
+                        )
+                }
 
         # Marcus checks for new material whenever one of the
         # analyst-relevant weekly exports arrives.
@@ -16539,7 +17873,8 @@ def snallabot_receiver(subpath):
             "season_type": season_type,
             "week": week_number,
             "stat_type": stat_type,
-            "marcus_auto_post": auto_post
+            "marcus_auto_post": auto_post,
+            "gotw_auto_post": gotw_auto_post
         })
 
     return jsonify({
@@ -17887,6 +19222,7 @@ def weekly_show_healthcheck(
         "panel_takes": False,
         "panel_debate": False,
         "analyst_receipts": False,
+        "gotw_poll_system": False,
         "permanent_storage": False,
         "analyst_accuracy": False,
         "rivalry_tracker": False,
@@ -17938,6 +19274,10 @@ def weekly_show_healthcheck(
                     []
                 )
             ) == 4
+        )
+
+        checks["gotw_poll_system"] = (
+            gotw_poll_configured()
         )
 
         checks["permanent_storage"] = (
