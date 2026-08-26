@@ -49,11 +49,15 @@ PERSISTENT_JSON_FILES = {
     "project_madden_record_book.json",
     "project_madden_hall_of_fame.json",
     "analyst_receipts.json",
+    "rivalry_history.json",
 }
 
 PERSISTENT_DB_LOCK = threading.Lock()
 PERSISTENT_DB_READY = False
 PERSISTENT_DB_LAST_ERROR = None
+
+# Only members with this Discord role may use commands beginning with /test.
+LEAGUE_OWNER_TEST_ROLE_ID = "1538749830111694910"
 
 
 # =========================================================
@@ -4764,6 +4768,2031 @@ def analyst_post_key(
 
 
 
+
+# =========================================================
+# PLAYOFF RACE / CLINCHING SCENARIOS
+# =========================================================
+
+NFL_ALIGNMENT = {
+    "AFC": {
+        "East": ["BUF", "MIA", "NE", "NYJ"],
+        "North": ["BAL", "CIN", "CLE", "PIT"],
+        "South": ["HOU", "IND", "JAX", "TEN"],
+        "West": ["DEN", "KC", "LV", "LAC"],
+    },
+    "NFC": {
+        "East": ["DAL", "NYG", "PHI", "WAS"],
+        "North": ["CHI", "DET", "GB", "MIN"],
+        "South": ["ATL", "CAR", "NO", "TB"],
+        "West": ["ARI", "LAR", "SF", "SEA"],
+    },
+}
+
+
+def canonical_team_abbr(team):
+    value = str(
+        team.get(
+            "abbr",
+            ""
+        )
+        or ""
+    ).upper().strip()
+
+    aliases = {
+        "ARZ": "ARI",
+        "JAC": "JAX",
+        "LVR": "LV",
+        "SD": "LAC",
+        "STL": "LAR",
+        "OAK": "LV",
+    }
+
+    return aliases.get(
+        value,
+        value
+    )
+
+
+def team_alignment(team):
+    abbr = canonical_team_abbr(
+        team
+    )
+
+    for conference, divisions in NFL_ALIGNMENT.items():
+        for division, teams in divisions.items():
+            if abbr in teams:
+                return {
+                    "conference":
+                        conference,
+                    "division":
+                        division
+                }
+
+    return {
+        "conference":
+            None,
+        "division":
+            None
+    }
+
+
+def playoff_sort_key(team):
+    return (
+        -float(
+            team.get(
+                "win_pct",
+                0
+            )
+            or 0
+        ),
+        -int(
+            team.get(
+                "wins",
+                0
+            )
+            or 0
+        ),
+        -float(
+            team.get(
+                "point_diff",
+                0
+            )
+            or 0
+        ),
+        -int(
+            team.get(
+                "overall",
+                0
+            )
+            or 0
+        ),
+    )
+
+
+def build_conference_playoff_picture(
+    conference
+):
+    standings = normalize_standings()
+
+    teams = []
+
+    for team in standings:
+        alignment = team_alignment(
+            team
+        )
+
+        if (
+            alignment.get(
+                "conference"
+            )
+            != conference
+        ):
+            continue
+
+        item = dict(
+            team
+        )
+
+        item[
+            "conference"
+        ] = conference
+
+        item[
+            "division"
+        ] = alignment.get(
+            "division"
+        )
+
+        teams.append(
+            item
+        )
+
+    if not teams:
+        return {
+            "conference":
+                conference,
+            "seeds":
+                [],
+            "division_leaders":
+                [],
+            "wild_cards":
+                [],
+            "bubble":
+                [],
+            "elimination_danger":
+                [],
+        }
+
+    # If Snallabot exposes seeds, respect them first.
+    seeded = [
+        team
+        for team in teams
+        if (
+            team.get(
+                "playoff_seed"
+            )
+            is not None
+            and 1
+            <= int(
+                team.get(
+                    "playoff_seed"
+                )
+            )
+            <= 7
+        )
+    ]
+
+    division_leaders = []
+
+    for division in NFL_ALIGNMENT.get(
+        conference,
+        {}
+    ):
+        division_teams = [
+            team
+            for team in teams
+            if team.get(
+                "division"
+            ) == division
+        ]
+
+        if not division_teams:
+            continue
+
+        ranked = sorted(
+            division_teams,
+            key=playoff_sort_key
+        )
+
+        leader = dict(
+            ranked[0]
+        )
+        leader[
+            "division_leader"
+        ] = True
+
+        division_leaders.append(
+            leader
+        )
+
+    if len(seeded) >= 7:
+        seeds = sorted(
+            seeded,
+            key=lambda team: int(
+                team.get(
+                    "playoff_seed"
+                )
+            )
+        )[:7]
+    else:
+        # NFL-style approximation:
+        # four division leaders first, then three best remaining teams.
+        div_ids = {
+            str(
+                team.get(
+                    "team_id"
+                )
+            )
+            for team in division_leaders
+        }
+
+        division_leaders = sorted(
+            division_leaders,
+            key=playoff_sort_key
+        )
+
+        remaining = [
+            team
+            for team in teams
+            if str(
+                team.get(
+                    "team_id"
+                )
+            )
+            not in div_ids
+        ]
+
+        remaining = sorted(
+            remaining,
+            key=playoff_sort_key
+        )
+
+        seeds = (
+            division_leaders[:4]
+            + remaining[:3]
+        )
+
+        for index, team in enumerate(
+            seeds,
+            start=1
+        ):
+            team[
+                "projected_seed"
+            ] = index
+
+    seed_ids = {
+        str(
+            team.get(
+                "team_id"
+            )
+        )
+        for team in seeds
+    }
+
+    remaining = [
+        team
+        for team in sorted(
+            teams,
+            key=playoff_sort_key
+        )
+        if str(
+            team.get(
+                "team_id"
+            )
+        )
+        not in seed_ids
+    ]
+
+    bubble = remaining[:4]
+
+    elimination_danger = []
+
+    if teams:
+        max_games = max(
+            int(
+                team.get(
+                    "games",
+                    0
+                )
+                or 0
+            )
+            for team in teams
+        )
+
+        # Only make stronger elimination language later in the season.
+        if max_games >= 10:
+            cutoff_wins = (
+                int(
+                    seeds[-1].get(
+                        "wins",
+                        0
+                    )
+                    or 0
+                )
+                if len(
+                    seeds
+                ) >= 7
+                else 0
+            )
+
+            for team in remaining:
+                games = int(
+                    team.get(
+                        "games",
+                        0
+                    )
+                    or 0
+                )
+                wins = int(
+                    team.get(
+                        "wins",
+                        0
+                    )
+                    or 0
+                )
+
+                remaining_games = max(
+                    0,
+                    17 - games
+                )
+
+                max_possible = (
+                    wins
+                    + remaining_games
+                )
+
+                danger = None
+
+                if (
+                    max_possible
+                    < cutoff_wins
+                ):
+                    danger = (
+                        "mathematically eliminated by current "
+                        "win-count projection"
+                    )
+                elif (
+                    max_possible
+                    <= cutoff_wins + 1
+                ):
+                    danger = (
+                        "near elimination — almost no margin for error"
+                    )
+                elif (
+                    wins
+                    <= cutoff_wins - 2
+                    and games >= 12
+                ):
+                    danger = (
+                        "must stack wins and needs help"
+                    )
+
+                if danger:
+                    elimination_danger.append({
+                        "team":
+                            team.get(
+                                "team"
+                            ),
+                        "record":
+                            (
+                                f"{team.get('wins', 0)}-"
+                                f"{team.get('losses', 0)}"
+                            ),
+                        "status":
+                            danger
+                    })
+
+    return {
+        "conference":
+            conference,
+        "seeds":
+            seeds,
+        "division_leaders":
+            division_leaders,
+        "wild_cards":
+            seeds[4:7]
+            if len(
+                seeds
+            ) >= 5
+            else [],
+        "bubble":
+            bubble,
+        "elimination_danger":
+            elimination_danger[:5],
+    }
+
+
+def build_projected_playoff_matchups():
+    results = {}
+
+    for conference in [
+        "AFC",
+        "NFC"
+    ]:
+        picture = (
+            build_conference_playoff_picture(
+                conference
+            )
+        )
+
+        seeds = picture.get(
+            "seeds",
+            []
+        )
+
+        if len(seeds) < 7:
+            results[
+                conference
+            ] = []
+            continue
+
+        def seed_num(team, fallback):
+            return int(
+                team.get(
+                    "playoff_seed",
+                    team.get(
+                        "projected_seed",
+                        fallback
+                    )
+                )
+                or fallback
+            )
+
+        by_seed = {
+            seed_num(
+                team,
+                index
+            ):
+                team
+            for index, team in enumerate(
+                seeds,
+                start=1
+            )
+        }
+
+        matchups = []
+
+        for high, low in [
+            (2, 7),
+            (3, 6),
+            (4, 5),
+        ]:
+            a = by_seed.get(
+                high
+            )
+            b = by_seed.get(
+                low
+            )
+
+            if a and b:
+                matchups.append({
+                    "higher_seed":
+                        high,
+                    "lower_seed":
+                        low,
+                    "matchup":
+                        (
+                            f"#{low} {b.get('team')} @ "
+                            f"#{high} {a.get('team')}"
+                        )
+                })
+
+        bye = by_seed.get(
+            1
+        )
+
+        if bye:
+            matchups.insert(
+                0,
+                {
+                    "higher_seed":
+                        1,
+                    "lower_seed":
+                        None,
+                    "matchup":
+                        (
+                            f"#1 {bye.get('team')} — FIRST-ROUND BYE"
+                        )
+                }
+            )
+
+        results[
+            conference
+        ] = matchups
+
+    return results
+
+
+def build_clinching_scenarios():
+    scenarios = []
+
+    for conference in [
+        "AFC",
+        "NFC"
+    ]:
+        picture = (
+            build_conference_playoff_picture(
+                conference
+            )
+        )
+
+        seeds = picture.get(
+            "seeds",
+            []
+        )
+
+        bubble = picture.get(
+            "bubble",
+            []
+        )
+
+        if not seeds:
+            continue
+
+        max_games = max(
+            [
+                int(
+                    team.get(
+                        "games",
+                        0
+                    )
+                    or 0
+                )
+                for team in (
+                    seeds + bubble
+                )
+            ]
+            or [0]
+        )
+
+        # Avoid pretending exact tiebreaker clinches early.
+        if max_games < 10:
+            continue
+
+        cutoff = (
+            seeds[-1]
+            if len(
+                seeds
+            ) >= 7
+            else None
+        )
+
+        cutoff_wins = (
+            int(
+                cutoff.get(
+                    "wins",
+                    0
+                )
+                or 0
+            )
+            if cutoff
+            else 0
+        )
+
+        for team in seeds:
+            games = int(
+                team.get(
+                    "games",
+                    0
+                )
+                or 0
+            )
+
+            wins = int(
+                team.get(
+                    "wins",
+                    0
+                )
+                or 0
+            )
+
+            seed = int(
+                team.get(
+                    "playoff_seed",
+                    team.get(
+                        "projected_seed",
+                        0
+                    )
+                )
+                or 0
+            )
+
+            status = None
+
+            if (
+                games >= 15
+                and seed <= 4
+                and wins >= cutoff_wins + 2
+            ):
+                status = (
+                    "can put itself in strong division-clinch position "
+                    "with another win"
+                )
+            elif (
+                games >= 14
+                and seed <= 7
+            ):
+                status = (
+                    "controls its own path: keep winning and protect the seed"
+                )
+            elif (
+                games >= 12
+                and seed >= 6
+            ):
+                status = (
+                    "must-win territory — a loss could drop it below the line"
+                )
+
+            if status:
+                scenarios.append({
+                    "conference":
+                        conference,
+                    "team":
+                        team.get(
+                            "team"
+                        ),
+                    "seed":
+                        seed,
+                    "record":
+                        (
+                            f"{team.get('wins', 0)}-"
+                            f"{team.get('losses', 0)}"
+                        ),
+                    "scenario":
+                        status,
+                    "note":
+                        (
+                            "Projection based on current standings. "
+                            "Exact NFL tiebreaker clinches require full head-to-head "
+                            "and conference/division tiebreaker data."
+                        )
+                })
+
+        for team in bubble[:2]:
+            games = int(
+                team.get(
+                    "games",
+                    0
+                )
+                or 0
+            )
+
+            if games >= 12:
+                scenarios.append({
+                    "conference":
+                        conference,
+                    "team":
+                        team.get(
+                            "team"
+                        ),
+                    "seed":
+                        None,
+                    "record":
+                        (
+                            f"{team.get('wins', 0)}-"
+                            f"{team.get('losses', 0)}"
+                        ),
+                    "scenario":
+                        (
+                            "needs wins plus help from teams currently "
+                            "holding wild-card spots"
+                        ),
+                    "note":
+                        "Bubble projection based on current standings."
+                })
+
+    return scenarios
+
+
+def build_playoff_game_of_week(
+    season_type,
+    week_number
+):
+    predictions = (
+        build_weekly_game_predictions(
+            season_type,
+            week_number
+        )
+    )
+
+    if not predictions:
+        return None
+
+    standings = normalize_standings()
+
+    by_team = {
+        team.get(
+            "team"
+        ):
+            team
+        for team in standings
+    }
+
+    best = None
+    best_score = -1
+
+    for game in predictions:
+        away = by_team.get(
+            game.get(
+                "away"
+            ),
+            {}
+        )
+        home = by_team.get(
+            game.get(
+                "home"
+            ),
+            {}
+        )
+
+        score = 0
+        reasons = []
+
+        for team in [
+            away,
+            home
+        ]:
+            seed = team.get(
+                "playoff_seed"
+            )
+
+            conf_rank = team.get(
+                "conference_rank"
+            )
+
+            if (
+                seed is not None
+                and int(
+                    seed
+                )
+                <= 7
+            ):
+                score += 5
+                reasons.append(
+                    f"{team.get('team')} currently in playoff position"
+                )
+            elif (
+                conf_rank is not None
+                and int(
+                    conf_rank
+                )
+                <= 10
+            ):
+                score += 3
+                reasons.append(
+                    f"{team.get('team')} is in the conference race"
+                )
+
+            games = int(
+                team.get(
+                    "games",
+                    0
+                )
+                or 0
+            )
+
+            if games >= 12:
+                score += 2
+
+        away_align = team_alignment(
+            away
+        )
+        home_align = team_alignment(
+            home
+        )
+
+        if (
+            away_align.get(
+                "division"
+            )
+            and away_align
+            == home_align
+        ):
+            score += 4
+            reasons.append(
+                "division matchup"
+            )
+
+        if score > best_score:
+            best_score = score
+            best = {
+                "matchup":
+                    game.get(
+                        "matchup"
+                    ),
+                "score":
+                    score,
+                "reasons":
+                    reasons[:4],
+                "favorite":
+                    game.get(
+                        "favorite"
+                    ),
+                "confidence":
+                    game.get(
+                        "confidence"
+                    )
+            }
+
+    if (
+        best
+        and best_score
+        >= 4
+    ):
+        return best
+
+    return None
+
+
+def build_playoff_race(
+    season_type=None,
+    week_number=None
+):
+    return {
+        "AFC":
+            build_conference_playoff_picture(
+                "AFC"
+            ),
+        "NFC":
+            build_conference_playoff_picture(
+                "NFC"
+            ),
+        "projected_matchups":
+            build_projected_playoff_matchups(),
+        "clinching_scenarios":
+            build_clinching_scenarios(),
+        "game_of_the_week":
+            (
+                build_playoff_game_of_week(
+                    season_type,
+                    week_number
+                )
+                if (
+                    season_type is not None
+                    and week_number is not None
+                )
+                else None
+            )
+    }
+
+
+@app.route(
+    "/analyst/playoff-race"
+)
+def playoff_race_route():
+    season_type = request.args.get(
+        "season_type",
+        "reg"
+    )
+
+    try:
+        week_number = int(
+            request.args.get(
+                "week",
+                1
+            )
+        )
+    except Exception:
+        week_number = 1
+
+    return jsonify(
+        build_playoff_race(
+            season_type,
+            week_number
+        )
+    )
+
+
+# =========================================================
+# RIVALRY TRACKER / RIVALRY WEEK
+# =========================================================
+
+RIVALRY_HISTORY_FILE = "rivalry_history.json"
+
+
+def team_owner_name(
+    team_id
+):
+    team = team_by_id(
+        team_id
+    )
+
+    if not team:
+        return None
+
+    return (
+        team.get(
+            "userName"
+        )
+        or team.get(
+            "username"
+        )
+        or team.get(
+            "user"
+        )
+        or team.get(
+            "owner"
+        )
+        or team.get(
+            "coach"
+        )
+    )
+
+
+def load_rivalry_history():
+    data = load_json_file(
+        RIVALRY_HISTORY_FILE
+    )
+
+    if not isinstance(
+        data,
+        dict
+    ):
+        data = {}
+
+    data.setdefault(
+        "games",
+        []
+    )
+
+    data.setdefault(
+        "custom_names",
+        {}
+    )
+
+    return data
+
+
+def save_rivalry_history(
+    data
+):
+    games = data.get(
+        "games",
+        []
+    )
+
+    if not isinstance(
+        games,
+        list
+    ):
+        games = []
+
+    data[
+        "games"
+    ] = games[-5000:]
+
+    save_json_file(
+        RIVALRY_HISTORY_FILE,
+        data
+    )
+
+
+def rivalry_pair_key(
+    owner_a,
+    owner_b
+):
+    values = sorted([
+        str(
+            owner_a
+        ),
+        str(
+            owner_b
+        )
+    ])
+
+    return (
+        values[0]
+        + "||"
+        + values[1]
+    )
+
+
+def record_rivalry_week(
+    season_type,
+    week_number
+):
+    schedule_data = load_weekly_data(
+        season_type,
+        week_number,
+        "schedules"
+    )
+
+    if not schedule_data:
+        return 0
+
+    data = load_rivalry_history()
+    games = data.get(
+        "games",
+        []
+    )
+
+    existing = {
+        (
+            str(
+                item.get(
+                    "season_type"
+                )
+            ),
+            int(
+                item.get(
+                    "week",
+                    0
+                )
+                or 0
+            ),
+            str(
+                item.get(
+                    "schedule_id"
+                )
+            )
+        )
+        for item in games
+        if isinstance(
+            item,
+            dict
+        )
+    }
+
+    created = 0
+
+    for game in schedule_data.get(
+        "gameScheduleInfoList",
+        []
+    ):
+        if not game_looks_completed(
+            game
+        ):
+            continue
+
+        schedule_id = game.get(
+            "scheduleId"
+        )
+
+        key = (
+            str(
+                season_type
+            ),
+            int(
+                week_number
+            ),
+            str(
+                schedule_id
+            )
+        )
+
+        if key in existing:
+            continue
+
+        away_id = game.get(
+            "awayTeamId"
+        )
+        home_id = game.get(
+            "homeTeamId"
+        )
+
+        away_owner = team_owner_name(
+            away_id
+        )
+        home_owner = team_owner_name(
+            home_id
+        )
+
+        # CPU games are not useful for user rivalries.
+        if (
+            not away_owner
+            or not home_owner
+        ):
+            continue
+
+        if (
+            str(
+                away_owner
+            ).strip().lower()
+            == str(
+                home_owner
+            ).strip().lower()
+        ):
+            continue
+
+        away_team = safe_team_name(
+            away_id
+        )
+        home_team = safe_team_name(
+            home_id
+        )
+
+        away_score = int(
+            game.get(
+                "awayScore",
+                0
+            )
+            or 0
+        )
+        home_score = int(
+            game.get(
+                "homeScore",
+                0
+            )
+            or 0
+        )
+
+        if away_score > home_score:
+            winner_owner = away_owner
+            loser_owner = home_owner
+            winner_team = away_team
+            margin = (
+                away_score
+                - home_score
+            )
+        elif home_score > away_score:
+            winner_owner = home_owner
+            loser_owner = away_owner
+            winner_team = home_team
+            margin = (
+                home_score
+                - away_score
+            )
+        else:
+            winner_owner = None
+            loser_owner = None
+            winner_team = None
+            margin = 0
+
+        games.append({
+            "season_type":
+                season_type,
+            "week":
+                week_number,
+            "schedule_id":
+                schedule_id,
+            "away_owner":
+                away_owner,
+            "home_owner":
+                home_owner,
+            "away_team":
+                away_team,
+            "home_team":
+                home_team,
+            "away_score":
+                away_score,
+            "home_score":
+                home_score,
+            "winner_owner":
+                winner_owner,
+            "loser_owner":
+                loser_owner,
+            "winner_team":
+                winner_team,
+            "margin":
+                margin,
+            "pair_key":
+                rivalry_pair_key(
+                    away_owner,
+                    home_owner
+                ),
+            "recorded_at":
+                datetime.now(
+                    timezone.utc
+                ).isoformat()
+        })
+
+        existing.add(
+            key
+        )
+
+        created += 1
+
+    data[
+        "games"
+    ] = games
+
+    save_rivalry_history(
+        data
+    )
+
+    return created
+
+
+def build_rivalry_summary(
+    owner_a,
+    owner_b
+):
+    data = load_rivalry_history()
+
+    pair_key = rivalry_pair_key(
+        owner_a,
+        owner_b
+    )
+
+    games = [
+        item
+        for item in data.get(
+            "games",
+            []
+        )
+        if item.get(
+            "pair_key"
+        ) == pair_key
+    ]
+
+    games.sort(
+        key=lambda item: (
+            str(
+                item.get(
+                    "season_type",
+                    ""
+                )
+            ),
+            int(
+                item.get(
+                    "week",
+                    0
+                )
+                or 0
+            )
+        )
+    )
+
+    wins = {
+        str(
+            owner_a
+        ):
+            0,
+        str(
+            owner_b
+        ):
+            0
+    }
+
+    total_points = {
+        str(
+            owner_a
+        ):
+            0,
+        str(
+            owner_b
+        ):
+            0
+    }
+
+    memorable = []
+    biggest = None
+
+    for item in games:
+        away_owner = str(
+            item.get(
+                "away_owner"
+            )
+        )
+        home_owner = str(
+            item.get(
+                "home_owner"
+            )
+        )
+
+        total_points[
+            away_owner
+        ] = (
+            total_points.get(
+                away_owner,
+                0
+            )
+            + int(
+                item.get(
+                    "away_score",
+                    0
+                )
+                or 0
+            )
+        )
+
+        total_points[
+            home_owner
+        ] = (
+            total_points.get(
+                home_owner,
+                0
+            )
+            + int(
+                item.get(
+                    "home_score",
+                    0
+                )
+                or 0
+            )
+        )
+
+        winner = item.get(
+            "winner_owner"
+        )
+
+        if winner:
+            wins[
+                str(
+                    winner
+                )
+            ] = (
+                wins.get(
+                    str(
+                        winner
+                    ),
+                    0
+                )
+                + 1
+            )
+
+        margin = int(
+            item.get(
+                "margin",
+                0
+            )
+            or 0
+        )
+
+        if (
+            biggest is None
+            or margin
+            > int(
+                biggest.get(
+                    "margin",
+                    -1
+                )
+            )
+        ):
+            biggest = item
+
+        if (
+            margin <= 3
+            or margin >= 21
+        ):
+            memorable.append(
+                item
+            )
+
+    current_streak = None
+
+    if games:
+        latest_winner = games[
+            -1
+        ].get(
+            "winner_owner"
+        )
+
+        if latest_winner:
+            count = 0
+
+            for item in reversed(
+                games
+            ):
+                if (
+                    item.get(
+                        "winner_owner"
+                    )
+                    == latest_winner
+                ):
+                    count += 1
+                else:
+                    break
+
+            current_streak = {
+                "owner":
+                    latest_winner,
+                "wins":
+                    count
+            }
+
+    custom_name = (
+        data.get(
+            "custom_names",
+            {}
+        ).get(
+            pair_key
+        )
+    )
+
+    return {
+        "pair_key":
+            pair_key,
+        "name":
+            custom_name,
+        "owner_a":
+            owner_a,
+        "owner_b":
+            owner_b,
+        "meetings":
+            len(
+                games
+            ),
+        "wins":
+            wins,
+        "total_points":
+            total_points,
+        "current_streak":
+            current_streak,
+        "biggest_win":
+            biggest,
+        "latest_meeting":
+            (
+                games[-1]
+                if games
+                else None
+            ),
+        "memorable_games":
+            memorable[-5:],
+        "games":
+            games[-20:]
+    }
+
+
+def build_top_rivalries(
+    limit=8
+):
+    data = load_rivalry_history()
+
+    pairs = {}
+
+    for item in data.get(
+        "games",
+        []
+    ):
+        pair_key = item.get(
+            "pair_key"
+        )
+
+        if not pair_key:
+            continue
+
+        pairs.setdefault(
+            pair_key,
+            {
+                "owners": (
+                    item.get(
+                        "away_owner"
+                    ),
+                    item.get(
+                        "home_owner"
+                    )
+                ),
+                "meetings":
+                    0,
+                "close_games":
+                    0,
+                "total_margin":
+                    0,
+            }
+        )
+
+        pairs[
+            pair_key
+        ][
+            "meetings"
+        ] += 1
+
+        margin = int(
+            item.get(
+                "margin",
+                0
+            )
+            or 0
+        )
+
+        pairs[
+            pair_key
+        ][
+            "total_margin"
+        ] += margin
+
+        if margin <= 7:
+            pairs[
+                pair_key
+            ][
+                "close_games"
+            ] += 1
+
+    ranked = []
+
+    for pair_key, info in pairs.items():
+        owner_a, owner_b = info[
+            "owners"
+        ]
+
+        summary = build_rivalry_summary(
+            owner_a,
+            owner_b
+        )
+
+        meetings = info[
+            "meetings"
+        ]
+
+        score = (
+            meetings * 6
+            + info[
+                "close_games"
+            ] * 4
+        )
+
+        if summary.get(
+            "current_streak"
+        ):
+            score += min(
+                10,
+                int(
+                    summary[
+                        "current_streak"
+                    ].get(
+                        "wins",
+                        0
+                    )
+                )
+                * 2
+            )
+
+        ranked.append({
+            **summary,
+            "rivalry_score":
+                score
+        })
+
+    ranked.sort(
+        key=lambda item: (
+            item.get(
+                "rivalry_score",
+                0
+            ),
+            item.get(
+                "meetings",
+                0
+            )
+        ),
+        reverse=True
+    )
+
+    return ranked[:limit]
+
+
+def rivalry_week_spotlight(
+    season_type,
+    week_number
+):
+    schedule_data = load_weekly_data(
+        season_type,
+        week_number,
+        "schedules"
+    )
+
+    if not schedule_data:
+        return []
+
+    spotlights = []
+
+    for game in schedule_data.get(
+        "gameScheduleInfoList",
+        []
+    ):
+        away_owner = team_owner_name(
+            game.get(
+                "awayTeamId"
+            )
+        )
+
+        home_owner = team_owner_name(
+            game.get(
+                "homeTeamId"
+            )
+        )
+
+        if (
+            not away_owner
+            or not home_owner
+        ):
+            continue
+
+        summary = build_rivalry_summary(
+            away_owner,
+            home_owner
+        )
+
+        if (
+            summary.get(
+                "meetings",
+                0
+            )
+            < 2
+        ):
+            continue
+
+        spotlights.append({
+            "matchup":
+                (
+                    f"{safe_team_name(game.get('awayTeamId'))} @ "
+                    f"{safe_team_name(game.get('homeTeamId'))}"
+                ),
+            "away_owner":
+                away_owner,
+            "home_owner":
+                home_owner,
+            "rivalry":
+                summary
+        })
+
+    spotlights.sort(
+        key=lambda item: item[
+            "rivalry"
+        ].get(
+            "meetings",
+            0
+        ),
+        reverse=True
+    )
+
+    return spotlights[:3]
+
+
+@app.route(
+    "/analyst/rivalries"
+)
+def rivalries_route():
+    return jsonify({
+        "top_rivalries":
+            build_top_rivalries(
+                20
+            ),
+        "stored_games":
+            len(
+                load_rivalry_history().get(
+                    "games",
+                    []
+                )
+            )
+    })
+
+
+@app.route(
+    "/analyst/rivalries/update/"
+    "<season_type>/<int:week_number>",
+    methods=["GET", "POST"]
+)
+def rivalry_update_route(
+    season_type,
+    week_number
+):
+    created = record_rivalry_week(
+        season_type,
+        week_number
+    )
+
+    return jsonify({
+        "created":
+            created,
+        "top_rivalries":
+            build_top_rivalries(
+                10
+            )
+    })
+
+
+@app.route(
+    "/analyst/rivalry-week/"
+    "<season_type>/<int:week_number>"
+)
+def rivalry_week_route(
+    season_type,
+    week_number
+):
+    return jsonify({
+        "spotlights":
+            rivalry_week_spotlight(
+                season_type,
+                week_number
+            )
+    })
+
+
+# =========================================================
+# ANALYST ACCURACY BY CATEGORY
+# =========================================================
+
+def analyst_pick_category(
+    item
+):
+    away_ovr = item.get(
+        "away_ovr"
+    )
+    home_ovr = item.get(
+        "home_ovr"
+    )
+    picked = item.get(
+        "pick"
+    )
+    actual = item.get(
+        "actual_winner"
+    )
+
+    try:
+        edge = abs(
+            int(
+                away_ovr
+            )
+            - int(
+                home_ovr
+            )
+        )
+    except Exception:
+        edge = None
+
+    favorite = None
+    underdog = None
+
+    if (
+        away_ovr is not None
+        and home_ovr is not None
+    ):
+        if int(
+            away_ovr
+        ) > int(
+            home_ovr
+        ):
+            favorite = item.get(
+                "away"
+            )
+            underdog = item.get(
+                "home"
+            )
+        elif int(
+            home_ovr
+        ) > int(
+            away_ovr
+        ):
+            favorite = item.get(
+                "home"
+            )
+            underdog = item.get(
+                "away"
+            )
+
+    categories = [
+        "overall"
+    ]
+
+    if (
+        favorite
+        and picked
+        == favorite
+    ):
+        categories.append(
+            "favorite_picks"
+        )
+
+    if (
+        underdog
+        and picked
+        == underdog
+    ):
+        categories.append(
+            "upset_picks"
+        )
+
+    if (
+        edge is not None
+        and edge >= 5
+    ):
+        categories.append(
+            "strong_edges"
+        )
+
+    if (
+        edge is not None
+        and edge <= 1
+    ):
+        categories.append(
+            "toss_up_games"
+        )
+
+    if (
+        underdog
+        and actual
+        == underdog
+    ):
+        categories.append(
+            "actual_upsets"
+        )
+
+    return categories
+
+
+def analyst_accuracy_by_category():
+    data = load_analyst_receipts()
+
+    category_names = {
+        "overall":
+            "Overall",
+        "favorite_picks":
+            "Favorite Picks",
+        "upset_picks":
+            "Upset Calls",
+        "strong_edges":
+            "Strong OVR Edges",
+        "toss_up_games":
+            "Near Toss-Ups",
+        "actual_upsets":
+            "Games That Became Upsets",
+    }
+
+    result = {}
+
+    for analyst, name in ANALYST_DISPLAY_NAMES.items():
+        result[
+            analyst
+        ] = {
+            "name":
+                name,
+            "categories":
+                {
+                    key: {
+                        "label":
+                            label,
+                        "wins":
+                            0,
+                        "losses":
+                            0,
+                        "pushes":
+                            0,
+                        "win_pct":
+                            0.0,
+                    }
+                    for key, label
+                    in category_names.items()
+                }
+        }
+
+    for item in data.get(
+        "picks",
+        []
+    ):
+        if not isinstance(
+            item,
+            dict
+        ):
+            continue
+
+        analyst = item.get(
+            "analyst"
+        )
+
+        if analyst not in result:
+            continue
+
+        status = item.get(
+            "status"
+        )
+
+        if status not in [
+            "win",
+            "loss",
+            "push"
+        ]:
+            continue
+
+        for category in analyst_pick_category(
+            item
+        ):
+            bucket = (
+                result[
+                    analyst
+                ][
+                    "categories"
+                ][
+                    category
+                ]
+            )
+
+            if status == "win":
+                bucket[
+                    "wins"
+                ] += 1
+            elif status == "loss":
+                bucket[
+                    "losses"
+                ] += 1
+            else:
+                bucket[
+                    "pushes"
+                ] += 1
+
+    for analyst in result.values():
+        for bucket in analyst[
+            "categories"
+        ].values():
+            total = (
+                bucket[
+                    "wins"
+                ]
+                + bucket[
+                    "losses"
+                ]
+            )
+
+            bucket[
+                "win_pct"
+            ] = round(
+                (
+                    bucket[
+                        "wins"
+                    ]
+                    / total
+                    * 100
+                )
+                if total
+                else 0.0,
+                1
+            )
+
+    return result
+
+
+def analyst_category_leaders():
+    accuracy = (
+        analyst_accuracy_by_category()
+    )
+
+    categories = [
+        "overall",
+        "favorite_picks",
+        "upset_picks",
+        "strong_edges",
+        "toss_up_games",
+        "actual_upsets",
+    ]
+
+    leaders = {}
+
+    for category in categories:
+        candidates = []
+
+        for analyst, data in accuracy.items():
+            bucket = data[
+                "categories"
+            ][
+                category
+            ]
+
+            total = (
+                bucket[
+                    "wins"
+                ]
+                + bucket[
+                    "losses"
+                ]
+            )
+
+            candidates.append({
+                "analyst":
+                    analyst,
+                "name":
+                    data[
+                        "name"
+                    ],
+                "wins":
+                    bucket[
+                        "wins"
+                    ],
+                "losses":
+                    bucket[
+                        "losses"
+                    ],
+                "win_pct":
+                    bucket[
+                        "win_pct"
+                    ],
+                "sample":
+                    total
+            })
+
+        candidates.sort(
+            key=lambda item: (
+                item[
+                    "win_pct"
+                ],
+                item[
+                    "wins"
+                ],
+                item[
+                    "sample"
+                ]
+            ),
+            reverse=True
+        )
+
+        leaders[
+            category
+        ] = candidates
+
+    return leaders
+
+
+@app.route(
+    "/analyst/accuracy"
+)
+def analyst_accuracy_route():
+    return jsonify({
+        "accuracy":
+            analyst_accuracy_by_category(),
+        "leaders":
+            analyst_category_leaders()
+    })
+
+
 # =========================================================
 # PROJECT MADDEN WEEKLY SHOW
 # =========================================================
@@ -7286,6 +9315,16 @@ def build_panel_debate(
         []
     )
 
+    rivalry_spotlight = show.get(
+        "rivalry_spotlight",
+        []
+    )
+
+    playoff_race = show.get(
+        "playoff_race",
+        {}
+    )
+
     topic_type = "weekly"
     topic_label = "the overall week"
     source_key = f"{season_type}-{week_number}"
@@ -7319,6 +9358,36 @@ def build_panel_debate(
         )
 
     # Otherwise choose the strongest real topic available.
+    elif rivalry_spotlight:
+        rivalry_item = rivalry_spotlight[0]
+        rivalry = rivalry_item.get(
+            "rivalry",
+            {}
+        )
+        topic_type = "rivalry"
+        topic_label = rivalry_item.get(
+            "matchup",
+            "Rivalry Week"
+        )
+        source_key = rivalry.get(
+            "pair_key",
+            topic_label
+        )
+    elif (
+        playoff_race
+        and playoff_race.get(
+            "game_of_the_week"
+        )
+    ):
+        playoff_game = playoff_race.get(
+            "game_of_the_week"
+        )
+        topic_type = "playoff"
+        topic_label = playoff_game.get(
+            "matchup",
+            "Playoff Race"
+        )
+        source_key = topic_label
     elif trades:
         trade = trades[0]
         topic_type = "trade"
@@ -7533,6 +9602,73 @@ def build_panel_debate(
                 " That prediction missed. The result tells me the pregame assumption needs updating."
             )
 
+    elif topic_type == "rivalry" and rivalry_spotlight:
+        item = rivalry_spotlight[0]
+        rivalry = item.get(
+            "rivalry",
+            {}
+        )
+
+        meetings = rivalry.get(
+            "meetings",
+            0
+        )
+
+        streak = rivalry.get(
+            "current_streak"
+        )
+
+        streak_text = (
+            (
+                f"{streak.get('owner')} has won "
+                f"{streak.get('wins')} straight"
+            )
+            if streak
+            else "there is no active winning streak"
+        )
+
+        lines["marcus"] += (
+            f" This is meeting number {meetings}. "
+            f"The history matters now, and {streak_text}."
+        )
+
+        lines["stephen"] += (
+            " Rivalries create expectations. I do not want excuses "
+            "from somebody who has been hearing about this matchup all week."
+        )
+
+        lines["pat"] += (
+            " This is exactly the kind of game that gets the whole server watching."
+        )
+
+        lines["josh_pate"] += (
+            " Rivalries are useful because repeated matchups reveal which adjustments "
+            "are real and which advantages were temporary."
+        )
+
+    elif topic_type == "playoff" and playoff_race:
+        gotw = playoff_race.get(
+            "game_of_the_week",
+            {}
+        )
+
+        lines["marcus"] += (
+            f" {gotw.get('matchup')} has playoff-race consequences. "
+            "That makes every mistake more expensive."
+        )
+
+        lines["stephen"] += (
+            " This is when contenders stop talking and start protecting their season."
+        )
+
+        lines["pat"] += (
+            " Playoff pressure in Madden is awesome because one turnover can move the whole bracket."
+        )
+
+        lines["josh_pate"] += (
+            " Late-season playoff games tell you whether a team's weekly process survives real pressure."
+        )
+
     elif topic_type == "trade" and trades:
         trade = trades[0]
         review = (
@@ -7734,6 +9870,36 @@ def build_weekly_show_summary(
         weekly_trade_proposals()
     )
 
+    # Keep rivalry history current as completed games appear.
+    try:
+        record_rivalry_week(
+            season_type,
+            week_number
+        )
+    except Exception as e:
+        print(
+            "RIVALRY UPDATE ERROR:",
+            str(e)
+        )
+
+    playoff_race = (
+        build_playoff_race(
+            season_type,
+            week_number
+        )
+    )
+
+    rivalry_spotlight = (
+        rivalry_week_spotlight(
+            season_type,
+            week_number
+        )
+    )
+
+    analyst_accuracy = (
+        analyst_accuracy_by_category()
+    )
+
     super_bowl_favorites = (
         build_super_bowl_favorites()
     )
@@ -7864,6 +10030,12 @@ def build_weekly_show_summary(
             receipts_callout,
         "trade_proposals":
             trade_proposals,
+        "playoff_race":
+            playoff_race,
+        "rivalry_spotlight":
+            rivalry_spotlight,
+        "analyst_accuracy":
+            analyst_accuracy,
         "super_bowl_favorites":
             super_bowl_favorites,
         "hot_seat":
@@ -8113,6 +10285,225 @@ def weekly_show_embed_fields(
                 receipt_callout.get(
                     "take",
                     ""
+                )[:1024],
+            "inline":
+                False
+        })
+
+    playoff_race = show.get(
+        "playoff_race",
+        {}
+    )
+
+    if playoff_race:
+        lines = []
+
+        for conference in [
+            "AFC",
+            "NFC"
+        ]:
+            picture = playoff_race.get(
+                conference,
+                {}
+            )
+
+            seeds = picture.get(
+                "seeds",
+                []
+            )
+
+            if not seeds:
+                continue
+
+            seed_text = []
+
+            for index, team in enumerate(
+                seeds[:7],
+                start=1
+            ):
+                seed = team.get(
+                    "playoff_seed",
+                    team.get(
+                        "projected_seed",
+                        index
+                    )
+                )
+
+                seed_text.append(
+                    f"#{seed} {team.get('team')} "
+                    f"({team.get('wins', 0)}-{team.get('losses', 0)})"
+                )
+
+            lines.append(
+                f"**{conference}:** "
+                + " | ".join(
+                    seed_text
+                )
+            )
+
+        gotw = playoff_race.get(
+            "game_of_the_week"
+        )
+
+        if gotw:
+            lines.append(
+                (
+                    f"\n**Playoff Game of the Week:** "
+                    f"{gotw.get('matchup')}\n"
+                    + "; ".join(
+                        gotw.get(
+                            "reasons",
+                            []
+                        )
+                    )
+                )
+            )
+
+        if lines:
+            fields.append({
+                "name":
+                    "🏆 Playoff Race",
+                "value":
+                    "\n".join(
+                        lines
+                    )[:1024],
+                "inline":
+                    False
+            })
+
+        scenarios = playoff_race.get(
+            "clinching_scenarios",
+            []
+        )
+
+        if scenarios:
+            scenario_lines = []
+
+            for item in scenarios[:6]:
+                scenario_lines.append(
+                    (
+                        f"**{item.get('team')}** "
+                        f"({item.get('record')}) — "
+                        f"{item.get('scenario')}"
+                    )
+                )
+
+            fields.append({
+                "name":
+                    "🔐 Clinching / Must-Win Watch",
+                "value":
+                    "\n".join(
+                        scenario_lines
+                    )[:1024],
+                "inline":
+                    False
+            })
+
+    rivalry_spotlight = show.get(
+        "rivalry_spotlight",
+        []
+    )
+
+    if rivalry_spotlight:
+        lines = []
+
+        for item in rivalry_spotlight[:3]:
+            rivalry = item.get(
+                "rivalry",
+                {}
+            )
+
+            streak = rivalry.get(
+                "current_streak"
+            )
+
+            streak_text = (
+                (
+                    f"{streak.get('owner')} "
+                    f"has won {streak.get('wins')} straight"
+                )
+                if streak
+                else "No active streak"
+            )
+
+            lines.append(
+                (
+                    f"**{item.get('matchup')}**\n"
+                    f"{item.get('away_owner')} vs {item.get('home_owner')} — "
+                    f"{rivalry.get('meetings', 0)} previous meetings\n"
+                    f"{streak_text}"
+                )
+            )
+
+        fields.append({
+            "name":
+                "⚔️ Rivalry Week",
+            "value":
+                "\n\n".join(
+                    lines
+                )[:1024],
+            "inline":
+                False
+        })
+
+    analyst_accuracy = show.get(
+        "analyst_accuracy",
+        {}
+    )
+
+    if analyst_accuracy:
+        lines = []
+
+        for analyst in [
+            "marcus",
+            "stephen",
+            "pat",
+            "josh_pate"
+        ]:
+            data = analyst_accuracy.get(
+                analyst,
+                {}
+            )
+
+            categories = data.get(
+                "categories",
+                {}
+            )
+
+            overall = categories.get(
+                "overall",
+                {}
+            )
+
+            upset = categories.get(
+                "upset_picks",
+                {}
+            )
+
+            favorite = categories.get(
+                "favorite_picks",
+                {}
+            )
+
+            lines.append(
+                (
+                    f"**{data.get('name')}** — "
+                    f"Overall {overall.get('wins', 0)}-"
+                    f"{overall.get('losses', 0)} "
+                    f"({overall.get('win_pct', 0)}%) | "
+                    f"Upsets {upset.get('wins', 0)}-"
+                    f"{upset.get('losses', 0)} | "
+                    f"Favorites {favorite.get('wins', 0)}-"
+                    f"{favorite.get('losses', 0)}"
+                )
+            )
+
+        fields.append({
+            "name":
+                "🎯 Analyst Accuracy by Category",
+            "value":
+                "\n".join(
+                    lines
                 )[:1024],
             "inline":
                 False
@@ -11023,6 +13414,55 @@ def save_trade_proposal(analysis):
     )
 
 
+
+def discord_member_role_ids(
+    interaction
+):
+    roles = (
+        interaction
+        .get(
+            "member",
+            {}
+        )
+        .get(
+            "roles",
+            []
+        )
+    )
+
+    if not isinstance(
+        roles,
+        list
+    ):
+        return set()
+
+    return {
+        str(
+            role_id
+        )
+        for role_id
+        in roles
+    }
+
+
+def discord_member_has_league_owner_role(
+    interaction
+):
+    return (
+        LEAGUE_OWNER_TEST_ROLE_ID
+        in discord_member_role_ids(
+            interaction
+        )
+    )
+
+
+def discord_test_role_denied():
+    return discord_ephemeral(
+        "🔒 This test command is locked to "
+        "@League owner."
+    )
+
+
 def register_trade_slash_command():
     app_id = discord_application_id()
     token = discord_bot_token()
@@ -11243,13 +13683,109 @@ def register_trade_slash_command():
         ]
     }
 
+
+    test_pat_command = {
+        "name": "testpat",
+        "description": "Send a Pat McAfee AI parody test segment",
+        "options": [
+            {
+                "type": 3,
+                "name": "headline",
+                "description": "Optional test headline",
+                "required": False,
+                "max_length": 100
+            }
+        ]
+    }
+
+    test_system_command = {
+        "name": "testsystem",
+        "description": "League Owner: test Project Madden systems in Discord",
+        "options": [
+            {
+                "type": 3,
+                "name": "system",
+                "description": "System to test",
+                "required": True,
+                "choices": [
+                    {
+                        "name": "Everything",
+                        "value": "all"
+                    },
+                    {
+                        "name": "Permanent Storage",
+                        "value": "storage"
+                    },
+                    {
+                        "name": "Playoff Race",
+                        "value": "playoffs"
+                    },
+                    {
+                        "name": "Rivalry Tracker",
+                        "value": "rivalries"
+                    },
+                    {
+                        "name": "Analyst Accuracy",
+                        "value": "accuracy"
+                    },
+                    {
+                        "name": "Analyst Receipts",
+                        "value": "receipts"
+                    },
+                    {
+                        "name": "Panel Debate",
+                        "value": "debate"
+                    },
+                    {
+                        "name": "Record Book",
+                        "value": "recordbook"
+                    },
+                    {
+                        "name": "Hall of Fame",
+                        "value": "halloffame"
+                    },
+                    {
+                        "name": "Trade History",
+                        "value": "tradehistory"
+                    }
+                ]
+            },
+            {
+                "type": 3,
+                "name": "season_type",
+                "description": "Season type for weekly systems",
+                "required": False,
+                "choices": [
+                    {
+                        "name": "Preseason",
+                        "value": "pre"
+                    },
+                    {
+                        "name": "Regular Season",
+                        "value": "reg"
+                    }
+                ]
+            },
+            {
+                "type": 4,
+                "name": "week",
+                "description": "Week number for weekly systems",
+                "required": False,
+                "min_value": 1,
+                "max_value": 25
+            }
+        ]
+    }
+
     commands = [
         command,
         test_marcus_command,
         test_stephen_command,
         weekly_show_command,
         test_weekly_show_command,
-        test_josh_pate_command
+        test_josh_pate_command,
+        test_pat_command,
+        test_system_command
     ]
 
     headers = {
@@ -12188,6 +14724,544 @@ def process_weekly_show_background(
     )
 
 
+
+def compact_record_text(
+    record
+):
+    if not isinstance(
+        record,
+        dict
+    ):
+        return "0-0"
+
+    return (
+        f"{record.get('wins', 0)}-"
+        f"{record.get('losses', 0)}"
+    )
+
+
+def build_discord_system_test(
+    system_name,
+    season_type,
+    week_number
+):
+    fields = []
+    failures = []
+
+    def add_field(
+        name,
+        value
+    ):
+        fields.append({
+            "name":
+                name,
+            "value":
+                str(
+                    value
+                )[:1024],
+            "inline":
+                False
+        })
+
+    def run_check(
+        key,
+        label,
+        fn
+    ):
+        try:
+            result = fn()
+
+            add_field(
+                f"✅ {label}",
+                result
+            )
+
+            return True
+        except Exception as e:
+            failures.append(
+                (
+                    key,
+                    str(e)
+                )
+            )
+
+            add_field(
+                f"❌ {label}",
+                str(e)
+            )
+
+            return False
+
+    selected = (
+        [
+            "storage",
+            "playoffs",
+            "rivalries",
+            "accuracy",
+            "receipts",
+            "debate",
+            "recordbook",
+            "halloffame",
+            "tradehistory",
+        ]
+        if system_name == "all"
+        else [
+            system_name
+        ]
+    )
+
+    for item in selected:
+        if item == "storage":
+            def storage_check():
+                status = persistent_storage_status()
+
+                datasets = status.get(
+                    "datasets",
+                    {}
+                )
+
+                dataset_lines = []
+
+                for filename, info in datasets.items():
+                    dataset_lines.append(
+                        (
+                            f"{filename}: "
+                            f"DB={'✅' if info.get('database') else '—'} "
+                            f"Cache={'✅' if info.get('local_cache') else '—'}"
+                        )
+                    )
+
+                return (
+                    f"Configured: **{status.get('configured')}**\n"
+                    f"Database ready: **{status.get('database_ready')}**\n"
+                    f"Driver available: **{status.get('driver_available')}**\n"
+                    f"Weekly Show webhook: **{weekly_show_webhook_configured()}**\n"
+                    f"Analyst webhook: **{analyst_webhook_configured()}**\n"
+                    f"Stephen A webhook: **{bool(get_stephen_a_parody_webhook())}**\n"
+                    f"Josh Pate webhook: **{josh_pate_parody_webhook_configured()}**\n"
+                    f"Trade webhook: **{bool(os.environ.get('DISCORD_WEBHOOK_URL'))}**\n"
+                    f"Trade Logs webhook: **{trade_logs_webhook_configured()}**\n"
+                    + "\n".join(
+                        dataset_lines
+                    )
+                )
+
+            run_check(
+                "storage",
+                "Permanent Storage",
+                storage_check
+            )
+
+        elif item == "playoffs":
+            def playoff_check():
+                race = build_playoff_race(
+                    season_type,
+                    week_number
+                )
+
+                lines = []
+
+                for conference in [
+                    "AFC",
+                    "NFC"
+                ]:
+                    seeds = (
+                        race.get(
+                            conference,
+                            {}
+                        ).get(
+                            "seeds",
+                            []
+                        )
+                    )
+
+                    if seeds:
+                        seed_text = ", ".join(
+                            (
+                                f"#{team.get('playoff_seed', team.get('projected_seed', index))} "
+                                f"{team.get('team')}"
+                            )
+                            for index, team in enumerate(
+                                seeds[:7],
+                                start=1
+                            )
+                        )
+                    else:
+                        seed_text = (
+                            "No usable standings yet"
+                        )
+
+                    lines.append(
+                        f"**{conference}:** {seed_text}"
+                    )
+
+                gotw = race.get(
+                    "game_of_the_week"
+                )
+
+                if gotw:
+                    lines.append(
+                        f"Game of Week: **{gotw.get('matchup')}**"
+                    )
+
+                scenarios = race.get(
+                    "clinching_scenarios",
+                    []
+                )
+
+                lines.append(
+                    f"Clinching/Must-Win scenarios: **{len(scenarios)}**"
+                )
+
+                return "\n".join(
+                    lines
+                )
+
+            run_check(
+                "playoffs",
+                "Playoff Race / Clinching",
+                playoff_check
+            )
+
+        elif item == "rivalries":
+            def rivalry_check():
+                created = record_rivalry_week(
+                    season_type,
+                    week_number
+                )
+
+                spotlights = rivalry_week_spotlight(
+                    season_type,
+                    week_number
+                )
+
+                top = build_top_rivalries(
+                    5
+                )
+
+                lines = [
+                    f"New completed games saved: **{created}**",
+                    f"Rivalry Week spotlights: **{len(spotlights)}**",
+                    f"Tracked rivalries: **{len(top)}**",
+                ]
+
+                for item in top[:3]:
+                    lines.append(
+                        (
+                            f"• {item.get('owner_a')} vs "
+                            f"{item.get('owner_b')} — "
+                            f"{item.get('meetings')} meetings"
+                        )
+                    )
+
+                return "\n".join(
+                    lines
+                )
+
+            run_check(
+                "rivalries",
+                "Rivalry Tracker / Rivalry Week",
+                rivalry_check
+            )
+
+        elif item == "accuracy":
+            def accuracy_check():
+                accuracy = (
+                    analyst_accuracy_by_category()
+                )
+
+                lines = []
+
+                for analyst in [
+                    "marcus",
+                    "stephen",
+                    "pat",
+                    "josh_pate"
+                ]:
+                    data = accuracy.get(
+                        analyst,
+                        {}
+                    )
+
+                    categories = data.get(
+                        "categories",
+                        {}
+                    )
+
+                    overall = categories.get(
+                        "overall",
+                        {}
+                    )
+
+                    upset = categories.get(
+                        "upset_picks",
+                        {}
+                    )
+
+                    lines.append(
+                        (
+                            f"• **{data.get('name', analyst)}** "
+                            f"{overall.get('wins', 0)}-"
+                            f"{overall.get('losses', 0)} "
+                            f"({overall.get('win_pct', 0)}%) | "
+                            f"Upsets {upset.get('wins', 0)}-"
+                            f"{upset.get('losses', 0)}"
+                        )
+                    )
+
+                return "\n".join(
+                    lines
+                )
+
+            run_check(
+                "accuracy",
+                "Analyst Accuracy by Category",
+                accuracy_check
+            )
+
+        elif item == "receipts":
+            def receipts_check():
+                settled = settle_analyst_predictions(
+                    season_type,
+                    week_number
+                )
+
+                leaderboard = (
+                    analyst_receipts_leaderboard()
+                )
+
+                lines = [
+                    f"New picks settled: **{settled}**"
+                ]
+
+                for entry in leaderboard:
+                    lines.append(
+                        (
+                            f"{entry.get('rank')}. "
+                            f"**{entry.get('name')}** — "
+                            f"{entry.get('wins', 0)}-"
+                            f"{entry.get('losses', 0)} "
+                            f"({entry.get('win_pct', 0)}%)"
+                        )
+                    )
+
+                return "\n".join(
+                    lines
+                )
+
+            run_check(
+                "receipts",
+                "Analyst Receipts",
+                receipts_check
+            )
+
+        elif item == "debate":
+            def debate_check():
+                show = build_weekly_show_summary(
+                    season_type,
+                    week_number
+                )
+
+                debate = show.get(
+                    "panel_debate",
+                    {}
+                )
+
+                return (
+                    f"Topic: **{debate.get('topic', 'No topic yet')}**\n"
+                    f"Mode: **{debate.get('mode', '—')}**\n"
+                    f"Marcus: {debate.get('marcus', '')[:180]}\n"
+                    f"Stephen A. AI Parody: {debate.get('stephen', '')[:180]}\n"
+                    f"Pat AI Parody: {debate.get('pat', '')[:180]}\n"
+                    f"Josh Pate AI Parody: {debate.get('josh_pate', '')[:180]}"
+                )
+
+            run_check(
+                "debate",
+                "AI Panel Debate",
+                debate_check
+            )
+
+        elif item == "recordbook":
+            def recordbook_check():
+                book = load_record_book()
+
+                single = book.get(
+                    "single_game_records",
+                    {}
+                )
+
+                return (
+                    f"Champions: **{len(book.get('champions', []))}**\n"
+                    f"MVPs: **{len(book.get('mvps', []))}**\n"
+                    f"Single-game records: **{len(single)}**\n"
+                    f"Biggest blowout stored: **{bool(book.get('biggest_blowout'))}**\n"
+                    f"Longest streak stored: **{bool(book.get('longest_win_streak'))}**"
+                )
+
+            run_check(
+                "recordbook",
+                "Project Madden Record Book",
+                recordbook_check
+            )
+
+        elif item == "halloffame":
+            def hof_check():
+                hall = load_hall_of_fame()
+
+                return (
+                    f"Hall of Fame entries: **{len(hall)}**\n"
+                    "Storage read completed successfully."
+                )
+
+            run_check(
+                "halloffame",
+                "Project Madden Hall of Fame",
+                hof_check
+            )
+
+        elif item == "tradehistory":
+            def trade_history_check():
+                history = load_trade_history()
+
+                return (
+                    f"Saved trades: **{len(history)}**\n"
+                    f"Trade logs webhook configured: "
+                    f"**{trade_logs_webhook_configured()}**\n"
+                    f"League Office webhook configured: "
+                    f"**{bool(os.environ.get('DISCORD_WEBHOOK_URL'))}**"
+                )
+
+            run_check(
+                "tradehistory",
+                "Trade History / Discord Trade Connections",
+                trade_history_check
+            )
+
+    success = (
+        len(
+            failures
+        )
+        == 0
+    )
+
+    return {
+        "success":
+            success,
+        "fields":
+            fields,
+        "failures":
+            failures
+    }
+
+
+def process_test_system_background(
+    interaction
+):
+    options = discord_option_map(
+        interaction
+    )
+
+    system_name = str(
+        options.get(
+            "system",
+            "all"
+        )
+    ).strip().lower()
+
+    season_type = str(
+        options.get(
+            "season_type",
+            "reg"
+        )
+    ).strip().lower()
+
+    if season_type not in [
+        "pre",
+        "reg"
+    ]:
+        season_type = "reg"
+
+    try:
+        week_number = int(
+            options.get(
+                "week",
+                1
+            )
+            or 1
+        )
+    except Exception:
+        week_number = 1
+
+    try:
+        test = build_discord_system_test(
+            system_name,
+            season_type,
+            week_number
+        )
+
+        sent = send_weekly_show_embed(
+            (
+                "🧪 PROJECT MADDEN SYSTEM TEST • "
+                f"{system_name.upper()}"
+            ),
+            (
+                f"Requested by a member with the "
+                f"**@League owner** role.\n"
+                f"Season: **{season_type.upper()}** • "
+                f"Week: **{week_number}**\n\n"
+                f"Overall result: "
+                f"**{'PASS ✅' if test.get('success') else 'CHECK REQUIRED ⚠️'}**"
+            ),
+            test.get(
+                "fields",
+                []
+            )
+        )
+
+        if sent.get(
+            "sent"
+        ):
+            content = (
+                "✅ System test posted to the "
+                "Project Madden Weekly Show channel."
+            )
+        else:
+            content = (
+                "❌ Test ran, but the Discord test post failed: "
+                + str(
+                    sent.get(
+                        "error",
+                        "Unknown error"
+                    )
+                )[:900]
+            )
+
+    except Exception as e:
+        content = (
+            "❌ Project Madden system test crashed: "
+            + str(
+                e
+            )[:900]
+        )
+
+    edit_discord_deferred_response(
+        str(
+            interaction.get(
+                "application_id",
+                discord_application_id()
+            )
+        ),
+        str(
+            interaction.get(
+                "token",
+                ""
+            )
+        ),
+        content
+    )
+
+
 @app.route(
     "/discord/interactions",
     methods=["POST"]
@@ -12277,6 +15351,20 @@ def discord_interactions():
             .get("name")
         )
 
+        # Runtime security gate for every current and future /test* command.
+        if (
+            str(
+                command_name
+                or ""
+            ).lower().startswith(
+                "test"
+            )
+            and not discord_member_has_league_owner_role(
+                interaction
+            )
+        ):
+            return discord_test_role_denied()
+
         if command_name == "trade":
             # Discord requires the first response in about 3 seconds.
             # Defer immediately, then process the Snallabot/trade work
@@ -12365,6 +15453,67 @@ def discord_interactions():
                 "type": 5,
                 "data": {
                     "flags": 64
+                }
+            })
+
+        if command_name == "testpat":
+            options = discord_option_map(
+                interaction
+            )
+
+            headline = str(
+                options.get(
+                    "headline",
+                    "Project Madden Test Segment"
+                )
+            ).strip()
+
+            result = send_weekly_show_embed(
+                "🧪 TEST • Pat McAfee — AI Parody",
+                (
+                    f"## {headline}\n"
+                    "Alright, this is a Project Madden connection test. "
+                    "The Weekly Show channel is live, the desk is connected, "
+                    "and this fictional AI parody segment is ready for weekly reactions.\n\n"
+                    "⚠️ *Fictional AI parody for Project Madden. "
+                    "This is not a real Pat McAfee quote or statement.*"
+                )
+            )
+
+            if result.get(
+                "sent"
+            ):
+                return discord_ephemeral(
+                    "✅ Pat McAfee AI parody test sent."
+                )
+
+            return discord_ephemeral(
+                "❌ Pat AI parody test failed: "
+                + str(
+                    result.get(
+                        "error",
+                        "Unknown error"
+                    )
+                )[:1000]
+            )
+
+        if command_name == "testsystem":
+            worker = threading.Thread(
+                target=process_test_system_background,
+                args=(
+                    interaction,
+                ),
+                daemon=True
+            )
+
+            worker.start()
+
+            return jsonify({
+                "type":
+                    5,
+                "data": {
+                    "flags":
+                        64
                 }
             })
 
@@ -12516,8 +15665,26 @@ def discord_status():
         "test_commands": [
             "/testmarcus",
             "/teststephena",
+            "/testpat",
+            "/testjoshpate",
             "/testweeklyshow",
-            "/testjoshpate"
+            "/testsystem"
+        ],
+        "test_commands_locked_to_role":
+            "League owner",
+        "test_role_id":
+            LEAGUE_OWNER_TEST_ROLE_ID,
+        "testsystem_choices": [
+            "all",
+            "storage",
+            "playoffs",
+            "rivalries",
+            "accuracy",
+            "receipts",
+            "debate",
+            "recordbook",
+            "halloffame",
+            "tradehistory"
         ],
         "weekly_show_command":
             "/weeklyshow",
@@ -14721,6 +17888,9 @@ def weekly_show_healthcheck(
         "panel_debate": False,
         "analyst_receipts": False,
         "permanent_storage": False,
+        "analyst_accuracy": False,
+        "rivalry_tracker": False,
+        "playoff_race": False,
         "fraud_watch": False,
         "dark_horse_watch": False,
         "hot_seat": False,
@@ -14775,6 +17945,39 @@ def weekly_show_healthcheck(
                 "database_ready",
                 False
             )
+        )
+
+        checks["playoff_race"] = (
+            isinstance(
+                show.get(
+                    "playoff_race"
+                ),
+                dict
+            )
+        )
+
+        checks["rivalry_tracker"] = (
+            isinstance(
+                show.get(
+                    "rivalry_spotlight"
+                ),
+                list
+            )
+        )
+
+        checks["analyst_accuracy"] = (
+            isinstance(
+                show.get(
+                    "analyst_accuracy"
+                ),
+                dict
+            )
+            and len(
+                show.get(
+                    "analyst_accuracy",
+                    {}
+                )
+            ) == 4
         )
         checks["fraud_watch"] = (
             "fraud_watch" in show
