@@ -64,7 +64,7 @@ LEAGUE_OWNER_TEST_ROLE_ID = "1538749830111694910"
 GOTW_POLL_HISTORY_FILE = "gotw_poll_history.json"
 GOTW_POLL_CLOSE_SECONDS = 300
 
-PROJECT_MADDEN_APP_VERSION = "v17-hof-analyst-reactions"
+PROJECT_MADDEN_APP_VERSION = "v18-hofping-restored"
 
 
 # =========================================================
@@ -20231,7 +20231,8 @@ def discord_status():
             "/testweeklyshow",
             "/testsystem",
             "/testgotw",
-            "/testhof"
+            "/testhof",
+            "/hofping"
         ],
         "test_commands_locked_to_role":
             "League owner",
