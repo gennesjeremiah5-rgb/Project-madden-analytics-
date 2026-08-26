@@ -64,7 +64,7 @@ LEAGUE_OWNER_TEST_ROLE_ID = "1538749830111694910"
 GOTW_POLL_HISTORY_FILE = "gotw_poll_history.json"
 GOTW_POLL_CLOSE_SECONDS = 300
 
-PROJECT_MADDEN_APP_VERSION = "v13-hof-test-command"
+PROJECT_MADDEN_APP_VERSION = "v14-hof-deferred-fix"
 
 
 # =========================================================
@@ -14144,6 +14144,10 @@ def hall_of_fame_status_route():
             True,
         "custom_logo_generation":
             True,
+        "hof_commands_deferred":
+            True,
+        "testhof_auto_delete_seconds":
+            300,
         "inductee_count":
             len(
                 hall
@@ -18621,6 +18625,297 @@ def process_test_system_background(
     "/discord/interactions",
     methods=["POST"]
 )
+
+def process_test_hof_background(
+    interaction
+):
+    try:
+        options = discord_option_map(
+            interaction
+        )
+
+        result = run_hall_of_fame_test(
+            name=str(
+                options.get(
+                    "name",
+                    "Project Madden Test Inductee"
+                )
+            ).strip(),
+            inductee_type=str(
+                options.get(
+                    "type",
+                    "Owner / Coach"
+                )
+            ).strip(),
+            team=str(
+                options.get(
+                    "team",
+                    "Project Madden"
+                )
+            ).strip()
+        )
+
+        if result.get(
+            "success"
+        ):
+            content = (
+                "✅ Hall of Fame test created successfully.\n"
+                f"Test channel: <#{result.get('channel_id')}>\n"
+                "A custom HOF logo and induction profile were posted.\n"
+                "Nothing was saved to the permanent Hall of Fame.\n"
+                "🧹 The test channel will auto-delete in 5 minutes."
+            )
+        else:
+            content = (
+                "❌ Hall of Fame test failed at "
+                f"**{result.get('stage', 'setup')}**: "
+                f"{str(result.get('error', 'Unknown error'))[:800]}"
+            )
+
+    except Exception as e:
+        print(
+            "TEST HOF BACKGROUND ERROR:",
+            repr(
+                e
+            )
+        )
+
+        content = (
+            "❌ Hall of Fame test crashed: "
+            f"{str(e)[:900]}"
+        )
+
+    edit_discord_deferred_response(
+        str(
+            interaction.get(
+                "application_id",
+                discord_application_id()
+            )
+        ),
+        str(
+            interaction.get(
+                "token",
+                ""
+            )
+        ),
+        content
+    )
+
+
+def process_induct_hof_background(
+    interaction
+):
+    try:
+        options = discord_option_map(
+            interaction
+        )
+
+        name = str(
+            options.get(
+                "name",
+                ""
+            )
+        ).strip()
+
+        inductee_type = str(
+            options.get(
+                "type",
+                ""
+            )
+        ).strip()
+
+        team = str(
+            options.get(
+                "team",
+                ""
+            )
+        ).strip()
+
+        reason = str(
+            options.get(
+                "reason",
+                ""
+            )
+        ).strip()
+
+        if not (
+            name
+            and inductee_type
+            and team
+            and reason
+        ):
+            content = (
+                "❌ Name, type, team, and reason are required."
+            )
+        else:
+            user_data = (
+                interaction.get(
+                    "member",
+                    {}
+                ).get(
+                    "user",
+                    {}
+                )
+            )
+
+            inducted_by = (
+                user_data.get(
+                    "global_name"
+                )
+                or user_data.get(
+                    "username"
+                )
+                or "League Owner"
+            )
+
+            class_year = options.get(
+                "class_year"
+            )
+
+            entry = build_hall_of_fame_entry(
+                name=name,
+                inductee_type=inductee_type,
+                team=team,
+                reason=reason,
+                career_record=str(
+                    options.get(
+                        "career_record",
+                        ""
+                    )
+                ).strip(),
+                championships=int(
+                    options.get(
+                        "championships",
+                        0
+                    )
+                    or 0
+                ),
+                awards=str(
+                    options.get(
+                        "awards",
+                        ""
+                    )
+                ).strip(),
+                image_url=str(
+                    options.get(
+                        "image_url",
+                        ""
+                    )
+                ).strip(),
+                inducted_by=inducted_by,
+                class_year=(
+                    int(
+                        class_year
+                    )
+                    if class_year
+                    is not None
+                    else None
+                )
+            )
+
+            saved = add_hall_of_fame_entry(
+                entry
+            )
+
+            if not saved.get(
+                "success"
+            ):
+                content = (
+                    "❌ "
+                    + str(
+                        saved.get(
+                            "error",
+                            "Could not save induction."
+                        )
+                    )[:900]
+                )
+            else:
+                discord_result = (
+                    send_hall_of_fame_induction_to_discord(
+                        entry
+                    )
+                )
+
+                space_result = (
+                    provision_hall_of_fame_inductee_space(
+                        entry
+                    )
+                )
+
+                channel_id = (
+                    space_result.get(
+                        "channel",
+                        {}
+                    ).get(
+                        "channel_id"
+                    )
+                )
+
+                if (
+                    discord_result.get(
+                        "sent"
+                    )
+                    and space_result.get(
+                        "success"
+                    )
+                ):
+                    content = (
+                        f"🏛️ **{name}** has been inducted into the "
+                        f"Project Madden Hall of Fame — Class of "
+                        f"{entry.get('class_year')}.\n"
+                        f"Induction ID: `{entry.get('hof_id')}`\n"
+                        f"Dedicated channel: <#{channel_id}>\n"
+                        f"Custom Hall of Fame logo: "
+                        f"{hall_of_fame_logo_url(entry.get('hof_id'))}"
+                    )
+                elif space_result.get(
+                    "success"
+                ):
+                    content = (
+                        f"✅ **{name}** was saved and received a dedicated "
+                        f"Hall of Fame channel <#{channel_id}> with a custom logo.\n"
+                        "The main Hall of Fame announcement channel post failed, "
+                        "so check HALL_OF_FAME_CHANNEL_ID.\n"
+                        f"Induction ID: `{entry.get('hof_id')}`"
+                    )
+                else:
+                    content = (
+                        f"✅ **{name}** was saved permanently, but Discord channel "
+                        "creation failed. The bot needs **Manage Channels** and "
+                        "**Send Messages / Embed Links** permissions.\n"
+                        f"Induction ID: `{entry.get('hof_id')}`"
+                    )
+
+    except Exception as e:
+        print(
+            "INDUCT HOF BACKGROUND ERROR:",
+            repr(
+                e
+            )
+        )
+
+        content = (
+            "❌ Hall of Fame induction crashed: "
+            f"{str(e)[:900]}"
+        )
+
+    edit_discord_deferred_response(
+        str(
+            interaction.get(
+                "application_id",
+                discord_application_id()
+            )
+        ),
+        str(
+            interaction.get(
+                "token",
+                ""
+            )
+        ),
+        content
+    )
+
+
 def discord_interactions():
     raw_body = request.get_data()
 
@@ -18738,192 +19033,24 @@ def discord_interactions():
             )
 
         if command_name == "inducthof":
-            options = discord_option_map(
-                interaction
-            )
-
-            name = str(
-                options.get(
-                    "name",
-                    ""
-                )
-            ).strip()
-
-            inductee_type = str(
-                options.get(
-                    "type",
-                    ""
-                )
-            ).strip()
-
-            team = str(
-                options.get(
-                    "team",
-                    ""
-                )
-            ).strip()
-
-            reason = str(
-                options.get(
-                    "reason",
-                    ""
-                )
-            ).strip()
-
-            if not (
-                name
-                and inductee_type
-                and team
-                and reason
-            ):
-                return discord_ephemeral(
-                    "❌ Name, type, team, and reason are required."
-                )
-
-            user_data = (
-                interaction.get(
-                    "member",
-                    {}
-                ).get(
-                    "user",
-                    {}
-                )
-            )
-
-            inducted_by = (
-                user_data.get(
-                    "global_name"
-                )
-                or user_data.get(
-                    "username"
-                )
-                or "League Owner"
-            )
-
-            class_year = options.get(
-                "class_year"
-            )
-
-            entry = build_hall_of_fame_entry(
-                name=name,
-                inductee_type=inductee_type,
-                team=team,
-                reason=reason,
-                career_record=str(
-                    options.get(
-                        "career_record",
-                        ""
-                    )
-                ).strip(),
-                championships=int(
-                    options.get(
-                        "championships",
-                        0
-                    )
-                    or 0
+            worker = threading.Thread(
+                target=process_induct_hof_background,
+                args=(
+                    interaction,
                 ),
-                awards=str(
-                    options.get(
-                        "awards",
-                        ""
-                    )
-                ).strip(),
-                image_url=str(
-                    options.get(
-                        "image_url",
-                        ""
-                    )
-                ).strip(),
-                inducted_by=inducted_by,
-                class_year=(
-                    int(
-                        class_year
-                    )
-                    if class_year
-                    is not None
-                    else None
-                )
+                daemon=True
             )
 
-            saved = add_hall_of_fame_entry(
-                entry
-            )
+            worker.start()
 
-            if not saved.get(
-                "success"
-            ):
-                return discord_ephemeral(
-                    "❌ "
-                    + str(
-                        saved.get(
-                            "error",
-                            "Could not save induction."
-                        )
-                    )[:900]
-                )
-
-            discord_result = (
-                send_hall_of_fame_induction_to_discord(
-                    entry
-                )
-            )
-
-            space_result = (
-                provision_hall_of_fame_inductee_space(
-                    entry
-                )
-            )
-
-            channel_id = (
-                space_result.get(
-                    "channel",
-                    {}
-                ).get(
-                    "channel_id"
-                )
-            )
-
-            if (
-                discord_result.get(
-                    "sent"
-                )
-                and space_result.get(
-                    "success"
-                )
-            ):
-                return discord_ephemeral(
-                    (
-                        f"🏛️ **{name}** has been inducted into the "
-                        f"Project Madden Hall of Fame — Class of "
-                        f"{entry.get('class_year')}.\n"
-                        f"Induction ID: `{entry.get('hof_id')}`\n"
-                        f"Dedicated channel: <#{channel_id}>\n"
-                        f"Custom Hall of Fame logo: "
-                        f"{hall_of_fame_logo_url(entry.get('hof_id'))}"
-                    )
-                )
-
-            if space_result.get(
-                "success"
-            ):
-                return discord_ephemeral(
-                    (
-                        f"✅ **{name}** was saved and received a dedicated "
-                        f"Hall of Fame channel <#{channel_id}> with a custom logo.\n"
-                        "The main Hall of Fame announcement channel post failed, "
-                        "so check HALL_OF_FAME_CHANNEL_ID.\n"
-                        f"Induction ID: `{entry.get('hof_id')}`"
-                    )
-                )
-
-            return discord_ephemeral(
-                (
-                    f"✅ **{name}** was saved permanently, but Discord channel "
-                    "creation failed. The bot needs **Manage Channels** and "
-                    "**Send Messages / Embed Links** permissions.\n"
-                    f"Induction ID: `{entry.get('hof_id')}`"
-                )
-            )
+            return jsonify({
+                "type":
+                    5,
+                "data": {
+                    "flags":
+                        64
+                }
+            })
 
         if command_name == "removehof":
             options = discord_option_map(
@@ -19058,51 +19185,24 @@ def discord_interactions():
             })
 
         if command_name == "testhof":
-            options = discord_option_map(
-                interaction
+            worker = threading.Thread(
+                target=process_test_hof_background,
+                args=(
+                    interaction,
+                ),
+                daemon=True
             )
 
-            result = run_hall_of_fame_test(
-                name=str(
-                    options.get(
-                        "name",
-                        "Project Madden Test Inductee"
-                    )
-                ).strip(),
-                inductee_type=str(
-                    options.get(
-                        "type",
-                        "Owner / Coach"
-                    )
-                ).strip(),
-                team=str(
-                    options.get(
-                        "team",
-                        "Project Madden"
-                    )
-                ).strip()
-            )
+            worker.start()
 
-            if result.get(
-                "success"
-            ):
-                return discord_ephemeral(
-                    (
-                        "✅ Hall of Fame test created successfully.\n"
-                        f"Test channel: <#{result.get('channel_id')}>\n"
-                        "A custom test HOF logo and induction profile were posted.\n"
-                        "Nothing was saved to the permanent Hall of Fame.\n"
-                        "🧹 The test channel will auto-delete in 5 minutes."
-                    )
-                )
-
-            return discord_ephemeral(
-                (
-                    "❌ Hall of Fame test failed at "
-                    f"**{result.get('stage', 'setup')}**: "
-                    f"{str(result.get('error', 'Unknown error'))[:800]}"
-                )
-            )
+            return jsonify({
+                "type":
+                    5,
+                "data": {
+                    "flags":
+                        64
+                }
+            })
 
         if command_name == "testgotw":
             options = discord_option_map(
