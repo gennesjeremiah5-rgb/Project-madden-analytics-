@@ -4300,6 +4300,849 @@ def weekly_show_post_key(
 
 
 
+
+# =========================================================
+# ANALYST RECEIPTS + PREDICTION RECORDS
+# =========================================================
+
+ANALYST_DISPLAY_NAMES = {
+    "marcus": "Marcus Hayes",
+    "stephen": "Stephen A. Smith — AI Parody",
+    "pat": "Pat McAfee — AI Parody",
+    "josh_pate": "Josh Pate — AI Parody",
+}
+
+RECEIPT_CALLOUT_LINES = {
+    "marcus": [
+        "Marcus has the receipt in front of him and is not pretending the miss did not happen.",
+        "Marcus missed that one, and the rest of the desk is absolutely keeping the screenshot.",
+        "Marcus went on record with the pick. The scoreboard gets the final word.",
+    ],
+    "stephen": [
+        "Stephen A. made the pick with confidence, so the desk is not letting him quietly move on.",
+        "The prediction is on the record. Stephen A. has to answer for that miss before changing the subject.",
+        "Stephen A. wanted the favorite and the favorite let him down. The receipt is staying on screen.",
+    ],
+    "pat": [
+        "Pat took the swing, missed it, and now the desk gets to have some fun with the receipt.",
+        "Pat went bold on the pick. Bold is great until the final score arrives.",
+        "The chaos pick did not hit this time, and everybody at the desk remembers it.",
+    ],
+    "josh_pate": [
+        "Josh Pate trusted the process on that pick, but the result says the projection missed.",
+        "Josh had a roster-building argument for the pick. The scoreboard just gave him a new data point.",
+        "The prediction looked sustainable on paper. The actual game disagreed.",
+    ],
+}
+
+RECEIPT_DEFENSE_LINES = {
+    "marcus": [
+        "I missed it. I am not deleting the tape. Give the winner credit and put the loss on my record.",
+        "That pick was wrong. No excuses — the team I backed did not execute.",
+        "Keep the receipt. I will take the loss and come back next week.",
+    ],
+    "stephen": [
+        "Fine, I was wrong on that game. But do not confuse one missed pick with me lowering the standard.",
+        "The pick missed. I will own that. The team I trusted did not perform like the roster said it should.",
+        "Put the loss next to my name. I still want an explanation from the team that burned the pick.",
+    ],
+    "pat": [
+        "Yep, that one got me. That is why the games are awesome — sometimes the whole script gets flipped.",
+        "I missed it. Somebody clip it, laugh at it, and then give the winner credit.",
+        "That pick went straight into the trash can. We move.",
+    ],
+    "josh_pate": [
+        "That is a miss, and it is useful information. The assumption behind the pick did not survive the matchup.",
+        "I got it wrong. Now the question is what part of the evaluation needs to change going forward.",
+        "The receipt is fair. The result gave us evidence that the pregame model did not have.",
+    ],
+}
+
+
+def load_analyst_receipts():
+    data = load_json_file(
+        ANALYST_RECEIPTS_FILE
+    )
+
+    if not isinstance(data, dict):
+        data = {}
+
+    data.setdefault(
+        "picks",
+        []
+    )
+
+    return data
+
+
+def save_analyst_receipts(data):
+    picks = data.get(
+        "picks",
+        []
+    )
+
+    if not isinstance(picks, list):
+        picks = []
+
+    data["picks"] = picks[-5000:]
+
+    save_json_file(
+        ANALYST_RECEIPTS_FILE,
+        data
+    )
+
+
+def deterministic_side(
+    away,
+    home,
+    key
+):
+    return stable_choice(
+        [away, home],
+        key
+    )
+
+
+def build_analyst_pick_set(
+    prediction,
+    season_type,
+    week_number
+):
+    away = prediction.get(
+        "away"
+    )
+    home = prediction.get(
+        "home"
+    )
+    favorite = prediction.get(
+        "favorite"
+    )
+    underdog = prediction.get(
+        "underdog"
+    )
+    edge = prediction.get(
+        "ovr_edge"
+    )
+
+    schedule_id = prediction.get(
+        "schedule_id"
+    )
+
+    base_key = (
+        f"analyst-picks-{season_type}-"
+        f"{week_number}-{schedule_id}"
+    )
+
+    if favorite in [
+        None,
+        "TOSS-UP"
+    ]:
+        marcus_pick = deterministic_side(
+            away,
+            home,
+            base_key + "-marcus"
+        )
+        stephen_pick = deterministic_side(
+            away,
+            home,
+            base_key + "-stephen"
+        )
+        pat_pick = deterministic_side(
+            away,
+            home,
+            base_key + "-pat"
+        )
+        josh_pick = deterministic_side(
+            away,
+            home,
+            base_key + "-josh"
+        )
+    else:
+        # Each analyst has a different prediction personality.
+        marcus_pick = favorite
+
+        if (
+            edge is not None
+            and edge <= 1
+        ):
+            marcus_pick = stable_choice(
+                [
+                    favorite,
+                    favorite,
+                    underdog
+                ],
+                base_key + "-marcus"
+            )
+
+        stephen_pick = stable_choice(
+            (
+                [favorite, favorite, favorite, underdog]
+                if edge is not None and edge <= 2
+                else [favorite, favorite, favorite, favorite, underdog]
+            ),
+            base_key + "-stephen"
+        )
+
+        # Pat is the most willing to call an upset.
+        pat_pick = stable_choice(
+            (
+                [favorite, underdog, underdog]
+                if edge is not None and edge <= 2
+                else [favorite, favorite, underdog]
+            ),
+            base_key + "-pat"
+        )
+
+        # Josh is the most conservative unless the matchup is nearly even.
+        josh_pick = stable_choice(
+            (
+                [favorite, favorite, underdog]
+                if edge is not None and edge <= 1
+                else [favorite, favorite, favorite, favorite]
+            ),
+            base_key + "-josh"
+        )
+
+    return {
+        "marcus":
+            marcus_pick,
+        "stephen":
+            stephen_pick,
+        "pat":
+            pat_pick,
+        "josh_pate":
+            josh_pick,
+    }
+
+
+def record_weekly_analyst_predictions(
+    season_type,
+    week_number,
+    predictions
+):
+    data = load_analyst_receipts()
+    picks = data.get(
+        "picks",
+        []
+    )
+
+    existing_keys = {
+        (
+            str(item.get("season_type")),
+            int(item.get("week", 0) or 0),
+            str(item.get("schedule_id")),
+            str(item.get("analyst"))
+        )
+        for item in picks
+        if isinstance(item, dict)
+    }
+
+    created = 0
+
+    for prediction in predictions:
+        schedule_id = prediction.get(
+            "schedule_id"
+        )
+
+        if schedule_id is None:
+            continue
+
+        analyst_picks = (
+            build_analyst_pick_set(
+                prediction,
+                season_type,
+                week_number
+            )
+        )
+
+        for analyst, picked_team in analyst_picks.items():
+            key = (
+                str(season_type),
+                int(week_number),
+                str(schedule_id),
+                analyst
+            )
+
+            if key in existing_keys:
+                continue
+
+            opponent = None
+
+            if picked_team == prediction.get("away"):
+                opponent = prediction.get("home")
+            elif picked_team == prediction.get("home"):
+                opponent = prediction.get("away")
+
+            picks.append({
+                "season_type":
+                    season_type,
+                "week":
+                    week_number,
+                "schedule_id":
+                    schedule_id,
+                "matchup":
+                    prediction.get("matchup"),
+                "away":
+                    prediction.get("away"),
+                "home":
+                    prediction.get("home"),
+                "away_ovr":
+                    prediction.get("away_ovr"),
+                "home_ovr":
+                    prediction.get("home_ovr"),
+                "analyst":
+                    analyst,
+                "analyst_name":
+                    ANALYST_DISPLAY_NAMES.get(
+                        analyst,
+                        analyst
+                    ),
+                "pick":
+                    picked_team,
+                "opponent":
+                    opponent,
+                "status":
+                    "pending",
+                "actual_winner":
+                    None,
+                "actual_score":
+                    None,
+                "created_at":
+                    datetime.now(
+                        timezone.utc
+                    ).isoformat(),
+                "settled_at":
+                    None,
+            })
+
+            existing_keys.add(
+                key
+            )
+            created += 1
+
+    data["picks"] = picks
+    save_analyst_receipts(
+        data
+    )
+
+    return created
+
+
+def settle_analyst_predictions(
+    season_type=None,
+    week_number=None
+):
+    data = load_analyst_receipts()
+    picks = data.get(
+        "picks",
+        []
+    )
+
+    by_week = {}
+
+    for item in picks:
+        if not isinstance(item, dict):
+            continue
+
+        if item.get("status") != "pending":
+            continue
+
+        item_season = str(
+            item.get(
+                "season_type",
+                ""
+            )
+        )
+
+        try:
+            item_week = int(
+                item.get(
+                    "week",
+                    0
+                )
+            )
+        except Exception:
+            continue
+
+        if (
+            season_type is not None
+            and item_season != str(
+                season_type
+            )
+        ):
+            continue
+
+        if (
+            week_number is not None
+            and item_week != int(
+                week_number
+            )
+        ):
+            continue
+
+        by_week.setdefault(
+            (
+                item_season,
+                item_week
+            ),
+            []
+        ).append(
+            item
+        )
+
+    settled = 0
+
+    for (
+        item_season,
+        item_week
+    ), week_picks in by_week.items():
+        schedule_data = load_weekly_data(
+            item_season,
+            item_week,
+            "schedules"
+        )
+
+        if not schedule_data:
+            continue
+
+        completed = {}
+
+        for game in schedule_data.get(
+            "gameScheduleInfoList",
+            []
+        ):
+            if not game_looks_completed(
+                game
+            ):
+                continue
+
+            schedule_id = str(
+                game.get(
+                    "scheduleId"
+                )
+            )
+
+            away_score = int(
+                game.get(
+                    "awayScore",
+                    0
+                )
+                or 0
+            )
+            home_score = int(
+                game.get(
+                    "homeScore",
+                    0
+                )
+                or 0
+            )
+
+            away = safe_team_name(
+                game.get(
+                    "awayTeamId"
+                )
+            )
+            home = safe_team_name(
+                game.get(
+                    "homeTeamId"
+                )
+            )
+
+            if away_score > home_score:
+                winner = away
+            elif home_score > away_score:
+                winner = home
+            else:
+                winner = "TIE"
+
+            completed[
+                schedule_id
+            ] = {
+                "winner":
+                    winner,
+                "score":
+                    (
+                        f"{away} {away_score}, "
+                        f"{home} {home_score}"
+                    )
+            }
+
+        for item in week_picks:
+            result = completed.get(
+                str(
+                    item.get(
+                        "schedule_id"
+                    )
+                )
+            )
+
+            if not result:
+                continue
+
+            winner = result[
+                "winner"
+            ]
+
+            if winner == "TIE":
+                status = "push"
+            elif item.get(
+                "pick"
+            ) == winner:
+                status = "win"
+            else:
+                status = "loss"
+
+            item[
+                "status"
+            ] = status
+
+            item[
+                "actual_winner"
+            ] = winner
+
+            item[
+                "actual_score"
+            ] = result[
+                "score"
+            ]
+
+            item[
+                "settled_at"
+            ] = datetime.now(
+                timezone.utc
+            ).isoformat()
+
+            settled += 1
+
+    data["picks"] = picks
+    save_analyst_receipts(
+        data
+    )
+
+    return settled
+
+
+def analyst_prediction_records():
+    data = load_analyst_receipts()
+    picks = data.get(
+        "picks",
+        []
+    )
+
+    records = {
+        analyst: {
+            "analyst":
+                analyst,
+            "name":
+                name,
+            "wins":
+                0,
+            "losses":
+                0,
+            "pushes":
+                0,
+            "pending":
+                0,
+            "total_settled":
+                0,
+            "win_pct":
+                0.0,
+        }
+        for analyst, name in ANALYST_DISPLAY_NAMES.items()
+    }
+
+    for item in picks:
+        analyst = item.get(
+            "analyst"
+        )
+
+        if analyst not in records:
+            continue
+
+        status = item.get(
+            "status",
+            "pending"
+        )
+
+        if status == "win":
+            records[
+                analyst
+            ][
+                "wins"
+            ] += 1
+        elif status == "loss":
+            records[
+                analyst
+            ][
+                "losses"
+            ] += 1
+        elif status == "push":
+            records[
+                analyst
+            ][
+                "pushes"
+            ] += 1
+        else:
+            records[
+                analyst
+            ][
+                "pending"
+            ] += 1
+
+    for record in records.values():
+        total = (
+            record["wins"]
+            + record["losses"]
+        )
+
+        record[
+            "total_settled"
+        ] = total
+
+        record[
+            "win_pct"
+        ] = round(
+            (
+                record["wins"]
+                / total
+                * 100
+            )
+            if total
+            else 0.0,
+            1
+        )
+
+    return records
+
+
+def analyst_receipts_leaderboard():
+    records = analyst_prediction_records()
+
+    ordered = sorted(
+        records.values(),
+        key=lambda item: (
+            item.get(
+                "win_pct",
+                0
+            ),
+            item.get(
+                "wins",
+                0
+            )
+        ),
+        reverse=True
+    )
+
+    for index, item in enumerate(
+        ordered,
+        start=1
+    ):
+        item[
+            "rank"
+        ] = index
+
+    return ordered
+
+
+def recent_bad_analyst_receipts(
+    limit=4
+):
+    data = load_analyst_receipts()
+
+    losses = [
+        item
+        for item in data.get(
+            "picks",
+            []
+        )
+        if isinstance(item, dict)
+        and item.get(
+            "status"
+        ) == "loss"
+    ]
+
+    losses.sort(
+        key=lambda item: str(
+            item.get(
+                "settled_at",
+                ""
+            )
+        ),
+        reverse=True
+    )
+
+    return losses[:limit]
+
+
+def build_receipts_callout(
+    season_type,
+    week_number
+):
+    leaderboard = (
+        analyst_receipts_leaderboard()
+    )
+
+    losses = recent_bad_analyst_receipts(
+        8
+    )
+
+    current_losses = [
+        item
+        for item in losses
+        if str(
+            item.get(
+                "season_type"
+            )
+        ) == str(
+            season_type
+        )
+        and int(
+            item.get(
+                "week",
+                0
+            )
+            or 0
+        ) == int(
+            week_number
+        )
+    ]
+
+    target = (
+        current_losses[0]
+        if current_losses
+        else (
+            losses[0]
+            if losses
+            else None
+        )
+    )
+
+    if not target:
+        return {
+            "headline":
+                "No receipts to cash yet",
+            "take": (
+                "The picks are on the record. "
+                "Once games finish, the desk will have wins and losses to answer for."
+            ),
+            "target":
+                None,
+            "leaderboard":
+                leaderboard,
+        }
+
+    analyst = target.get(
+        "analyst"
+    )
+
+    analyst_name = (
+        ANALYST_DISPLAY_NAMES.get(
+            analyst,
+            analyst
+        )
+    )
+
+    callout = stable_choice(
+        RECEIPT_CALLOUT_LINES.get(
+            analyst,
+            [
+                "The prediction missed, and the receipt is on screen."
+            ]
+        ),
+        (
+            f"receipt-callout-{season_type}-"
+            f"{week_number}-"
+            f"{target.get('schedule_id')}-"
+            f"{analyst}"
+        )
+    )
+
+    defense = stable_choice(
+        RECEIPT_DEFENSE_LINES.get(
+            analyst,
+            [
+                "I got the pick wrong. Put it on the record."
+            ]
+        ),
+        (
+            f"receipt-defense-{season_type}-"
+            f"{week_number}-"
+            f"{target.get('schedule_id')}-"
+            f"{analyst}"
+        )
+    )
+
+    return {
+        "headline":
+            f"Receipt Check: {analyst_name}",
+        "take": (
+            f"{callout}\n\n"
+            f"**The miss:** {analyst_name} picked "
+            f"**{target.get('pick')}** in "
+            f"**{target.get('matchup')}**. "
+            f"Actual winner: **{target.get('actual_winner')}** "
+            f"({target.get('actual_score')}).\n\n"
+            f"**{analyst_name} responds:** {defense}"
+        ),
+        "target":
+            target,
+        "leaderboard":
+            leaderboard,
+    }
+
+
+@app.route(
+    "/analyst/receipts"
+)
+def analyst_receipts_route():
+    settle_analyst_predictions()
+
+    return jsonify({
+        "leaderboard":
+            analyst_receipts_leaderboard(),
+        "recent_losses":
+            recent_bad_analyst_receipts(
+                20
+            ),
+        "picks":
+            list(
+                reversed(
+                    load_analyst_receipts().get(
+                        "picks",
+                        []
+                    )
+                )
+            )[:200]
+    })
+
+
+@app.route(
+    "/analyst/receipts/settle/"
+    "<season_type>/<int:week_number>",
+    methods=["GET", "POST"]
+)
+def analyst_receipts_settle_route(
+    season_type,
+    week_number
+):
+    settled = settle_analyst_predictions(
+        season_type,
+        week_number
+    )
+
+    return jsonify({
+        "settled":
+            settled,
+        "leaderboard":
+            analyst_receipts_leaderboard(),
+        "callout":
+            build_receipts_callout(
+                season_type,
+                week_number
+            )
+    })
+
+
 def build_weekly_game_predictions(
     season_type,
     week_number
@@ -5936,8 +6779,36 @@ def build_panel_debate(
     topic_label = "the overall week"
     source_key = f"{season_type}-{week_number}"
 
-    # Choose the strongest real topic available.
-    if trades:
+    receipt_callout = show.get(
+        "receipts_callout",
+        {}
+    )
+
+    receipt_target = (
+        receipt_callout.get(
+            "target"
+        )
+        if isinstance(
+            receipt_callout,
+            dict
+        )
+        else None
+    )
+
+    # Receipts get first priority so analysts can call each other out.
+    if receipt_target:
+        topic_type = "receipt"
+        topic_label = (
+            f"{receipt_target.get('analyst_name')} "
+            f"missed {receipt_target.get('matchup')}"
+        )
+        source_key = (
+            f"{receipt_target.get('schedule_id')}-"
+            f"{receipt_target.get('analyst')}"
+        )
+
+    # Otherwise choose the strongest real topic available.
+    elif trades:
         trade = trades[0]
         topic_type = "trade"
         topic_label = (
@@ -6083,7 +6954,75 @@ def build_panel_debate(
         lines[analyst] = line
 
     # Add topic-specific follow-ups so the debate is about actual league data.
-    if topic_type == "trade" and trades:
+    if topic_type == "receipt" and receipt_target:
+        missed_analyst = receipt_target.get(
+            "analyst"
+        )
+
+        missed_name = (
+            ANALYST_DISPLAY_NAMES.get(
+                missed_analyst,
+                receipt_target.get(
+                    "analyst_name",
+                    missed_analyst
+                )
+            )
+        )
+
+        pick = receipt_target.get(
+            "pick"
+        )
+
+        actual = receipt_target.get(
+            "actual_winner"
+        )
+
+        matchup = receipt_target.get(
+            "matchup"
+        )
+
+        # Everyone else gets a chance to call out the bad pick.
+        if missed_analyst != "marcus":
+            lines["marcus"] += (
+                f" {missed_name}, you picked **{pick}** in {matchup}. "
+                f"**{actual}** won. The receipt is right there."
+            )
+        else:
+            lines["marcus"] += (
+                " I got that one wrong. Put the loss on my record."
+            )
+
+        if missed_analyst != "stephen":
+            lines["stephen"] += (
+                f" {missed_name}, do not change the subject. "
+                f"You picked **{pick}** and **{actual}** beat them."
+            )
+        else:
+            lines["stephen"] += (
+                " Fine, the pick missed. I will own it, but I am not lowering the standard."
+            )
+
+        if missed_analyst != "pat":
+            lines["pat"] += (
+                f" Somebody save the screenshot. {missed_name} had **{pick}**, "
+                f"and **{actual}** just cooked the prediction."
+            )
+        else:
+            lines["pat"] += (
+                " Yep, that receipt is mine. Clip it and give the winner credit."
+            )
+
+        if missed_analyst != "josh_pate":
+            lines["josh_pate"] += (
+                f" The pregame assumption behind {missed_name}'s **{pick}** pick "
+                f"did not survive the actual matchup. That is useful evidence."
+            )
+        else:
+            lines["josh_pate"] += (
+                " That prediction missed. The result tells me the pregame assumption needs updating."
+            )
+
+    elif topic_type == "trade" and trades:
         trade = trades[0]
         review = (
             trade.get(
@@ -6256,6 +7195,30 @@ def build_weekly_show_summary(
         )
     )
 
+    # Save the desk's pregame picks, then grade any games
+    # from this week that have already been completed.
+    record_weekly_analyst_predictions(
+        season_type,
+        week_number,
+        game_predictions
+    )
+
+    settle_analyst_predictions(
+        season_type,
+        week_number
+    )
+
+    analyst_receipts = (
+        analyst_receipts_leaderboard()
+    )
+
+    receipts_callout = (
+        build_receipts_callout(
+            season_type,
+            week_number
+        )
+    )
+
     trade_proposals = (
         weekly_trade_proposals()
     )
@@ -6384,6 +7347,10 @@ def build_weekly_show_summary(
             rankings[:5],
         "game_predictions":
             game_predictions,
+        "analyst_receipts":
+            analyst_receipts,
+        "receipts_callout":
+            receipts_callout,
         "trade_proposals":
             trade_proposals,
         "super_bowl_favorites":
@@ -6548,10 +7515,26 @@ def weekly_show_embed_fields(
                     f"({pick.get('confidence')})"
                 )
 
+            analyst_picks = (
+                build_analyst_pick_set(
+                    pick,
+                    show.get(
+                        "season_type"
+                    ),
+                    show.get(
+                        "week"
+                    )
+                )
+            )
+
             lines.append(
                 f"**{pick.get('matchup')}**\n"
-                f"Pick: **{pick_text}** — "
-                f"{pick.get('reason')}"
+                f"Model lean: **{pick_text}** — "
+                f"{pick.get('reason')}\n"
+                f"Marcus: **{analyst_picks.get('marcus')}** | "
+                f"Stephen A.: **{analyst_picks.get('stephen')}** | "
+                f"Pat: **{analyst_picks.get('pat')}** | "
+                f"Josh Pate: **{analyst_picks.get('josh_pate')}**"
             )
 
         fields.append({
@@ -6559,6 +7542,67 @@ def weekly_show_embed_fields(
                 "🎯 Weekly Picks & Favorites",
             "value":
                 "\n\n".join(lines)[:1024],
+            "inline":
+                False
+        })
+
+    receipts = show.get(
+        "analyst_receipts",
+        []
+    )
+
+    if receipts:
+        lines = []
+
+        for item in receipts:
+            record = (
+                f"{item.get('wins', 0)}-"
+                f"{item.get('losses', 0)}"
+            )
+
+            if item.get(
+                "pushes",
+                0
+            ):
+                record += (
+                    f"-{item.get('pushes', 0)}"
+                )
+
+            lines.append(
+                f"{item.get('rank')}. "
+                f"**{item.get('name')}** — "
+                f"{record} "
+                f"({item.get('win_pct', 0)}%)"
+            )
+
+        fields.append({
+            "name":
+                "🧾 Analyst Receipts — Prediction Records",
+            "value":
+                "\n".join(lines)[:1024],
+            "inline":
+                False
+        })
+
+    receipt_callout = show.get(
+        "receipts_callout",
+        {}
+    )
+
+    if (
+        receipt_callout
+        and receipt_callout.get(
+            "target"
+        )
+    ):
+        fields.append({
+            "name":
+                "📸 Receipt Check",
+            "value":
+                receipt_callout.get(
+                    "take",
+                    ""
+                )[:1024],
             "inline":
                 False
         })
@@ -8435,6 +9479,7 @@ STEPHEN_A_PARODY_HISTORY_FILE = "stephen_a_parody_posts.json"
 JOSH_PATE_PARODY_HISTORY_FILE = "josh_pate_parody_posts.json"
 MARCUS_TRADE_REACTION_HISTORY_FILE = "marcus_trade_reaction_posts.json"
 WEEKLY_SHOW_HISTORY_FILE = "weekly_show_posts.json"
+ANALYST_RECEIPTS_FILE = "analyst_receipts.json"
 TRADE_HISTORY_FILE = "trade_history.json"
 PROJECT_MADDEN_RECORD_BOOK_FILE = "project_madden_record_book.json"
 PROJECT_MADDEN_HALL_OF_FAME_FILE = "project_madden_hall_of_fame.json"
@@ -13163,6 +14208,7 @@ def weekly_show_healthcheck(
         "summary_build": False,
         "panel_takes": False,
         "panel_debate": False,
+        "analyst_receipts": False,
         "fraud_watch": False,
         "dark_horse_watch": False,
         "hot_seat": False,
@@ -13197,6 +14243,19 @@ def weekly_show_healthcheck(
             and bool(
                 show.get("panel_debate")
             )
+        )
+
+        checks["analyst_receipts"] = (
+            isinstance(
+                show.get("analyst_receipts"),
+                list
+            )
+            and len(
+                show.get(
+                    "analyst_receipts",
+                    []
+                )
+            ) == 4
         )
         checks["fraud_watch"] = (
             "fraud_watch" in show
