@@ -3,3 +3,4 @@ gunicorn
 requests
 PyNaCl
 Pillow
+psycopg[binary]
