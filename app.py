@@ -64,7 +64,7 @@ LEAGUE_OWNER_TEST_ROLE_ID = "1538749830111694910"
 GOTW_POLL_HISTORY_FILE = "gotw_poll_history.json"
 GOTW_POLL_CLOSE_SECONDS = 300
 
-PROJECT_MADDEN_APP_VERSION = "v15-hof-ack-fix"
+PROJECT_MADDEN_APP_VERSION = "v17-hof-analyst-reactions"
 
 
 # =========================================================
@@ -13958,6 +13958,396 @@ def hall_of_fame_summary_text(
     )
 
 
+
+def hall_of_fame_role_label(
+    entry
+):
+    inductee_type = str(
+        entry.get(
+            "type",
+            "Inductee"
+        )
+    ).strip().lower()
+
+    if "player" in inductee_type:
+        return "player"
+
+    if (
+        "owner" in inductee_type
+        or "coach" in inductee_type
+    ):
+        return "coach"
+
+    if (
+        "commissioner" in inductee_type
+        or "contributor" in inductee_type
+    ):
+        return "commissioner/contributor"
+
+    if "team" in inductee_type:
+        return "team"
+
+    return "Hall of Famer"
+
+
+def build_hall_of_fame_analyst_reactions(
+    entry
+):
+    name = entry.get(
+        "name",
+        "this inductee"
+    )
+
+    team = entry.get(
+        "team",
+        "Project Madden"
+    )
+
+    role = hall_of_fame_role_label(
+        entry
+    )
+
+    championships = int(
+        entry.get(
+            "championships",
+            0
+        )
+        or 0
+    )
+
+    reason = str(
+        entry.get(
+            "reason",
+            ""
+        )
+    ).strip()
+
+    awards = str(
+        entry.get(
+            "awards",
+            ""
+        )
+    ).strip()
+
+    record = str(
+        entry.get(
+            "career_record",
+            ""
+        )
+    ).strip()
+
+    seed = (
+        f"hof-{entry.get('hof_id')}-"
+        f"{name}-{role}-{team}"
+    )
+
+    if role == "player":
+        marcus_lines = [
+            (
+                f"{name} earned this. When you talk about a great player, "
+                f"you are talking about somebody who changed games and left a mark "
+                f"on {team}. That is Hall of Fame material."
+            ),
+            (
+                f"I have no issue with this one. {name} was the kind of player "
+                "people had to account for every week, and that impact is exactly "
+                "what a Hall of Fame should recognize."
+            ),
+        ]
+
+        stephen_lines = [
+            (
+                f"You do not put a player like {name} in the Hall of Fame by accident. "
+                "If the production, winning, and impact are all there, then the résumé speaks loudly."
+            ),
+            (
+                f"{name} was not just another player on the roster. This is somebody "
+                "whose name belongs in the history of the league."
+            ),
+        ]
+
+        pat_lines = [
+            (
+                f"{name} was a DUDE. That is the easiest way to put it. Big moments, "
+                "big plays, and a reputation that followed them every week."
+            ),
+            (
+                f"This is exactly what the Hall is for. {name} gave the league moments "
+                "people are going to keep talking about."
+            ),
+        ]
+
+        josh_lines = [
+            (
+                f"The strongest Hall of Fame cases are about sustained value, not one hot stretch. "
+                f"{name} built the kind of player résumé that holds up over time."
+            ),
+            (
+                f"When you study the full body of work, {name} had real impact on winning. "
+                "That matters more than a flashy week or two."
+            ),
+        ]
+
+    elif role == "coach":
+        marcus_lines = [
+            (
+                f"{name} was a good coach because the results and the program both mattered. "
+                f"You can look at what happened with {team} and see a real legacy."
+            ),
+            (
+                f"This is not just about wins. {name} helped shape a team, set standards, "
+                "and built something people remember. That is a Hall of Fame coach."
+            ),
+        ]
+
+        stephen_lines = [
+            (
+                f"A coach is judged by leadership, preparation, and whether the team responds. "
+                f"{name} did enough of that to make this induction completely understandable."
+            ),
+            (
+                f"If you are responsible for winning, discipline, and a lasting identity, "
+                f"then your name belongs in the conversation. {name} has that case."
+            ),
+        ]
+
+        pat_lines = [
+            (
+                f"{name} could COACH. Players bought in, the team had an identity, "
+                "and the league noticed. That is a pretty good Hall of Fame argument."
+            ),
+            (
+                f"There are coaches who just manage games, and there are coaches who create eras. "
+                f"{name} left something behind with {team}."
+            ),
+        ]
+
+        josh_lines = [
+            (
+                f"The thing I look for with coaches is sustainability. {name} built a résumé "
+                "that was bigger than one season, and that is why the induction makes sense."
+            ),
+            (
+                f"Good coaching shows up in roster development, consistency, and meaningful wins. "
+                f"{name} checked enough of those boxes to deserve this."
+            ),
+        ]
+
+    elif role == "commissioner/contributor":
+        marcus_lines = [
+            (
+                f"{name} helped make Project Madden what it is. The Hall of Fame should not only "
+                "recognize players and coaches; it should recognize the people who kept the league moving."
+            ),
+            (
+                f"This kind of induction matters. {name} made an impact on the league itself, "
+                "and that contribution deserves to be remembered."
+            ),
+        ]
+
+        stephen_lines = [
+            (
+                f"People love to focus only on what happens on the field, but a league does not run itself. "
+                f"{name} contributed to the structure, standards, and culture behind it."
+            ),
+            (
+                f"If somebody helps build the league, protect the league, and make the experience better, "
+                f"then yes, {name} belongs in this Hall of Fame conversation."
+            ),
+        ]
+
+        pat_lines = [
+            (
+                f"You need people behind the scenes who keep the whole thing alive. "
+                f"{name} was one of those people, and that absolutely deserves some love."
+            ),
+            (
+                f"Every great league has people doing the work nobody sees. {name} made a real difference."
+            ),
+        ]
+
+        josh_lines = [
+            (
+                f"A strong league depends on governance, consistency, and people who invest in the long term. "
+                f"{name} contributed in that way, which makes this a legitimate Hall of Fame case."
+            ),
+            (
+                f"Contribution is part of legacy. {name} helped strengthen the league beyond any one game or season."
+            ),
+        ]
+
+    else:
+        marcus_lines = [
+            f"{name} built a legacy in Project Madden, and this induction recognizes that impact.",
+            f"The Hall of Fame is about lasting influence, and {name} clearly left one.",
+        ]
+
+        stephen_lines = [
+            f"{name} has a résumé worth remembering. That is what the Hall of Fame is supposed to represent.",
+            f"You do not get remembered forever without making a real impact. {name} did that.",
+        ]
+
+        pat_lines = [
+            f"{name} left a mark on this league. That is why we are talking Hall of Fame.",
+            f"This is a legacy induction. {name} mattered to Project Madden.",
+        ]
+
+        josh_lines = [
+            f"{name} has a body of work that deserves historical recognition.",
+            f"The overall résumé supports the induction of {name}.",
+        ]
+
+    context_bits = []
+
+    if championships:
+        context_bits.append(
+            f"{championships} championship"
+            + (
+                ""
+                if championships == 1
+                else "s"
+            )
+        )
+
+    if record:
+        context_bits.append(
+            f"career record {record}"
+        )
+
+    if awards:
+        context_bits.append(
+            f"honors: {awards}"
+        )
+
+    context = (
+        " • ".join(
+            context_bits
+        )
+        if context_bits
+        else reason
+    )
+
+    return {
+        "marcus":
+            stable_choice(
+                marcus_lines,
+                seed + "-marcus"
+            ),
+        "stephen":
+            stable_choice(
+                stephen_lines,
+                seed + "-stephen"
+            ),
+        "pat":
+            stable_choice(
+                pat_lines,
+                seed + "-pat"
+            ),
+        "josh_pate":
+            stable_choice(
+                josh_lines,
+                seed + "-josh"
+            ),
+        "context":
+            context[:900]
+    }
+
+
+def post_hall_of_fame_analyst_reactions(
+    entry
+):
+    reactions = build_hall_of_fame_analyst_reactions(
+        entry
+    )
+
+    title = (
+        "🏛️ HALL OF FAME REACTION • "
+        f"{entry.get('name')}"
+    )
+
+    results = {}
+
+    results[
+        "marcus"
+    ] = send_analyst_embed(
+        title,
+        (
+            f"{reactions.get('marcus')}\n\n"
+            f"**Hall of Fame context:** "
+            f"{reactions.get('context') or entry.get('reason', '')}"
+        )
+    )
+
+    results[
+        "stephen"
+    ] = send_stephen_a_parody_embed(
+        title,
+        (
+            f"{reactions.get('stephen')}\n\n"
+            f"**Hall of Fame context:** "
+            f"{reactions.get('context') or entry.get('reason', '')}"
+        )
+    )
+
+    results[
+        "josh_pate"
+    ] = send_josh_pate_parody_embed(
+        title,
+        (
+            f"{reactions.get('josh_pate')}\n\n"
+            f"**Hall of Fame context:** "
+            f"{reactions.get('context') or entry.get('reason', '')}"
+        )
+    )
+
+    results[
+        "weekly_show"
+    ] = send_weekly_show_embed(
+        (
+            "🏛️ PROJECT MADDEN HALL OF FAME PANEL • "
+            f"{entry.get('name')}"
+        ),
+        (
+            f"**Marcus Hayes:** {reactions.get('marcus')}\n\n"
+            f"**Stephen A. Smith — AI Parody:** {reactions.get('stephen')}\n\n"
+            f"**Pat McAfee — AI Parody:** {reactions.get('pat')}\n\n"
+            f"**Josh Pate — AI Parody:** {reactions.get('josh_pate')}\n\n"
+            "*Stephen A. Smith, Pat McAfee, and Josh Pate portions are fictional "
+            "AI parody commentary, not real statements from those people.*"
+        ),
+        [
+            {
+                "name":
+                    "🏛️ Inductee",
+                "value":
+                    (
+                        f"**{entry.get('name')}** • "
+                        f"{entry.get('type')} • "
+                        f"{entry.get('team')} • "
+                        f"Class of {entry.get('class_year')}"
+                    )[:1024],
+                "inline":
+                    False
+            },
+            {
+                "name":
+                    "📜 Hall of Fame Case",
+                "value":
+                    str(
+                        entry.get(
+                            "reason",
+                            ""
+                        )
+                    )[:1024],
+                "inline":
+                    False
+            }
+        ]
+    )
+
+    return results
+
+
 def save_hall_of_fame(data):
     save_json_file(
         PROJECT_MADDEN_HALL_OF_FAME_FILE,
@@ -14195,6 +14585,8 @@ def hall_of_fame_status_route():
         "dedicated_inductee_channels":
             True,
         "custom_logo_generation":
+            True,
+        "analyst_reactions_enabled":
             True,
         "hof_commands_deferred":
             True,
@@ -18684,11 +19076,6 @@ def process_test_system_background(
     )
 
 
-@app.route(
-    "/discord/interactions",
-    methods=["POST"]
-)
-
 def process_test_hof_background(
     interaction
 ):
@@ -18721,6 +19108,63 @@ def process_test_hof_background(
         if result.get(
             "success"
         ):
+            test_entry = {
+                "hof_id":
+                    "test-preview",
+                "name":
+                    str(
+                        options.get(
+                            "name",
+                            "Project Madden Test Inductee"
+                        )
+                    ).strip()
+                    or "Project Madden Test Inductee",
+                "type":
+                    str(
+                        options.get(
+                            "type",
+                            "Owner / Coach"
+                        )
+                    ).strip()
+                    or "Owner / Coach",
+                "team":
+                    str(
+                        options.get(
+                            "team",
+                            "Project Madden"
+                        )
+                    ).strip()
+                    or "Project Madden",
+                "reason":
+                    (
+                        "Testing how the Project Madden analysts react "
+                        "to a Hall of Fame induction."
+                    ),
+                "championships":
+                    2,
+                "class_year":
+                    datetime.now(
+                        timezone.utc
+                    ).year
+            }
+
+            preview = (
+                build_hall_of_fame_analyst_reactions(
+                    test_entry
+                )
+            )
+
+            send_weekly_show_embed(
+                "🧪 HALL OF FAME ANALYST TEST",
+                (
+                    f"**Marcus Hayes:** {preview.get('marcus')}\n\n"
+                    f"**Stephen A. Smith — AI Parody:** {preview.get('stephen')}\n\n"
+                    f"**Pat McAfee — AI Parody:** {preview.get('pat')}\n\n"
+                    f"**Josh Pate — AI Parody:** {preview.get('josh_pate')}\n\n"
+                    "*Real-person portions are fictional AI parody, not actual statements.*"
+                )
+            )
+
             content = (
                 "✅ Hall of Fame test created successfully.\n"
                 f"Test channel: <#{result.get('channel_id')}>\n"
@@ -18893,6 +19337,12 @@ def process_induct_hof_background(
                     )[:900]
                 )
             else:
+                analyst_reactions = (
+                    post_hall_of_fame_analyst_reactions(
+                        entry
+                    )
+                )
+
                 discord_result = (
                     send_hall_of_fame_induction_to_discord(
                         entry
@@ -18991,6 +19441,10 @@ def discord_deferred_ephemeral():
     })
 
 
+@app.route(
+    "/discord/interactions",
+    methods=["POST"]
+)
 def discord_interactions():
     raw_body = request.get_data()
 
@@ -19539,6 +19993,50 @@ def discord_register():
         result
     ), status_code
 
+
+
+
+@app.route(
+    "/discord/route-check",
+    methods=["GET"]
+)
+def discord_route_check():
+    rules = []
+
+    for rule in app.url_map.iter_rules():
+        if str(
+            rule.rule
+        ) == "/discord/interactions":
+            rules.append({
+                "rule":
+                    str(
+                        rule.rule
+                    ),
+                "endpoint":
+                    str(
+                        rule.endpoint
+                    ),
+                "methods":
+                    sorted(
+                        list(
+                            rule.methods
+                        )
+                    )
+            })
+
+    return jsonify({
+        "app_version":
+            PROJECT_MADDEN_APP_VERSION,
+        "discord_interaction_routes":
+            rules,
+        "correct_endpoint":
+            any(
+                item.get(
+                    "endpoint"
+                ) == "discord_interactions"
+                for item in rules
+            )
+    })
 
 
 @app.route(
