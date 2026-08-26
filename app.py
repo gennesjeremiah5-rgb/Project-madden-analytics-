@@ -4,6 +4,7 @@ from io import BytesIO
 from flask import Flask, request, jsonify, render_template_string, send_file
 import json
 import os
+import io
 import hashlib
 import uuid
 import re
@@ -63,7 +64,7 @@ LEAGUE_OWNER_TEST_ROLE_ID = "1538749830111694910"
 GOTW_POLL_HISTORY_FILE = "gotw_poll_history.json"
 GOTW_POLL_CLOSE_SECONDS = 300
 
-PROJECT_MADDEN_APP_VERSION = "v10-discord-force-register"
+PROJECT_MADDEN_APP_VERSION = "v13-hof-test-command"
 
 
 # =========================================================
@@ -12348,6 +12349,1615 @@ def load_hall_of_fame():
     return data if isinstance(data, list) else []
 
 
+
+def hall_of_fame_channel_id():
+    return os.environ.get(
+        "HALL_OF_FAME_CHANNEL_ID",
+        ""
+    ).strip()
+
+
+
+def hall_of_fame_category_id():
+    return os.environ.get(
+        "HALL_OF_FAME_CATEGORY_ID",
+        ""
+    ).strip()
+
+
+def safe_discord_channel_name(
+    value
+):
+    text = str(
+        value
+        or "hall-of-famer"
+    ).strip().lower()
+
+    text = re.sub(
+        r"[^a-z0-9]+",
+        "-",
+        text
+    )
+
+    text = re.sub(
+        r"-+",
+        "-",
+        text
+    ).strip("-")
+
+    if not text:
+        text = "hall-of-famer"
+
+    return text[:80]
+
+
+def hall_of_fame_logo_url(
+    hof_id
+):
+    return (
+        "https://project-madden-analytics.onrender.com/"
+        f"hall-of-fame/logo/{hof_id}.png"
+    )
+
+
+def hall_of_fame_entry_by_id(
+    hof_id
+):
+    target = str(
+        hof_id
+        or ""
+    ).strip()
+
+    for item in load_hall_of_fame():
+        if (
+            isinstance(
+                item,
+                dict
+            )
+            and str(
+                item.get(
+                    "hof_id",
+                    ""
+                )
+            )
+            == target
+        ):
+            return item
+
+    return None
+
+
+def update_hall_of_fame_entry(
+    hof_id,
+    updates
+):
+    hall = load_hall_of_fame()
+    updated = None
+
+    for item in hall:
+        if not isinstance(
+            item,
+            dict
+        ):
+            continue
+
+        if str(
+            item.get(
+                "hof_id",
+                ""
+            )
+        ) != str(
+            hof_id
+        ):
+            continue
+
+        item.update(
+            updates
+        )
+        updated = item
+        break
+
+    if updated is not None:
+        save_hall_of_fame(
+            hall
+        )
+
+    return updated
+
+
+def generate_hall_of_fame_logo_image(
+    entry
+):
+    from PIL import Image, ImageDraw, ImageFont
+
+    size = 1024
+
+    image = Image.new(
+        "RGB",
+        (
+            size,
+            size
+        ),
+        (
+            13,
+            16,
+            24
+        )
+    )
+
+    draw = ImageDraw.Draw(
+        image
+    )
+
+    # Gold-style ring and inner badge.
+    draw.ellipse(
+        (
+            70,
+            70,
+            954,
+            954
+        ),
+        outline=(
+            214,
+            173,
+            71
+        ),
+        width=28
+    )
+
+    draw.ellipse(
+        (
+            115,
+            115,
+            909,
+            909
+        ),
+        outline=(
+            105,
+            85,
+            42
+        ),
+        width=10
+    )
+
+    name = str(
+        entry.get(
+            "name",
+            "Hall of Famer"
+        )
+    ).strip()
+
+    hof_type = str(
+        entry.get(
+            "type",
+            "Inductee"
+        )
+    ).strip()
+
+    class_year = str(
+        entry.get(
+            "class_year",
+            ""
+        )
+    ).strip()
+
+    words = [
+        part
+        for part in re.split(
+            r"\s+",
+            name
+        )
+        if part
+    ]
+
+    initials = "".join(
+        word[0]
+        for word in words[:3]
+    ).upper()
+
+    if not initials:
+        initials = "HOF"
+
+    # Use Pillow's bundled/default font fallback so no external font file is needed.
+    try:
+        font_big = ImageFont.truetype(
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            190
+        )
+        font_title = ImageFont.truetype(
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            58
+        )
+        font_small = ImageFont.truetype(
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            38
+        )
+    except Exception:
+        font_big = ImageFont.load_default()
+        font_title = ImageFont.load_default()
+        font_small = ImageFont.load_default()
+
+    def centered_text(
+        y,
+        text,
+        font,
+        fill
+    ):
+        box = draw.textbbox(
+            (
+                0,
+                0
+            ),
+            text,
+            font=font
+        )
+
+        width = (
+            box[2]
+            - box[0]
+        )
+
+        draw.text(
+            (
+                (
+                    size
+                    - width
+                )
+                / 2,
+                y
+            ),
+            text,
+            font=font,
+            fill=fill
+        )
+
+    centered_text(
+        155,
+        "PROJECT MADDEN",
+        font_title,
+        (
+            214,
+            173,
+            71
+        )
+    )
+
+    centered_text(
+        355,
+        initials,
+        font_big,
+        (
+            244,
+            244,
+            246
+        )
+    )
+
+    centered_text(
+        665,
+        "HALL OF FAME",
+        font_title,
+        (
+            214,
+            173,
+            71
+        )
+    )
+
+    centered_text(
+        745,
+        hof_type[:26],
+        font_small,
+        (
+            210,
+            212,
+            218
+        )
+    )
+
+    if class_year:
+        centered_text(
+            810,
+            f"CLASS OF {class_year}",
+            font_small,
+            (
+                210,
+                212,
+                218
+            )
+        )
+
+    return image
+
+
+def create_hall_of_fame_inductee_channel(
+    entry
+):
+    token = discord_bot_token()
+    guild_id = discord_guild_id()
+
+    if (
+        not token
+        or not guild_id
+    ):
+        return {
+            "success":
+                False,
+            "error":
+                (
+                    "DISCORD_BOT_TOKEN and DISCORD_GUILD_ID "
+                    "are required to create Hall of Fame channels."
+                )
+        }
+
+    channel_name = (
+        "hof-"
+        + safe_discord_channel_name(
+            entry.get(
+                "name"
+            )
+        )
+    )[:100]
+
+    payload = {
+        "name":
+            channel_name,
+        "type":
+            0,
+        "topic": (
+            f"Project Madden Hall of Fame • "
+            f"{entry.get('name')} • "
+            f"Class of {entry.get('class_year')}"
+        )[:1024],
+        # Make the inductee channel a read-only museum page for members.
+        "permission_overwrites": [
+            {
+                "id":
+                    str(
+                        guild_id
+                    ),
+                "type":
+                    0,
+                "deny":
+                    str(
+                        2048
+                    )
+            }
+        ]
+    }
+
+    category_id = (
+        hall_of_fame_category_id()
+    )
+
+    if category_id:
+        payload[
+            "parent_id"
+        ] = category_id
+
+    response = requests.post(
+        (
+            "https://discord.com/api/v10/"
+            f"guilds/{guild_id}/channels"
+        ),
+        headers={
+            "Authorization":
+                f"Bot {token}",
+            "Content-Type":
+                "application/json"
+        },
+        json=payload,
+        timeout=15
+    )
+
+    if response.status_code not in [
+        200,
+        201
+    ]:
+        return {
+            "success":
+                False,
+            "status_code":
+                response.status_code,
+            "error":
+                response.text[:500]
+        }
+
+    channel = response.json()
+
+    return {
+        "success":
+            True,
+        "channel_id":
+            str(
+                channel.get(
+                    "id",
+                    ""
+                )
+            ),
+        "channel_name":
+            channel.get(
+                "name"
+            )
+    }
+
+
+def post_hall_of_fame_inductee_profile(
+    entry,
+    channel_id
+):
+    token = discord_bot_token()
+
+    if (
+        not token
+        or not channel_id
+    ):
+        return {
+            "sent":
+                False,
+            "error":
+                "Bot token or channel ID missing."
+        }
+
+    logo_url = hall_of_fame_logo_url(
+        entry.get(
+            "hof_id"
+        )
+    )
+
+    fields = [
+        {
+            "name":
+                "🏈 Team / Organization",
+            "value":
+                entry.get(
+                    "team",
+                    "Project Madden"
+                ),
+            "inline":
+                True
+        },
+        {
+            "name":
+                "🏆 Championships",
+            "value":
+                str(
+                    entry.get(
+                        "championships",
+                        0
+                    )
+                ),
+            "inline":
+                True
+        }
+    ]
+
+    if entry.get(
+        "career_record"
+    ):
+        fields.append({
+            "name":
+                "📊 Career Record",
+            "value":
+                entry.get(
+                    "career_record"
+                ),
+            "inline":
+                True
+        })
+
+    if entry.get(
+        "awards"
+    ):
+        fields.append({
+            "name":
+                "🥇 Awards & Honors",
+            "value":
+                entry.get(
+                    "awards"
+                )[:1024],
+            "inline":
+                False
+        })
+
+    fields.append({
+        "name":
+            "📜 Hall of Fame Case",
+        "value":
+            entry.get(
+                "reason",
+                ""
+            )[:1024],
+        "inline":
+            False
+    })
+
+    embed = {
+        "title":
+            "🏛️ PROJECT MADDEN HALL OF FAME",
+        "description": (
+            f"## {entry.get('name')}\n"
+            f"**{entry.get('type')}**\n"
+            f"**Class of {entry.get('class_year')}**"
+        ),
+        "thumbnail": {
+            "url":
+                logo_url
+        },
+        "image": {
+            "url":
+                logo_url
+        },
+        "fields":
+            fields,
+        "footer": {
+            "text":
+                (
+                    "Project Madden Hall of Fame • "
+                    f"{entry.get('hof_id')}"
+                )
+        }
+    }
+
+    response = requests.post(
+        (
+            "https://discord.com/api/v10/"
+            f"channels/{channel_id}/messages"
+        ),
+        headers={
+            "Authorization":
+                f"Bot {token}",
+            "Content-Type":
+                "application/json"
+        },
+        json={
+            "content": (
+                f"🏛️ Welcome to the official Hall of Fame channel "
+                f"for **{entry.get('name')}**."
+            ),
+            "embeds": [
+                embed
+            ],
+            "allowed_mentions": {
+                "parse": []
+            }
+        },
+        timeout=15
+    )
+
+    return {
+        "sent":
+            response.status_code
+            in [
+                200,
+                201
+            ],
+        "status_code":
+            response.status_code,
+        "error":
+            (
+                ""
+                if response.status_code
+                in [
+                    200,
+                    201
+                ]
+                else response.text[:500]
+            )
+    }
+
+
+
+def delete_discord_channel(
+    channel_id
+):
+    token = discord_bot_token()
+
+    if (
+        not token
+        or not channel_id
+    ):
+        return {
+            "success":
+                False,
+            "error":
+                "Bot token or channel ID missing."
+        }
+
+    response = requests.delete(
+        (
+            "https://discord.com/api/v10/"
+            f"channels/{channel_id}"
+        ),
+        headers={
+            "Authorization":
+                f"Bot {token}"
+        },
+        timeout=15
+    )
+
+    return {
+        "success":
+            response.status_code
+            in [
+                200,
+                204
+            ],
+        "status_code":
+            response.status_code,
+        "error":
+            (
+                ""
+                if response.status_code
+                in [
+                    200,
+                    204
+                ]
+                else response.text[:500]
+            )
+    }
+
+
+def post_hall_of_fame_test_profile(
+    entry,
+    channel_id
+):
+    from PIL import Image
+
+    token = discord_bot_token()
+
+    if (
+        not token
+        or not channel_id
+    ):
+        return {
+            "sent":
+                False,
+            "error":
+                "Bot token or channel ID missing."
+        }
+
+    image = generate_hall_of_fame_logo_image(
+        entry
+    )
+
+    buffer = io.BytesIO()
+
+    image.save(
+        buffer,
+        format="PNG",
+        optimize=True
+    )
+
+    buffer.seek(
+        0
+    )
+
+    embed = {
+        "title":
+            "🧪 PROJECT MADDEN HALL OF FAME TEST",
+        "description": (
+            f"## {entry.get('name')}\n"
+            f"**{entry.get('type')}**\n"
+            f"**Class of {entry.get('class_year')}**\n\n"
+            "This is a test induction only. "
+            "It is not being saved to the permanent Hall of Fame."
+        ),
+        "thumbnail": {
+            "url":
+                "attachment://hall-of-fame-test.png"
+        },
+        "image": {
+            "url":
+                "attachment://hall-of-fame-test.png"
+        },
+        "fields": [
+            {
+                "name":
+                    "🏈 Team / Organization",
+                "value":
+                    entry.get(
+                        "team",
+                        "Project Madden"
+                    ),
+                "inline":
+                    True
+            },
+            {
+                "name":
+                    "🏆 Championships",
+                "value":
+                    str(
+                        entry.get(
+                            "championships",
+                            0
+                        )
+                    ),
+                "inline":
+                    True
+            },
+            {
+                "name":
+                    "📜 Test Hall of Fame Case",
+                "value":
+                    entry.get(
+                        "reason",
+                        "Testing the Project Madden Hall of Fame system."
+                    )[:1024],
+                "inline":
+                    False
+            }
+        ],
+        "footer": {
+            "text":
+                "TEST ONLY • Channel auto-deletes in 5 minutes"
+        }
+    }
+
+    payload_json = json.dumps({
+        "content":
+            "🧪 **HALL OF FAME SYSTEM TEST**",
+        "embeds": [
+            embed
+        ],
+        "allowed_mentions": {
+            "parse": []
+        }
+    })
+
+    response = requests.post(
+        (
+            "https://discord.com/api/v10/"
+            f"channels/{channel_id}/messages"
+        ),
+        headers={
+            "Authorization":
+                f"Bot {token}"
+        },
+        data={
+            "payload_json":
+                payload_json
+        },
+        files={
+            "files[0]": (
+                "hall-of-fame-test.png",
+                buffer.getvalue(),
+                "image/png"
+            )
+        },
+        timeout=20
+    )
+
+    return {
+        "sent":
+            response.status_code
+            in [
+                200,
+                201
+            ],
+        "status_code":
+            response.status_code,
+        "error":
+            (
+                ""
+                if response.status_code
+                in [
+                    200,
+                    201
+                ]
+                else response.text[:500]
+            )
+    }
+
+
+def create_hall_of_fame_test_channel(
+    entry
+):
+    token = discord_bot_token()
+    guild_id = discord_guild_id()
+
+    if (
+        not token
+        or not guild_id
+    ):
+        return {
+            "success":
+                False,
+            "error":
+                (
+                    "DISCORD_BOT_TOKEN and DISCORD_GUILD_ID "
+                    "are required."
+                )
+        }
+
+    channel_name = (
+        "test-hof-"
+        + safe_discord_channel_name(
+            entry.get(
+                "name"
+            )
+        )
+    )[:100]
+
+    payload = {
+        "name":
+            channel_name,
+        "type":
+            0,
+        "topic": (
+            "TEST ONLY • Project Madden Hall of Fame system check • "
+            "Auto-deletes in 5 minutes"
+        )[:1024],
+        "permission_overwrites": [
+            {
+                "id":
+                    str(
+                        guild_id
+                    ),
+                "type":
+                    0,
+                "deny":
+                    str(
+                        2048
+                    )
+            }
+        ]
+    }
+
+    category_id = hall_of_fame_category_id()
+
+    if category_id:
+        payload[
+            "parent_id"
+        ] = category_id
+
+    response = requests.post(
+        (
+            "https://discord.com/api/v10/"
+            f"guilds/{guild_id}/channels"
+        ),
+        headers={
+            "Authorization":
+                f"Bot {token}",
+            "Content-Type":
+                "application/json"
+        },
+        json=payload,
+        timeout=15
+    )
+
+    if response.status_code not in [
+        200,
+        201
+    ]:
+        return {
+            "success":
+                False,
+            "status_code":
+                response.status_code,
+            "error":
+                response.text[:500]
+        }
+
+    channel = response.json()
+
+    return {
+        "success":
+            True,
+        "channel_id":
+            str(
+                channel.get(
+                    "id",
+                    ""
+                )
+            ),
+        "channel_name":
+            channel.get(
+                "name"
+            )
+    }
+
+
+def cleanup_hall_of_fame_test_channel_after_delay(
+    channel_id,
+    delay_seconds=300
+):
+    time.sleep(
+        delay_seconds
+    )
+
+    try:
+        delete_discord_channel(
+            channel_id
+        )
+    except Exception as e:
+        print(
+            "HOF TEST CHANNEL CLEANUP ERROR:",
+            str(
+                e
+            )
+        )
+
+
+def run_hall_of_fame_test(
+    name="Project Madden Test Inductee",
+    inductee_type="Owner / Coach",
+    team="Project Madden",
+    championships=2
+):
+    entry = {
+        "hof_id":
+            "test-" + uuid.uuid4().hex[:8],
+        "name":
+            str(
+                name
+            ).strip()
+            or "Project Madden Test Inductee",
+        "type":
+            str(
+                inductee_type
+            ).strip()
+            or "Owner / Coach",
+        "team":
+            str(
+                team
+            ).strip()
+            or "Project Madden",
+        "reason":
+            (
+                "Testing the full Hall of Fame workflow: "
+                "channel creation, custom logo generation, "
+                "profile embed, permissions, and cleanup."
+            ),
+        "career_record":
+            "TEST",
+        "championships":
+            int(
+                championships
+                or 0
+            ),
+        "awards":
+            "Hall of Fame System Test",
+        "class_year":
+            datetime.now(
+                timezone.utc
+            ).year
+    }
+
+    channel_result = create_hall_of_fame_test_channel(
+        entry
+    )
+
+    if not channel_result.get(
+        "success"
+    ):
+        return {
+            "success":
+                False,
+            "stage":
+                "channel_creation",
+            "error":
+                channel_result.get(
+                    "error",
+                    "Unknown channel creation error"
+                )
+        }
+
+    channel_id = channel_result.get(
+        "channel_id"
+    )
+
+    profile_result = post_hall_of_fame_test_profile(
+        entry,
+        channel_id
+    )
+
+    if not profile_result.get(
+        "sent"
+    ):
+        return {
+            "success":
+                False,
+            "stage":
+                "profile_post",
+            "channel_id":
+                channel_id,
+            "error":
+                profile_result.get(
+                    "error",
+                    "Unknown profile post error"
+                )
+        }
+
+    worker = threading.Thread(
+        target=cleanup_hall_of_fame_test_channel_after_delay,
+        args=(
+            channel_id,
+            300
+        ),
+        daemon=True
+    )
+
+    worker.start()
+
+    return {
+        "success":
+            True,
+        "channel_id":
+            channel_id,
+        "channel_name":
+            channel_result.get(
+                "channel_name"
+            ),
+        "auto_delete_seconds":
+            300,
+        "saved_permanently":
+            False
+    }
+
+
+def provision_hall_of_fame_inductee_space(
+    entry
+):
+    channel_result = (
+        create_hall_of_fame_inductee_channel(
+            entry
+        )
+    )
+
+    if not channel_result.get(
+        "success"
+    ):
+        return {
+            "success":
+                False,
+            "channel":
+                channel_result
+        }
+
+    channel_id = (
+        channel_result.get(
+            "channel_id"
+        )
+    )
+
+    logo_url = hall_of_fame_logo_url(
+        entry.get(
+            "hof_id"
+        )
+    )
+
+    updated = update_hall_of_fame_entry(
+        entry.get(
+            "hof_id"
+        ),
+        {
+            "discord_channel_id":
+                channel_id,
+            "discord_channel_name":
+                channel_result.get(
+                    "channel_name"
+                ),
+            "logo_url":
+                logo_url
+        }
+    )
+
+    profile_result = (
+        post_hall_of_fame_inductee_profile(
+            updated
+            or entry,
+            channel_id
+        )
+    )
+
+    return {
+        "success":
+            True,
+        "channel":
+            channel_result,
+        "profile_post":
+            profile_result,
+        "logo_url":
+            logo_url,
+        "entry":
+            updated
+            or entry
+    }
+
+
+@app.route(
+    "/hall-of-fame/logo/<hof_id>.png"
+)
+def hall_of_fame_logo_route(
+    hof_id
+):
+    entry = hall_of_fame_entry_by_id(
+        hof_id
+    )
+
+    if not entry:
+        return (
+            "Hall of Fame entry not found",
+            404
+        )
+
+    image = (
+        generate_hall_of_fame_logo_image(
+            entry
+        )
+    )
+
+    buffer = io.BytesIO()
+
+    image.save(
+        buffer,
+        format="PNG",
+        optimize=True
+    )
+
+    buffer.seek(
+        0
+    )
+
+    return send_file(
+        buffer,
+        mimetype="image/png",
+        download_name=(
+            safe_discord_channel_name(
+                entry.get(
+                    "name"
+                )
+            )
+            + "-hall-of-fame.png"
+        )
+    )
+
+
+def hall_of_fame_discord_configured():
+    return bool(
+        discord_bot_token()
+        and hall_of_fame_channel_id()
+    )
+
+
+def hall_of_fame_find_entry(
+    query
+):
+    target = str(
+        query
+        or ""
+    ).strip().lower()
+
+    if not target:
+        return None
+
+    for item in load_hall_of_fame():
+        if not isinstance(
+            item,
+            dict
+        ):
+            continue
+
+        if str(
+            item.get(
+                "hof_id",
+                ""
+            )
+        ).lower() == target:
+            return item
+
+        if str(
+            item.get(
+                "name",
+                ""
+            )
+        ).strip().lower() == target:
+            return item
+
+    return None
+
+
+def build_hall_of_fame_entry(
+    *,
+    name,
+    inductee_type,
+    team,
+    reason,
+    career_record="",
+    championships=0,
+    awards="",
+    image_url="",
+    inducted_by="",
+    class_year=None
+):
+    if class_year is None:
+        class_year = datetime.now(
+            timezone.utc
+        ).year
+
+    return {
+        "hof_id":
+            uuid.uuid4().hex[:10],
+        "name":
+            str(
+                name
+            ).strip(),
+        "type":
+            str(
+                inductee_type
+            ).strip(),
+        "team":
+            str(
+                team
+                or "Project Madden"
+            ).strip(),
+        "reason":
+            str(
+                reason
+            ).strip(),
+        "career_record":
+            str(
+                career_record
+                or ""
+            ).strip(),
+        "championships":
+            int(
+                championships
+                or 0
+            ),
+        "awards":
+            str(
+                awards
+                or ""
+            ).strip(),
+        "image_url":
+            str(
+                image_url
+                or ""
+            ).strip(),
+        "class_year":
+            int(
+                class_year
+            ),
+        "inducted_by":
+            str(
+                inducted_by
+                or ""
+            ).strip(),
+        "inducted_at":
+            datetime.now(
+                timezone.utc
+            ).isoformat()
+    }
+
+
+def add_hall_of_fame_entry(
+    entry
+):
+    hall = load_hall_of_fame()
+
+    existing = hall_of_fame_find_entry(
+        entry.get(
+            "name"
+        )
+    )
+
+    if existing:
+        return {
+            "success":
+                False,
+            "error":
+                (
+                    f"{entry.get('name')} is already "
+                    "in the Project Madden Hall of Fame."
+                ),
+            "existing":
+                existing
+        }
+
+    hall.append(
+        entry
+    )
+
+    save_hall_of_fame(
+        hall
+    )
+
+    return {
+        "success":
+            True,
+        "entry":
+            entry
+    }
+
+
+def remove_hall_of_fame_entry(
+    query
+):
+    hall = load_hall_of_fame()
+
+    target = hall_of_fame_find_entry(
+        query
+    )
+
+    if not target:
+        return {
+            "success":
+                False,
+            "error":
+                "Hall of Fame entry not found."
+        }
+
+    target_id = target.get(
+        "hof_id"
+    )
+
+    new_hall = [
+        item
+        for item in hall
+        if not (
+            isinstance(
+                item,
+                dict
+            )
+            and item.get(
+                "hof_id"
+            ) == target_id
+        )
+    ]
+
+    save_hall_of_fame(
+        new_hall
+    )
+
+    return {
+        "success":
+            True,
+        "removed":
+            target
+    }
+
+
+def send_hall_of_fame_induction_to_discord(
+    entry
+):
+    channel_id = (
+        hall_of_fame_channel_id()
+    )
+
+    token = (
+        discord_bot_token()
+    )
+
+    if (
+        not channel_id
+        or not token
+    ):
+        return {
+            "sent":
+                False,
+            "error":
+                (
+                    "DISCORD_BOT_TOKEN + "
+                    "HALL_OF_FAME_CHANNEL_ID are required."
+                )
+        }
+
+    fields = []
+
+    fields.append({
+        "name":
+            "🏈 Team / Organization",
+        "value":
+            entry.get(
+                "team",
+                "Project Madden"
+            ),
+        "inline":
+            True
+    })
+
+    fields.append({
+        "name":
+            "🏆 Championships",
+        "value":
+            str(
+                entry.get(
+                    "championships",
+                    0
+                )
+            ),
+        "inline":
+            True
+    })
+
+    if entry.get(
+        "career_record"
+    ):
+        fields.append({
+            "name":
+                "📊 Career Record",
+            "value":
+                entry.get(
+                    "career_record"
+                ),
+            "inline":
+                True
+        })
+
+    if entry.get(
+        "awards"
+    ):
+        fields.append({
+            "name":
+                "🥇 Awards & Honors",
+            "value":
+                entry.get(
+                    "awards"
+                )[:1024],
+            "inline":
+                False
+        })
+
+    fields.append({
+        "name":
+            "📜 Why They Were Inducted",
+        "value":
+            entry.get(
+                "reason",
+                ""
+            )[:1024],
+        "inline":
+            False
+    })
+
+    embed = {
+        "title":
+            "🏛️ PROJECT MADDEN HALL OF FAME",
+        "description": (
+            f"## {entry.get('name')}\n"
+            f"**{entry.get('type')}**\n"
+            f"**Class of {entry.get('class_year')}**\n\n"
+            "Welcome to immortality."
+        ),
+        "fields":
+            fields,
+        "footer": {
+            "text":
+                (
+                    "Project Madden Hall of Fame • "
+                    f"Induction ID {entry.get('hof_id')}"
+                )
+        }
+    }
+
+    image_url = str(
+        entry.get(
+            "image_url",
+            ""
+        )
+    ).strip()
+
+    if image_url:
+        embed[
+            "thumbnail"
+        ] = {
+            "url":
+                image_url
+        }
+
+    response = requests.post(
+        (
+            "https://discord.com/api/v10/"
+            f"channels/{channel_id}/messages"
+        ),
+        headers={
+            "Authorization":
+                f"Bot {token}",
+            "Content-Type":
+                "application/json"
+        },
+        json={
+            "content":
+                "🏛️ **NEW PROJECT MADDEN HALL OF FAME INDUCTION**",
+            "embeds": [
+                embed
+            ],
+            "allowed_mentions": {
+                "parse": []
+            }
+        },
+        timeout=15
+    )
+
+    return {
+        "sent":
+            response.status_code
+            in [
+                200,
+                201
+            ],
+        "status_code":
+            response.status_code,
+        "error":
+            (
+                ""
+                if response.status_code
+                in [
+                    200,
+                    201
+                ]
+                else response.text[:500]
+            )
+    }
+
+
+def hall_of_fame_summary_text(
+    limit=10
+):
+    hall = load_hall_of_fame()
+
+    if not hall:
+        return (
+            "🏛️ **PROJECT MADDEN HALL OF FAME**\n"
+            "No inductees yet."
+        )
+
+    sorted_hall = sorted(
+        [
+            item
+            for item in hall
+            if isinstance(
+                item,
+                dict
+            )
+        ],
+        key=lambda item: (
+            int(
+                item.get(
+                    "class_year",
+                    0
+                )
+                or 0
+            ),
+            str(
+                item.get(
+                    "name",
+                    ""
+                )
+            )
+        ),
+        reverse=True
+    )
+
+    lines = [
+        "🏛️ **PROJECT MADDEN HALL OF FAME**"
+    ]
+
+    for item in sorted_hall[:limit]:
+        lines.append(
+            (
+                f"**{item.get('name')}** — "
+                f"{item.get('type', 'Inductee')} | "
+                f"{item.get('team', 'Project Madden')} | "
+                f"Class of {item.get('class_year', '—')} | "
+                f"🏆 {item.get('championships', 0)}"
+            )
+        )
+
+    if len(
+        sorted_hall
+    ) > limit:
+        lines.append(
+            f"...and {len(sorted_hall) - limit} more."
+        )
+
+    return "\n".join(
+        lines
+    )
+
+
 def save_hall_of_fame(data):
     save_json_file(
         PROJECT_MADDEN_HALL_OF_FAME_FILE,
@@ -12506,6 +14116,41 @@ def update_record_book_from_week(
 @app.route("/analyst/record-book")
 def analyst_record_book():
     return jsonify(load_record_book())
+
+
+
+@app.route(
+    "/hall-of-fame/status"
+)
+def hall_of_fame_status_route():
+    hall = load_hall_of_fame()
+
+    return jsonify({
+        "configured":
+            hall_of_fame_discord_configured(),
+        "bot_token_configured":
+            bool(
+                discord_bot_token()
+            ),
+        "channel_id_configured":
+            bool(
+                hall_of_fame_channel_id()
+            ),
+        "category_id_configured":
+            bool(
+                hall_of_fame_category_id()
+            ),
+        "dedicated_inductee_channels":
+            True,
+        "custom_logo_generation":
+            True,
+        "inductee_count":
+            len(
+                hall
+            ),
+        "league_owner_role_id":
+            LEAGUE_OWNER_TEST_ROLE_ID
+    })
 
 
 @app.route("/analyst/hall-of-fame")
@@ -14776,6 +16421,9 @@ def discord_test_role_denied():
 def expected_project_madden_commands():
     return [
         "trade",
+        "inducthof",
+        "removehof",
+        "hof",
         "testmarcus",
         "teststephena",
         "weeklyshow",
@@ -14784,6 +16432,7 @@ def expected_project_madden_commands():
         "testpat",
         "testsystem",
         "testgotw",
+        "testhof",
     ]
 
 
@@ -14897,6 +16546,180 @@ def register_trade_slash_command():
                 "Team B player or draft pick #5"
             )
         ]
+    }
+
+
+    induct_hof_command = {
+        "name":
+            "inducthof",
+        "description":
+            "League Owner: induct someone into the Project Madden Hall of Fame",
+        "options": [
+            {
+                "type":
+                    3,
+                "name":
+                    "name",
+                "description":
+                    "Inductee name",
+                "required":
+                    True,
+                "max_length":
+                    100
+            },
+            {
+                "type":
+                    3,
+                "name":
+                    "type",
+                "description":
+                    "Inductee type",
+                "required":
+                    True,
+                "choices": [
+                    {
+                        "name":
+                            "Owner / Coach",
+                        "value":
+                            "Owner / Coach"
+                    },
+                    {
+                        "name":
+                            "Player",
+                        "value":
+                            "Player"
+                    },
+                    {
+                        "name":
+                            "Team",
+                        "value":
+                            "Team"
+                    },
+                    {
+                        "name":
+                            "Commissioner / Contributor",
+                        "value":
+                            "Commissioner / Contributor"
+                    }
+                ]
+            },
+            {
+                "type":
+                    3,
+                "name":
+                    "team",
+                "description":
+                    "Team or organization",
+                "required":
+                    True,
+                "max_length":
+                    100
+            },
+            {
+                "type":
+                    3,
+                "name":
+                    "reason",
+                "description":
+                    "Why they belong in the Hall of Fame",
+                "required":
+                    True,
+                "max_length":
+                    1000
+            },
+            {
+                "type":
+                    4,
+                "name":
+                    "championships",
+                "description":
+                    "Project Madden championships",
+                "required":
+                    False,
+                "min_value":
+                    0,
+                "max_value":
+                    99
+            },
+            {
+                "type":
+                    3,
+                "name":
+                    "career_record",
+                "description":
+                    "Optional career record, example 54-18",
+                "required":
+                    False,
+                "max_length":
+                    50
+            },
+            {
+                "type":
+                    3,
+                "name":
+                    "awards",
+                "description":
+                    "Optional awards and honors",
+                "required":
+                    False,
+                "max_length":
+                    1000
+            },
+            {
+                "type":
+                    3,
+                "name":
+                    "image_url",
+                "description":
+                    "Optional image URL for the induction embed",
+                "required":
+                    False,
+                "max_length":
+                    500
+            },
+            {
+                "type":
+                    4,
+                "name":
+                    "class_year",
+                "description":
+                    "Optional Hall of Fame class year",
+                "required":
+                    False,
+                "min_value":
+                    2020,
+                "max_value":
+                    2100
+            }
+        ]
+    }
+
+    remove_hof_command = {
+        "name":
+            "removehof",
+        "description":
+            "League Owner: remove a Hall of Fame entry",
+        "options": [
+            {
+                "type":
+                    3,
+                "name":
+                    "name_or_id",
+                "description":
+                    "Exact inductee name or induction ID",
+                "required":
+                    True,
+                "max_length":
+                    100
+            }
+        ]
+    }
+
+    hof_command = {
+        "name":
+            "hof",
+        "description":
+            "View the Project Madden Hall of Fame"
     }
 
     test_marcus_command = {
@@ -15023,6 +16846,77 @@ def register_trade_slash_command():
     }
 
 
+
+    test_hof_command = {
+        "name":
+            "testhof",
+        "description":
+            "League Owner: test Hall of Fame channel + logo system",
+        "options": [
+            {
+                "type":
+                    3,
+                "name":
+                    "name",
+                "description":
+                    "Optional test inductee name",
+                "required":
+                    False,
+                "max_length":
+                    100
+            },
+            {
+                "type":
+                    3,
+                "name":
+                    "type",
+                "description":
+                    "Test inductee type",
+                "required":
+                    False,
+                "choices": [
+                    {
+                        "name":
+                            "Owner / Coach",
+                        "value":
+                            "Owner / Coach"
+                    },
+                    {
+                        "name":
+                            "Player",
+                        "value":
+                            "Player"
+                    },
+                    {
+                        "name":
+                            "Team",
+                        "value":
+                            "Team"
+                    },
+                    {
+                        "name":
+                            "Commissioner / Contributor",
+                        "value":
+                            "Commissioner / Contributor"
+                    }
+                ]
+            },
+            {
+                "type":
+                    3,
+                "name":
+                    "team",
+                "description":
+                    "Optional test team",
+                "required":
+                    False,
+                "max_length":
+                    100
+            }
+        ]
+    }
+
+
     test_gotw_command = {
         "name": "testgotw",
         "description": "League Owner: post a 5-minute GOTW test poll",
@@ -15139,6 +17033,9 @@ def register_trade_slash_command():
 
     commands = [
         command,
+        induct_hof_command,
+        remove_hof_command,
+        hof_command,
         test_marcus_command,
         test_stephen_command,
         weekly_show_command,
@@ -15146,7 +17043,8 @@ def register_trade_slash_command():
         test_josh_pate_command,
         test_pat_command,
         test_system_command,
-        test_gotw_command
+        test_gotw_command,
+        test_hof_command
     ]
 
     headers = {
@@ -16822,6 +18720,252 @@ def discord_interactions():
         ):
             return discord_test_role_denied()
 
+        if command_name in [
+            "inducthof",
+            "removehof"
+        ] and not discord_member_has_league_owner_role(
+            interaction
+        ):
+            return discord_ephemeral(
+                "🔒 Hall of Fame management is locked to @League owner."
+            )
+
+        if command_name == "hof":
+            return discord_ephemeral(
+                hall_of_fame_summary_text(
+                    20
+                )
+            )
+
+        if command_name == "inducthof":
+            options = discord_option_map(
+                interaction
+            )
+
+            name = str(
+                options.get(
+                    "name",
+                    ""
+                )
+            ).strip()
+
+            inductee_type = str(
+                options.get(
+                    "type",
+                    ""
+                )
+            ).strip()
+
+            team = str(
+                options.get(
+                    "team",
+                    ""
+                )
+            ).strip()
+
+            reason = str(
+                options.get(
+                    "reason",
+                    ""
+                )
+            ).strip()
+
+            if not (
+                name
+                and inductee_type
+                and team
+                and reason
+            ):
+                return discord_ephemeral(
+                    "❌ Name, type, team, and reason are required."
+                )
+
+            user_data = (
+                interaction.get(
+                    "member",
+                    {}
+                ).get(
+                    "user",
+                    {}
+                )
+            )
+
+            inducted_by = (
+                user_data.get(
+                    "global_name"
+                )
+                or user_data.get(
+                    "username"
+                )
+                or "League Owner"
+            )
+
+            class_year = options.get(
+                "class_year"
+            )
+
+            entry = build_hall_of_fame_entry(
+                name=name,
+                inductee_type=inductee_type,
+                team=team,
+                reason=reason,
+                career_record=str(
+                    options.get(
+                        "career_record",
+                        ""
+                    )
+                ).strip(),
+                championships=int(
+                    options.get(
+                        "championships",
+                        0
+                    )
+                    or 0
+                ),
+                awards=str(
+                    options.get(
+                        "awards",
+                        ""
+                    )
+                ).strip(),
+                image_url=str(
+                    options.get(
+                        "image_url",
+                        ""
+                    )
+                ).strip(),
+                inducted_by=inducted_by,
+                class_year=(
+                    int(
+                        class_year
+                    )
+                    if class_year
+                    is not None
+                    else None
+                )
+            )
+
+            saved = add_hall_of_fame_entry(
+                entry
+            )
+
+            if not saved.get(
+                "success"
+            ):
+                return discord_ephemeral(
+                    "❌ "
+                    + str(
+                        saved.get(
+                            "error",
+                            "Could not save induction."
+                        )
+                    )[:900]
+                )
+
+            discord_result = (
+                send_hall_of_fame_induction_to_discord(
+                    entry
+                )
+            )
+
+            space_result = (
+                provision_hall_of_fame_inductee_space(
+                    entry
+                )
+            )
+
+            channel_id = (
+                space_result.get(
+                    "channel",
+                    {}
+                ).get(
+                    "channel_id"
+                )
+            )
+
+            if (
+                discord_result.get(
+                    "sent"
+                )
+                and space_result.get(
+                    "success"
+                )
+            ):
+                return discord_ephemeral(
+                    (
+                        f"🏛️ **{name}** has been inducted into the "
+                        f"Project Madden Hall of Fame — Class of "
+                        f"{entry.get('class_year')}.\n"
+                        f"Induction ID: `{entry.get('hof_id')}`\n"
+                        f"Dedicated channel: <#{channel_id}>\n"
+                        f"Custom Hall of Fame logo: "
+                        f"{hall_of_fame_logo_url(entry.get('hof_id'))}"
+                    )
+                )
+
+            if space_result.get(
+                "success"
+            ):
+                return discord_ephemeral(
+                    (
+                        f"✅ **{name}** was saved and received a dedicated "
+                        f"Hall of Fame channel <#{channel_id}> with a custom logo.\n"
+                        "The main Hall of Fame announcement channel post failed, "
+                        "so check HALL_OF_FAME_CHANNEL_ID.\n"
+                        f"Induction ID: `{entry.get('hof_id')}`"
+                    )
+                )
+
+            return discord_ephemeral(
+                (
+                    f"✅ **{name}** was saved permanently, but Discord channel "
+                    "creation failed. The bot needs **Manage Channels** and "
+                    "**Send Messages / Embed Links** permissions.\n"
+                    f"Induction ID: `{entry.get('hof_id')}`"
+                )
+            )
+
+        if command_name == "removehof":
+            options = discord_option_map(
+                interaction
+            )
+
+            query = str(
+                options.get(
+                    "name_or_id",
+                    ""
+                )
+            ).strip()
+
+            result = remove_hall_of_fame_entry(
+                query
+            )
+
+            if not result.get(
+                "success"
+            ):
+                return discord_ephemeral(
+                    "❌ "
+                    + str(
+                        result.get(
+                            "error",
+                            "Hall of Fame entry not found."
+                        )
+                    )
+                )
+
+            removed = result.get(
+                "removed",
+                {}
+            )
+
+            return discord_ephemeral(
+                (
+                    f"🗑️ Removed **{removed.get('name')}** "
+                    "from the Project Madden Hall of Fame."
+                )
+            )
+
         if command_name == "trade":
             # Discord requires the first response in about 3 seconds.
             # Defer immediately, then process the Snallabot/trade work
@@ -16912,6 +19056,53 @@ def discord_interactions():
                     "flags": 64
                 }
             })
+
+        if command_name == "testhof":
+            options = discord_option_map(
+                interaction
+            )
+
+            result = run_hall_of_fame_test(
+                name=str(
+                    options.get(
+                        "name",
+                        "Project Madden Test Inductee"
+                    )
+                ).strip(),
+                inductee_type=str(
+                    options.get(
+                        "type",
+                        "Owner / Coach"
+                    )
+                ).strip(),
+                team=str(
+                    options.get(
+                        "team",
+                        "Project Madden"
+                    )
+                ).strip()
+            )
+
+            if result.get(
+                "success"
+            ):
+                return discord_ephemeral(
+                    (
+                        "✅ Hall of Fame test created successfully.\n"
+                        f"Test channel: <#{result.get('channel_id')}>\n"
+                        "A custom test HOF logo and induction profile were posted.\n"
+                        "Nothing was saved to the permanent Hall of Fame.\n"
+                        "🧹 The test channel will auto-delete in 5 minutes."
+                    )
+                )
+
+            return discord_ephemeral(
+                (
+                    "❌ Hall of Fame test failed at "
+                    f"**{result.get('stage', 'setup')}**: "
+                    f"{str(result.get('error', 'Unknown error'))[:800]}"
+                )
+            )
 
         if command_name == "testgotw":
             options = discord_option_map(
@@ -17221,6 +19412,27 @@ def discord_test_readiness():
                 gotw_poll_configured(),
             "needs":
                 "DISCORD_BOT_TOKEN + GOTW_CHANNEL_ID"
+        },
+        "testhof": {
+            "ready":
+                bool(
+                    discord_bot_token()
+                    and discord_guild_id()
+                ),
+            "needs":
+                (
+                    "DISCORD_BOT_TOKEN + DISCORD_GUILD_ID + "
+                    "bot Manage Channels / Send Messages / Embed Links"
+                )
+        },
+        "halloffame": {
+            "ready":
+                hall_of_fame_discord_configured(),
+            "needs":
+                (
+                    "DISCORD_BOT_TOKEN + HALL_OF_FAME_CHANNEL_ID "
+                    "+ optional HALL_OF_FAME_CATEGORY_ID"
+                )
         }
     }
 
@@ -17344,7 +19556,8 @@ def discord_status():
             "/testjoshpate",
             "/testweeklyshow",
             "/testsystem",
-            "/testgotw"
+            "/testgotw",
+            "/testhof"
         ],
         "test_commands_locked_to_role":
             "League owner",
