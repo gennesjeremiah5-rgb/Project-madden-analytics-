@@ -7899,6 +7899,86 @@ def close_gotw_poll_after_delay(
         )
 
 
+
+def recover_overdue_gotw_polls():
+    history = load_gotw_poll_history()
+    recovered = []
+    now = datetime.now(
+        timezone.utc
+    )
+
+    for item in history.get(
+        "polls",
+        []
+    ):
+        if item.get(
+            "status"
+        ) != "open":
+            continue
+
+        try:
+            created = datetime.fromisoformat(
+                str(
+                    item.get(
+                        "created_at"
+                    )
+                ).replace(
+                    "Z",
+                    "+00:00"
+                )
+            )
+        except Exception:
+            continue
+
+        if created.tzinfo is None:
+            created = created.replace(
+                tzinfo=timezone.utc
+            )
+
+        if (
+            now
+            - created
+        ).total_seconds() < GOTW_POLL_CLOSE_SECONDS:
+            continue
+
+        try:
+            result = close_gotw_poll(
+                str(item.get("message_id")),
+                str(item.get("channel_id")),
+                str(item.get("season_type")),
+                int(item.get("week", 1) or 1),
+                test=bool(item.get("test"))
+            )
+
+            recovered.append({
+                "message_id":
+                    item.get(
+                        "message_id"
+                    ),
+                "success":
+                    bool(
+                        result.get(
+                            "success"
+                        )
+                    )
+            })
+        except Exception as e:
+            recovered.append({
+                "message_id":
+                    item.get(
+                        "message_id"
+                    ),
+                "success":
+                    False,
+                "error":
+                    str(
+                        e
+                    )
+            })
+
+    return recovered
+
+
 def latest_closed_gotw(
     season_type,
     week_number
@@ -7924,7 +8004,11 @@ def latest_closed_gotw(
     "/gotw/status"
 )
 def gotw_status_route():
+    recovered = recover_overdue_gotw_polls()
+
     return jsonify({
+        "overdue_poll_recovery":
+            recovered,
         "configured":
             gotw_poll_configured(),
         "channel_id_configured":
@@ -15002,6 +15086,10 @@ def register_trade_slash_command():
                     {
                         "name": "Trade History",
                         "value": "tradehistory"
+                    },
+                    {
+                        "name": "GOTW Poll System",
+                        "value": "gotw"
                     }
                 ]
             },
@@ -15110,12 +15198,42 @@ def register_trade_slash_command():
     except Exception:
         body = []
 
+    registered_names = [
+        item.get(
+            "name"
+        )
+        for item in body
+    ]
+
+    expected_names = [
+        "trade",
+        "testmarcus",
+        "teststephena",
+        "weeklyshow",
+        "testweeklyshow",
+        "testjoshpate",
+        "testpat",
+        "testsystem",
+        "testgotw",
+    ]
+
+    missing_expected = [
+        name
+        for name in expected_names
+        if name not in registered_names
+    ]
+
     return {
-        "success": True,
-        "registered": [
-            item.get("name")
-            for item in body
-        ],
+        "success":
+            len(
+                missing_expected
+            ) == 0,
+        "registered":
+            registered_names,
+        "expected":
+            expected_names,
+        "missing_expected":
+            missing_expected,
         "scope": scope,
         "guild_id_configured": bool(guild_id),
         "old_global_command_removed": bool(guild_id),
@@ -15806,6 +15924,46 @@ def discord_debug():
 
 
 
+
+def build_weekly_show_test_panel(
+    headline
+):
+    seed = str(
+        headline
+        or "Project Madden Weekly Show"
+    )
+
+    return {
+        "marcus":
+            stable_choice(
+                [
+                    "The desk is connected. Once real weekly data arrives, I will react to what actually happened instead of manufacturing a storyline.",
+                    "Project Madden Media is online. Give me the real games, trades, standings, and performances and I will have plenty to discuss.",
+                    "This is the control-room check. The Weekly Show pipeline is ready for real league information."
+                ],
+                seed + "-marcus-test"
+            ),
+        "stephen":
+            stable_choice(
+                [
+                    "The test is working, but the real conversation begins when somebody gives us an actual result to debate.",
+                    "We are connected. When the league gives us real material, the fictional parody desk will have something to argue about.",
+                    "The studio connection is live. No fake statistics are needed for this test."
+                ],
+                seed + "-stephen-test"
+            ),
+        "pat":
+            stable_choice(
+                [
+                    "The whole Project Madden desk is plugged in and ready to go when the league starts producing real moments.",
+                    "This is a clean studio test. Once games are played, this show can get loud.",
+                    "Everything on this side of the desk is connected. Now we wait for the actual league action."
+                ],
+                seed + "-pat-test"
+            ),
+    }
+
+
 def process_test_weekly_show_background(
     interaction
 ):
@@ -16059,6 +16217,7 @@ def build_discord_system_test(
             "recordbook",
             "halloffame",
             "tradehistory",
+            "gotw",
         ]
         if system_name == "all"
         else [
@@ -16392,6 +16551,39 @@ def build_discord_system_test(
                 "tradehistory",
                 "Trade History / Discord Trade Connections",
                 trade_history_check
+            )
+
+        elif item == "gotw":
+            def gotw_check():
+                candidates = choose_gotw_poll_candidates(
+                    season_type,
+                    week_number
+                )
+
+                return (
+                    f"Configured: **{gotw_poll_configured()}**\n"
+                    f"Discord bot token: **{bool(discord_bot_token())}**\n"
+                    f"#gotw channel ID: **{bool(gotw_channel_id())}**\n"
+                    f"Close timer: **{GOTW_POLL_CLOSE_SECONDS} seconds**\n"
+                    f"Eligible candidates found: **{len(candidates)}**\n"
+                    + (
+                        "Candidates: "
+                        + ", ".join(
+                            str(item.get("team"))
+                            for item in candidates[:3]
+                        )
+                        if candidates
+                        else (
+                            "No poll candidates yet. "
+                            "Run the schedule export for this week first."
+                        )
+                    )
+                )
+
+            run_check(
+                "gotw",
+                "GOTW Fan Poll",
+                gotw_check
             )
 
     success = (
@@ -16734,6 +16926,33 @@ def discord_interactions():
             except Exception:
                 week_number = 1
 
+            if not discord_bot_token():
+                return discord_ephemeral(
+                    "❌ GOTW test cannot start because DISCORD_BOT_TOKEN "
+                    "is not configured in Render."
+                )
+
+            if not gotw_channel_id():
+                return discord_ephemeral(
+                    "❌ GOTW test cannot start because GOTW_CHANNEL_ID "
+                    "is not configured in Render."
+                )
+
+            candidates = choose_gotw_poll_candidates(
+                season_type,
+                week_number
+            )
+
+            if len(candidates) < 3:
+                return discord_ephemeral(
+                    (
+                        "❌ GOTW needs at least 3 unplayed matchups from the "
+                        f"{season_type.upper()} Week {week_number} schedule export. "
+                        f"I only found {len(candidates)} candidate(s). "
+                        "Run the Snallabot schedules export for that week first."
+                    )
+                )
+
             result = create_discord_gotw_poll(
                 season_type,
                 week_number,
@@ -16945,6 +17164,74 @@ def discord_register():
     ), status_code
 
 
+
+@app.route(
+    "/discord/test-readiness",
+    methods=["GET"]
+)
+def discord_test_readiness():
+    commands = {
+        "testmarcus": {
+            "ready":
+                analyst_webhook_configured(),
+            "needs":
+                "ANALYST_DISCORD_WEBHOOK_URL"
+        },
+        "teststephena": {
+            "ready":
+                stephen_a_parody_webhook_configured(),
+            "needs":
+                "STEPHEN_A_PARODY_WEBHOOK_URL"
+        },
+        "testpat": {
+            "ready":
+                weekly_show_webhook_configured(),
+            "needs":
+                "WEEKLY_SHOW_DISCORD_WEBHOOK_URL"
+        },
+        "testjoshpate": {
+            "ready":
+                josh_pate_parody_webhook_configured(),
+            "needs":
+                "JOSH_PATE_PARODY_WEBHOOK_URL"
+        },
+        "testweeklyshow": {
+            "ready":
+                weekly_show_webhook_configured(),
+            "needs":
+                "WEEKLY_SHOW_DISCORD_WEBHOOK_URL"
+        },
+        "testsystem": {
+            "ready":
+                weekly_show_webhook_configured(),
+            "needs":
+                "WEEKLY_SHOW_DISCORD_WEBHOOK_URL"
+        },
+        "testgotw": {
+            "ready":
+                gotw_poll_configured(),
+            "needs":
+                "DISCORD_BOT_TOKEN + GOTW_CHANNEL_ID"
+        }
+    }
+
+    return jsonify({
+        "league_owner_role_id":
+            LEAGUE_OWNER_TEST_ROLE_ID,
+        "all_test_commands_role_locked":
+            True,
+        "commands":
+            commands,
+        "all_ready":
+            all(
+                item.get(
+                    "ready"
+                )
+                for item in commands.values()
+            )
+    })
+
+
 @app.route(
     "/discord/status",
     methods=["GET"]
@@ -16988,7 +17275,8 @@ def discord_status():
             "debate",
             "recordbook",
             "halloffame",
-            "tradehistory"
+            "tradehistory",
+            "gotw"
         ],
         "weekly_show_command":
             "/weeklyshow",
