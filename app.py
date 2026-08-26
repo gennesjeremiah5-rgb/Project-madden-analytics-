@@ -64,7 +64,7 @@ LEAGUE_OWNER_TEST_ROLE_ID = "1538749830111694910"
 GOTW_POLL_HISTORY_FILE = "gotw_poll_history.json"
 GOTW_POLL_CLOSE_SECONDS = 300
 
-PROJECT_MADDEN_APP_VERSION = "v18-hofping-restored"
+PROJECT_MADDEN_APP_VERSION = "v19-hof-fast-ack"
 
 
 # =========================================================
@@ -19076,6 +19076,107 @@ def process_test_system_background(
     )
 
 
+
+def process_hof_view_background(
+    interaction
+):
+    try:
+        summary = hall_of_fame_summary_text(
+            20
+        )
+        content = summary
+    except Exception as e:
+        content = (
+            "❌ Hall of Fame could not load: "
+            + str(
+                e
+            )[:800]
+        )
+
+    edit_discord_deferred_response(
+        str(
+            interaction.get(
+                "application_id",
+                discord_application_id()
+            )
+        ),
+        str(
+            interaction.get(
+                "token",
+                ""
+            )
+        ),
+        content
+    )
+
+
+def process_remove_hof_background(
+    interaction
+):
+    try:
+        options = discord_option_map(
+            interaction
+        )
+
+        query = str(
+            options.get(
+                "name_or_id",
+                ""
+            )
+        ).strip()
+
+        result = remove_hall_of_fame_entry(
+            query
+        )
+
+        if not result.get(
+            "success"
+        ):
+            content = (
+                "❌ "
+                + str(
+                    result.get(
+                        "error",
+                        "Hall of Fame entry not found."
+                    )
+                )[:800]
+            )
+        else:
+            removed = result.get(
+                "removed",
+                {}
+            )
+
+            content = (
+                f"🗑️ Removed **{removed.get('name')}** "
+                "from the Project Madden Hall of Fame."
+            )
+
+    except Exception as e:
+        content = (
+            "❌ Hall of Fame removal crashed: "
+            + str(
+                e
+            )[:800]
+        )
+
+    edit_discord_deferred_response(
+        str(
+            interaction.get(
+                "application_id",
+                discord_application_id()
+            )
+        ),
+        str(
+            interaction.get(
+                "token",
+                ""
+            )
+        ),
+        content
+    )
+
+
 def process_test_hof_background(
     interaction
 ):
@@ -19466,7 +19567,7 @@ def discord_interactions():
         raw_body
     )
 
-    save_discord_debug({
+    debug_payload = {
         "received_at_utc":
             datetime.now(
                 timezone.utc
@@ -19493,7 +19594,17 @@ def discord_interactions():
             request.headers.get(
                 "Content-Type"
             )
-    })
+    }
+
+    # Never block Discord's 3-second acknowledgement window on
+    # debug-file/database I/O.
+    threading.Thread(
+        target=save_discord_debug,
+        args=(
+            debug_payload,
+        ),
+        daemon=True
+    ).start()
 
     print(
         "DISCORD INTERACTION:",
@@ -19560,21 +19671,15 @@ def discord_interactions():
             )
 
         if command_name == "hof":
-            try:
-                summary = hall_of_fame_summary_text(
-                    20
-                )
-            except Exception as e:
-                return discord_ephemeral(
-                    "❌ Hall of Fame could not load: "
-                    + str(
-                        e
-                    )[:800]
-                )
-
-            return discord_ephemeral(
-                summary
+            worker = threading.Thread(
+                target=process_hof_view_background,
+                args=(
+                    interaction,
+                ),
+                daemon=True
             )
+            worker.start()
+            return discord_deferred_ephemeral()
 
         if command_name == "inducthof":
             worker = threading.Thread(
@@ -19590,45 +19695,15 @@ def discord_interactions():
             return discord_deferred_ephemeral()
 
         if command_name == "removehof":
-            options = discord_option_map(
-                interaction
+            worker = threading.Thread(
+                target=process_remove_hof_background,
+                args=(
+                    interaction,
+                ),
+                daemon=True
             )
-
-            query = str(
-                options.get(
-                    "name_or_id",
-                    ""
-                )
-            ).strip()
-
-            result = remove_hall_of_fame_entry(
-                query
-            )
-
-            if not result.get(
-                "success"
-            ):
-                return discord_ephemeral(
-                    "❌ "
-                    + str(
-                        result.get(
-                            "error",
-                            "Hall of Fame entry not found."
-                        )
-                    )
-                )
-
-            removed = result.get(
-                "removed",
-                {}
-            )
-
-            return discord_ephemeral(
-                (
-                    f"🗑️ Removed **{removed.get('name')}** "
-                    "from the Project Madden Hall of Fame."
-                )
-            )
+            worker.start()
+            return discord_deferred_ephemeral()
 
         if command_name == "trade":
             # Discord requires the first response in about 3 seconds.
@@ -19994,6 +20069,30 @@ def discord_register():
     ), status_code
 
 
+
+
+
+@app.route(
+    "/discord/ack-check",
+    methods=["GET"]
+)
+def discord_ack_check():
+    return jsonify({
+        "app_version":
+            PROJECT_MADDEN_APP_VERSION,
+        "debug_persistence_async":
+            True,
+        "hofping":
+            "immediate",
+        "hof":
+            "deferred",
+        "testhof":
+            "deferred",
+        "inducthof":
+            "deferred",
+        "removehof":
+            "deferred"
+    })
 
 
 @app.route(
