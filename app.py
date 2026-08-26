@@ -63,6 +63,8 @@ LEAGUE_OWNER_TEST_ROLE_ID = "1538749830111694910"
 GOTW_POLL_HISTORY_FILE = "gotw_poll_history.json"
 GOTW_POLL_CLOSE_SECONDS = 300
 
+PROJECT_MADDEN_APP_VERSION = "v10-discord-force-register"
+
 
 # =========================================================
 # FILE HELPERS
@@ -14770,6 +14772,21 @@ def discord_test_role_denied():
     )
 
 
+
+def expected_project_madden_commands():
+    return [
+        "trade",
+        "testmarcus",
+        "teststephena",
+        "weeklyshow",
+        "testweeklyshow",
+        "testjoshpate",
+        "testpat",
+        "testsystem",
+        "testgotw",
+    ]
+
+
 def register_trade_slash_command():
     app_id = discord_application_id()
     token = discord_bot_token()
@@ -15205,17 +15222,9 @@ def register_trade_slash_command():
         for item in body
     ]
 
-    expected_names = [
-        "trade",
-        "testmarcus",
-        "teststephena",
-        "weeklyshow",
-        "testweeklyshow",
-        "testjoshpate",
-        "testpat",
-        "testsystem",
-        "testgotw",
-    ]
+    expected_names = (
+        expected_project_madden_commands()
+    )
 
     missing_expected = [
         name
@@ -17232,12 +17241,88 @@ def discord_test_readiness():
     })
 
 
+
+@app.route(
+    "/discord/force-register",
+    methods=["GET", "POST"]
+)
+def discord_force_register():
+    result = register_trade_slash_command()
+
+    expected = expected_project_madden_commands()
+
+    registered = result.get(
+        "registered",
+        []
+    )
+
+    missing = [
+        name
+        for name in expected
+        if name not in registered
+    ]
+
+    return jsonify({
+        "app_version":
+            PROJECT_MADDEN_APP_VERSION,
+        "success":
+            bool(
+                result.get(
+                    "success"
+                )
+            )
+            and not missing,
+        "scope":
+            result.get(
+                "scope"
+            ),
+        "guild_id_configured":
+            result.get(
+                "guild_id_configured"
+            ),
+        "registered":
+            registered,
+        "expected":
+            expected,
+        "missing":
+            missing,
+        "raw":
+            result
+    }), (
+        200
+        if (
+            result.get(
+                "success"
+            )
+            and not missing
+        )
+        else 400
+    )
+
+
+@app.route(
+    "/version",
+    methods=["GET"]
+)
+def app_version_route():
+    return jsonify({
+        "app_version":
+            PROJECT_MADDEN_APP_VERSION,
+        "expected_discord_commands":
+            expected_project_madden_commands()
+    })
+
+
 @app.route(
     "/discord/status",
     methods=["GET"]
 )
 def discord_status():
     return jsonify({
+        "app_version":
+            PROJECT_MADDEN_APP_VERSION,
+        "expected_commands":
+            expected_project_madden_commands(),
         "discord_bot_configured":
             discord_bot_configured(),
         "application_id_configured":
