@@ -64,7 +64,7 @@ LEAGUE_OWNER_TEST_ROLE_ID = "1538749830111694910"
 GOTW_POLL_HISTORY_FILE = "gotw_poll_history.json"
 GOTW_POLL_CLOSE_SECONDS = 300
 
-PROJECT_MADDEN_APP_VERSION = "v14-hof-deferred-fix"
+PROJECT_MADDEN_APP_VERSION = "v15-hof-ack-fix"
 
 
 # =========================================================
@@ -14119,6 +14119,58 @@ def analyst_record_book():
 
 
 
+
+@app.route(
+    "/hall-of-fame/diagnostics"
+)
+def hall_of_fame_diagnostics_route():
+    try:
+        hall = load_hall_of_fame()
+        db_read_ok = True
+        db_error = ""
+    except Exception as e:
+        hall = []
+        db_read_ok = False
+        db_error = str(
+            e
+        )
+
+    return jsonify({
+        "app_version":
+            PROJECT_MADDEN_APP_VERSION,
+        "interaction_endpoint":
+            discord_interactions_url(),
+        "bot_token_configured":
+            bool(
+                discord_bot_token()
+            ),
+        "guild_id_configured":
+            bool(
+                discord_guild_id()
+            ),
+        "hall_channel_id_configured":
+            bool(
+                hall_of_fame_channel_id()
+            ),
+        "hall_category_id_configured":
+            bool(
+                hall_of_fame_category_id()
+            ),
+        "database_read_ok":
+            db_read_ok,
+        "database_error":
+            db_error,
+        "inductee_count":
+            len(
+                hall
+            ),
+        "testhof_uses_deferred_response":
+            True,
+        "inducthof_uses_deferred_response":
+            True
+    })
+
+
 @app.route(
     "/hall-of-fame/status"
 )
@@ -16428,6 +16480,7 @@ def expected_project_madden_commands():
         "inducthof",
         "removehof",
         "hof",
+        "hofping",
         "testmarcus",
         "teststephena",
         "weeklyshow",
@@ -16851,6 +16904,15 @@ def register_trade_slash_command():
 
 
 
+
+    hof_ping_command = {
+        "name":
+            "hofping",
+        "description":
+            "Check Hall of Fame slash-command response"
+    }
+
+
     test_hof_command = {
         "name":
             "testhof",
@@ -17040,6 +17102,7 @@ def register_trade_slash_command():
         induct_hof_command,
         remove_hof_command,
         hof_command,
+        hof_ping_command,
         test_marcus_command,
         test_stephen_command,
         weekly_show_command,
@@ -18916,6 +18979,18 @@ def process_induct_hof_background(
     )
 
 
+
+def discord_deferred_ephemeral():
+    return jsonify({
+        "type":
+            5,
+        "data": {
+            "flags":
+                64
+        }
+    })
+
+
 def discord_interactions():
     raw_body = request.get_data()
 
@@ -19025,11 +19100,26 @@ def discord_interactions():
                 "🔒 Hall of Fame management is locked to @League owner."
             )
 
-        if command_name == "hof":
+        if command_name == "hofping":
             return discord_ephemeral(
-                hall_of_fame_summary_text(
+                "✅ Hall of Fame interaction endpoint is responding."
+            )
+
+        if command_name == "hof":
+            try:
+                summary = hall_of_fame_summary_text(
                     20
                 )
+            except Exception as e:
+                return discord_ephemeral(
+                    "❌ Hall of Fame could not load: "
+                    + str(
+                        e
+                    )[:800]
+                )
+
+            return discord_ephemeral(
+                summary
             )
 
         if command_name == "inducthof":
@@ -19043,14 +19133,7 @@ def discord_interactions():
 
             worker.start()
 
-            return jsonify({
-                "type":
-                    5,
-                "data": {
-                    "flags":
-                        64
-                }
-            })
+            return discord_deferred_ephemeral()
 
         if command_name == "removehof":
             options = discord_option_map(
@@ -19195,14 +19278,7 @@ def discord_interactions():
 
             worker.start()
 
-            return jsonify({
-                "type":
-                    5,
-                "data": {
-                    "flags":
-                        64
-                }
-            })
+            return discord_deferred_ephemeral()
 
         if command_name == "testgotw":
             options = discord_option_map(
