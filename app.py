@@ -15,6 +15,13 @@ from nacl.signing import VerifyKey
 from nacl.exceptions import BadSignatureError
 from datetime import datetime, timezone
 
+try:
+    import psycopg
+    from psycopg.types.json import Jsonb
+except Exception:
+    psycopg = None
+    Jsonb = None
+
 
 # =========================================================
 # FLASK APP
@@ -32,29 +39,533 @@ DISCORD_DEBUG_FILE = "discord_interaction_debug.json"
 TRADE_CARD_DIR = "generated_trade_cards"
 STANDINGS_POST_LOCK = threading.Lock()
 
+DATABASE_URL = os.environ.get(
+    "DATABASE_URL",
+    ""
+).strip()
+
+PERSISTENT_JSON_FILES = {
+    "trade_history.json",
+    "project_madden_record_book.json",
+    "project_madden_hall_of_fame.json",
+    "analyst_receipts.json",
+}
+
+PERSISTENT_DB_LOCK = threading.Lock()
+PERSISTENT_DB_READY = False
+PERSISTENT_DB_LAST_ERROR = None
+
 
 # =========================================================
 # FILE HELPERS
 # =========================================================
 
-def load_json_file(filename):
-    path = os.path.join(DATA_DIR, filename)
+def local_json_path(filename):
+    return os.path.join(
+        DATA_DIR,
+        filename
+    )
+
+
+def load_local_json_file(filename):
+    path = local_json_path(
+        filename
+    )
 
     if not os.path.exists(path):
         return None
 
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(
+            path,
+            "r",
+            encoding="utf-8"
+        ) as f:
             return json.load(f)
     except Exception:
         return None
 
 
-def save_json_file(filename, data):
-    path = os.path.join(DATA_DIR, filename)
+def save_local_json_file(
+    filename,
+    data
+):
+    path = local_json_path(
+        filename
+    )
 
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    with open(
+        path,
+        "w",
+        encoding="utf-8"
+    ) as f:
+        json.dump(
+            data,
+            f,
+            indent=2
+        )
+
+
+def persistent_storage_configured():
+    return bool(
+        DATABASE_URL
+    )
+
+
+def ensure_persistent_db():
+    global PERSISTENT_DB_READY
+    global PERSISTENT_DB_LAST_ERROR
+
+    if PERSISTENT_DB_READY:
+        return True
+
+    if not DATABASE_URL:
+        PERSISTENT_DB_LAST_ERROR = (
+            "DATABASE_URL is not configured."
+        )
+        return False
+
+    if psycopg is None:
+        PERSISTENT_DB_LAST_ERROR = (
+            "psycopg is not installed."
+        )
+        return False
+
+    with PERSISTENT_DB_LOCK:
+        if PERSISTENT_DB_READY:
+            return True
+
+        try:
+            with psycopg.connect(
+                DATABASE_URL,
+                connect_timeout=8
+            ) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS
+                        project_madden_persistent_json (
+                            storage_key TEXT PRIMARY KEY,
+                            payload JSONB NOT NULL,
+                            updated_at TIMESTAMPTZ
+                                NOT NULL
+                                DEFAULT NOW()
+                        )
+                        """
+                    )
+
+            PERSISTENT_DB_READY = True
+            PERSISTENT_DB_LAST_ERROR = None
+            return True
+
+        except Exception as e:
+            PERSISTENT_DB_LAST_ERROR = str(e)
+            print(
+                "PERSISTENT DB INIT ERROR:",
+                str(e)
+            )
+            return False
+
+
+def load_persistent_json(
+    filename
+):
+    global PERSISTENT_DB_LAST_ERROR
+
+    if not ensure_persistent_db():
+        return None
+
+    try:
+        with psycopg.connect(
+            DATABASE_URL,
+            connect_timeout=8
+        ) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT payload
+                    FROM project_madden_persistent_json
+                    WHERE storage_key = %s
+                    """,
+                    (
+                        filename,
+                    )
+                )
+
+                row = cur.fetchone()
+
+        if not row:
+            return None
+
+        return row[0]
+
+    except Exception as e:
+        PERSISTENT_DB_LAST_ERROR = str(e)
+        print(
+            "PERSISTENT DB READ ERROR:",
+            filename,
+            str(e)
+        )
+        return None
+
+
+def save_persistent_json(
+    filename,
+    data
+):
+    global PERSISTENT_DB_LAST_ERROR
+
+    if not ensure_persistent_db():
+        return False
+
+    try:
+        payload = (
+            Jsonb(data)
+            if Jsonb is not None
+            else json.dumps(data)
+        )
+
+        with psycopg.connect(
+            DATABASE_URL,
+            connect_timeout=8
+        ) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO
+                    project_madden_persistent_json (
+                        storage_key,
+                        payload,
+                        updated_at
+                    )
+                    VALUES (%s, %s, NOW())
+                    ON CONFLICT (storage_key)
+                    DO UPDATE SET
+                        payload = EXCLUDED.payload,
+                        updated_at = NOW()
+                    """,
+                    (
+                        filename,
+                        payload
+                    )
+                )
+
+        PERSISTENT_DB_LAST_ERROR = None
+        return True
+
+    except Exception as e:
+        PERSISTENT_DB_LAST_ERROR = str(e)
+        print(
+            "PERSISTENT DB WRITE ERROR:",
+            filename,
+            str(e)
+        )
+        return False
+
+
+def migrate_local_file_to_db(
+    filename,
+    overwrite=False
+):
+    if (
+        filename
+        not in PERSISTENT_JSON_FILES
+    ):
+        return {
+            "filename":
+                filename,
+            "migrated":
+                False,
+            "reason":
+                "not_persistent_file"
+        }
+
+    if not ensure_persistent_db():
+        return {
+            "filename":
+                filename,
+            "migrated":
+                False,
+            "reason":
+                "database_unavailable",
+            "error":
+                PERSISTENT_DB_LAST_ERROR
+        }
+
+    local_data = load_local_json_file(
+        filename
+    )
+
+    if local_data is None:
+        return {
+            "filename":
+                filename,
+            "migrated":
+                False,
+            "reason":
+                "no_local_data"
+        }
+
+    existing = load_persistent_json(
+        filename
+    )
+
+    if (
+        existing is not None
+        and not overwrite
+    ):
+        return {
+            "filename":
+                filename,
+            "migrated":
+                False,
+            "reason":
+                "database_already_has_data"
+        }
+
+    ok = save_persistent_json(
+        filename,
+        local_data
+    )
+
+    return {
+        "filename":
+            filename,
+        "migrated":
+            bool(ok),
+        "reason":
+            (
+                "migrated"
+                if ok
+                else "write_failed"
+            )
+    }
+
+
+def load_json_file(filename):
+    # These four data sets survive Render redeploys
+    # when DATABASE_URL is configured.
+    if (
+        filename
+        in PERSISTENT_JSON_FILES
+    ):
+        db_data = load_persistent_json(
+            filename
+        )
+
+        if db_data is not None:
+            return db_data
+
+        # First deployment migration:
+        # if a local JSON copy still exists and the DB
+        # has no value yet, move it into Postgres.
+        local_data = load_local_json_file(
+            filename
+        )
+
+        if (
+            local_data is not None
+            and persistent_storage_configured()
+        ):
+            if save_persistent_json(
+                filename,
+                local_data
+            ):
+                return local_data
+
+        return local_data
+
+    return load_local_json_file(
+        filename
+    )
+
+
+def save_json_file(
+    filename,
+    data
+):
+    if (
+        filename
+        in PERSISTENT_JSON_FILES
+    ):
+        if persistent_storage_configured():
+            saved = save_persistent_json(
+                filename,
+                data
+            )
+
+            if saved:
+                # Keep a local cache too. The database is
+                # the permanent source of truth.
+                try:
+                    save_local_json_file(
+                        filename,
+                        data
+                    )
+                except Exception:
+                    pass
+
+                return
+
+            print(
+                "WARNING: Permanent DB write failed. "
+                "Using temporary local fallback for",
+                filename
+            )
+
+        # Temporary fallback keeps the app operating
+        # if the DB has not been configured yet.
+        save_local_json_file(
+            filename,
+            data
+        )
+        return
+
+    save_local_json_file(
+        filename,
+        data
+    )
+
+
+def persistent_storage_status():
+    db_ok = ensure_persistent_db()
+
+    datasets = {}
+
+    for filename in sorted(
+        PERSISTENT_JSON_FILES
+    ):
+        local_exists = os.path.exists(
+            local_json_path(
+                filename
+            )
+        )
+
+        db_exists = False
+
+        if db_ok:
+            try:
+                db_exists = (
+                    load_persistent_json(
+                        filename
+                    )
+                    is not None
+                )
+            except Exception:
+                db_exists = False
+
+        datasets[
+            filename
+        ] = {
+            "database":
+                db_exists,
+            "local_cache":
+                local_exists
+        }
+
+    return {
+        "configured":
+            persistent_storage_configured(),
+        "database_ready":
+            db_ok,
+        "driver_available":
+            psycopg is not None,
+        "last_error":
+            PERSISTENT_DB_LAST_ERROR,
+        "table":
+            (
+                "project_madden_persistent_json"
+            ),
+        "datasets":
+            datasets
+    }
+
+
+
+@app.route(
+    "/storage/status"
+)
+def storage_status_route():
+    status = persistent_storage_status()
+
+    return jsonify(
+        status
+    ), (
+        200
+        if status.get(
+            "database_ready"
+        )
+        else 503
+    )
+
+
+@app.route(
+    "/storage/migrate",
+    methods=[
+        "GET",
+        "POST"
+    ]
+)
+def storage_migrate_route():
+    overwrite = str(
+        request.args.get(
+            "overwrite",
+            ""
+        )
+    ).lower() in [
+        "1",
+        "true",
+        "yes"
+    ]
+
+    results = [
+        migrate_local_file_to_db(
+            filename,
+            overwrite=overwrite
+        )
+        for filename
+        in sorted(
+            PERSISTENT_JSON_FILES
+        )
+    ]
+
+    return jsonify({
+        "database_ready":
+            ensure_persistent_db(),
+        "overwrite":
+            overwrite,
+        "results":
+            results
+    })
+
+
+@app.route(
+    "/storage/backup"
+)
+def storage_backup_route():
+    backup = {}
+
+    for filename in sorted(
+        PERSISTENT_JSON_FILES
+    ):
+        backup[
+            filename
+        ] = load_json_file(
+            filename
+        )
+
+    return jsonify({
+        "generated_at":
+            datetime.now(
+                timezone.utc
+            ).isoformat(),
+        "storage":
+            "postgres"
+            if persistent_storage_configured()
+            else "temporary_local_fallback",
+        "data":
+            backup
+    })
 
 
 def stable_choice(options, key):
@@ -14209,6 +14720,7 @@ def weekly_show_healthcheck(
         "panel_takes": False,
         "panel_debate": False,
         "analyst_receipts": False,
+        "permanent_storage": False,
         "fraud_watch": False,
         "dark_horse_watch": False,
         "hot_seat": False,
@@ -14256,6 +14768,13 @@ def weekly_show_healthcheck(
                     []
                 )
             ) == 4
+        )
+
+        checks["permanent_storage"] = (
+            persistent_storage_status().get(
+                "database_ready",
+                False
+            )
         )
         checks["fraud_watch"] = (
             "fraud_watch" in show
