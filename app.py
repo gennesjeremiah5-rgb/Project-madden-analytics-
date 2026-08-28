@@ -69,7 +69,7 @@ GOTW_POLL_CLOSE_SECONDS = 300
 INJURY_HISTORY_FILE = "injury_history.json"
 INJURY_MAJOR_OVR = 85
 
-PROJECT_MADDEN_APP_VERSION = "v22-multiserver-dashboard"
+PROJECT_MADDEN_APP_VERSION = "v23-setup-fix-snalla-required"
 
 
 
@@ -84,6 +84,13 @@ PROJECT_MADDEN_BASE_URL = os.environ.get(
     "PROJECT_MADDEN_BASE_URL",
     "https://project-madden-analytics.onrender.com"
 ).strip().rstrip("/")
+
+# Current production data source.
+# Project Madden can manage/display league data, but until the direct EA
+# connector is completed the official live data pipeline still requires
+# Snallabot exports.
+PROJECT_MADDEN_DATA_SOURCE = "snallabot"
+DIRECT_EA_CONNECTOR_STATUS = "research"
 
 
 def ensure_multi_server_db():
@@ -19292,6 +19299,136 @@ def edit_discord_deferred_response(
         )
 
 
+
+def process_setup_interaction_background(
+    interaction
+):
+    try:
+        guild_id = str(
+            interaction.get(
+                "guild_id",
+                ""
+            )
+        ).strip()
+
+        if not guild_id:
+            content = (
+                "❌ Run /setup inside a Discord server."
+            )
+
+        elif not discord_member_can_manage_guild(
+            interaction
+        ):
+            content = (
+                "🔒 /setup requires Manage Server "
+                "or Administrator."
+            )
+
+        else:
+            config = ensure_guild_config(
+                guild_id
+            )
+
+            if not config:
+                content = (
+                    "❌ Project Madden could not create this "
+                    "server's setup record. DATABASE_URL must be "
+                    "connected and PostgreSQL must be reachable."
+                )
+            else:
+                setup_url = guild_setup_url(
+                    config.get(
+                        "setup_token"
+                    )
+                )
+
+                content = (
+                    "🏈 **PROJECT MADDEN SERVER SETUP**\\n"
+                    "Your private dashboard setup link is ready:\\n"
+                    f"{setup_url}\\n\\n"
+                    "⚠️ **Current data source:** Snallabot is still "
+                    "required for official league data while the "
+                    "Project Madden direct EA connector is being built.\\n\\n"
+                    "Use the setup page to connect this Discord server "
+                    "to its Snallabot/Madden league. Do not post this "
+                    "private setup link publicly."
+                )
+
+    except Exception as e:
+        content = (
+            "❌ Project Madden setup error: "
+            + str(
+                e
+            )[:1200]
+        )
+
+    edit_discord_deferred_response(
+        str(
+            interaction.get(
+                "application_id",
+                discord_application_id()
+            )
+        ),
+        str(
+            interaction.get(
+                "token",
+                ""
+            )
+        ),
+        content
+    )
+
+
+def process_server_interaction_background(
+    interaction
+):
+    try:
+        guild_id = str(
+            interaction.get(
+                "guild_id",
+                ""
+            )
+        ).strip()
+
+        config = get_guild_config(
+            guild_id
+        )
+
+        content = guild_config_summary(
+            config
+        )
+
+        content += (
+            "\\n\\n⚠️ Project Madden currently requires Snallabot "
+            "as the official live Madden data source."
+        )
+
+    except Exception as e:
+        content = (
+            "❌ Could not load this server's Project Madden "
+            "connection: "
+            + str(
+                e
+            )[:1200]
+        )
+
+    edit_discord_deferred_response(
+        str(
+            interaction.get(
+                "application_id",
+                discord_application_id()
+            )
+        ),
+        str(
+            interaction.get(
+                "token",
+                ""
+            )
+        ),
+        content
+    )
+
+
 def process_trade_interaction_background(
     interaction
 ):
@@ -20784,68 +20921,26 @@ def discord_interactions():
             )
 
         if command_name == "setup":
-            guild_id = str(
-                interaction.get(
-                    "guild_id",
-                    ""
-                )
-            ).strip()
+            threading.Thread(
+                target=process_setup_interaction_background,
+                args=(
+                    interaction,
+                ),
+                daemon=True
+            ).start()
 
-            if not guild_id:
-                return discord_ephemeral(
-                    "❌ Run /setup inside a Discord server."
-                )
-
-            if not discord_member_can_manage_guild(
-                interaction
-            ):
-                return discord_ephemeral(
-                    "🔒 /setup requires Manage Server or Administrator."
-                )
-
-            config = ensure_guild_config(
-                guild_id
-            )
-
-            if not config:
-                return discord_ephemeral(
-                    "❌ Project Madden could not create this server's setup record. "
-                    "Check DATABASE_URL."
-                )
-
-            setup_url = guild_setup_url(
-                config.get(
-                    "setup_token"
-                )
-            )
-
-            return discord_ephemeral(
-                (
-                    "🏈 **PROJECT MADDEN SERVER SETUP**\n"
-                    "Your private dashboard setup link is ready:\n"
-                    f"{setup_url}\n\n"
-                    "Use it to connect this Discord server to its Madden/Snallabot league. "
-                    "Do not post this private setup link publicly."
-                )
-            )
+            return discord_deferred_ephemeral()
 
         if command_name == "server":
-            guild_id = str(
-                interaction.get(
-                    "guild_id",
-                    ""
-                )
-            ).strip()
+            threading.Thread(
+                target=process_server_interaction_background,
+                args=(
+                    interaction,
+                ),
+                daemon=True
+            ).start()
 
-            config = get_guild_config(
-                guild_id
-            )
-
-            return discord_ephemeral(
-                guild_config_summary(
-                    config
-                )
-            )
+            return discord_deferred_ephemeral()
 
         if command_name == "injuries":
             return discord_ephemeral(
@@ -22547,13 +22642,36 @@ background:#163323;color:#74e9a8;margin-top:10px}
   <section class="hero">
     <h1>Your Madden league.<br>One control center.</h1>
     <p>Connect Discord servers and Madden leagues to Project Madden Analytics.
-    Keep the current Snallabot pipeline while Project Madden becomes the dashboard
-    for league setup, media, injuries, Hall of Fame, GOTW, trades, and analytics.</p>
+    <b>Snallabot is currently required as the official Madden data source</b> while
+    Project Madden runs the dashboard, league setup, media, injuries, Hall of Fame,
+    GOTW, trades, and analytics. We are researching a direct EA connection so
+    Project Madden can eventually become its own source.</p>
     <div class="actions">
       <a class="btn" href="{{ install_url }}">Add to Discord</a>
       <a class="btn secondary" href="/discord/status">Discord Status</a>
     </div>
   </section>
+
+  <div class="grid" style="margin-bottom:22px">
+    <div class="card">
+      <div class="muted">CURRENT OFFICIAL DATA SOURCE</div>
+      <div class="kpi" style="font-size:25px">Snallabot</div>
+      <div class="status">REQUIRED FOR NOW</div>
+      <p class="muted">Project Madden receives the league exports and powers the dashboard around them.</p>
+    </div>
+    <div class="card">
+      <div class="muted">PROJECT MADDEN DIRECT EA CONNECTOR</div>
+      <div class="kpi" style="font-size:25px">Research</div>
+      <div class="status off">NOT ACTIVE YET</div>
+      <p class="muted">Goal: connect Madden/EA directly and remove the Snallabot requirement.</p>
+    </div>
+    <div class="card">
+      <div class="muted">SERVER SETUP</div>
+      <div class="kpi" style="font-size:25px">/setup</div>
+      <p class="muted">Server admins receive a private dashboard connection link from Discord.</p>
+    </div>
+  </div>
+
   <div class="grid">
     <div class="card">
       <div class="muted">CONNECTED SERVERS</div>
@@ -22626,6 +22744,7 @@ button{margin-top:22px;width:100%;padding:14px;background:var(--accent);border:0
   <div class="panel">
     <h1>Connect Your Madden League</h1>
     <p>Server: <b>{{ guild.guild_name or guild.guild_id }}</b>. This setup page was generated privately from Discord.</p>
+    <div class="info"><b>Important:</b> Snallabot is currently required for Project Madden to receive official Madden league data. The direct EA connector is being researched and is not active yet.</div>
     {% if saved %}<div class="ok">✅ League settings saved.</div>{% endif %}
     <form method="post">
       <label>League Name</label>
@@ -22876,12 +22995,57 @@ def project_madden_servers_api():
     return jsonify({
         "app_version":
             PROJECT_MADDEN_APP_VERSION,
+        "current_official_data_source":
+            PROJECT_MADDEN_DATA_SOURCE,
+        "snallabot_required":
+            True,
+        "direct_ea_connector_status":
+            DIRECT_EA_CONNECTOR_STATUS,
         "server_count":
             len(
                 safe_guilds
             ),
         "servers":
             safe_guilds
+    })
+
+
+
+@app.route(
+    "/dashboard/setup-health"
+)
+def project_madden_setup_health():
+    return jsonify({
+        "app_version":
+            PROJECT_MADDEN_APP_VERSION,
+        "database_url_configured":
+            bool(
+                DATABASE_URL
+            ),
+        "psycopg_available":
+            psycopg is not None,
+        "multi_server_database_ready":
+            ensure_multi_server_db(),
+        "discord_application_id_configured":
+            bool(
+                discord_application_id()
+            ),
+        "discord_bot_token_configured":
+            bool(
+                discord_bot_token()
+            ),
+        "discord_public_key_configured":
+            bool(
+                discord_public_key()
+            ),
+        "current_official_data_source":
+            PROJECT_MADDEN_DATA_SOURCE,
+        "snallabot_required":
+            True,
+        "direct_ea_connector_status":
+            DIRECT_EA_CONNECTOR_STATUS,
+        "setup_command":
+            "deferred-background-v23"
     })
 
 
