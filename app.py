@@ -72,7 +72,7 @@ GOTW_POLL_CLOSE_SECONDS = 300
 INJURY_HISTORY_FILE = "injury_history.json"
 INJURY_MAJOR_OVR = 85
 
-PROJECT_MADDEN_APP_VERSION = "v32-ea-companion-direct"
+PROJECT_MADDEN_APP_VERSION = "v33-ea-login-style"
 
 
 
@@ -2356,6 +2356,95 @@ def ea_companion_save_export(
             classification,
         "status":
             status
+    }
+
+
+
+# =========================================================
+# EA LOGIN HANDOFF UI
+# =========================================================
+
+EA_PUBLIC_LOGIN_URL = os.environ.get(
+    "PROJECT_MADDEN_EA_LOGIN_URL",
+    "https://www.ea.com/login"
+).strip()
+
+
+def parse_ea_localhost_redirect(
+    value
+):
+    raw = str(
+        value
+        or ""
+    ).strip()
+
+    if not raw:
+        return {
+            "valid":
+                False,
+            "error":
+                "Paste the full localhost redirect URL."
+        }
+
+    try:
+        parsed = urlparse(
+            raw
+        )
+    except Exception:
+        return {
+            "valid":
+                False,
+            "error":
+                "That URL could not be parsed."
+        }
+
+    host = str(
+        parsed.hostname
+        or ""
+    ).lower()
+
+    if host not in [
+        "127.0.0.1",
+        "localhost"
+    ]:
+        return {
+            "valid":
+                False,
+            "error":
+                "The redirect must point to 127.0.0.1 or localhost."
+        }
+
+    query = parse_qs(
+        parsed.query
+    )
+
+    code_value = (
+        query.get(
+            "code",
+            [
+                None
+            ]
+        )[
+            0
+        ]
+    )
+
+    return {
+        "valid":
+            True,
+        "host":
+            host,
+        "has_code":
+            bool(
+                code_value
+            ),
+        "code_present":
+            bool(
+                code_value
+            ),
+        "path":
+            parsed.path
+            or "/"
     }
 
 
@@ -25068,11 +25157,11 @@ button.secondary{margin-top:10px;background:#141d2a;color:#e9f2ff;border:1px sol
       <div class="auto-head">
         <div>
           <div class="auto-title">🎮 EA Companion Direct <span style="color:#55b8ff">BETA</span></div>
-          <div class="note">Export straight from the official Madden Companion App into Project Madden. No EA password or private client secret needed.</div>
+          <div class="note">Use a guided EA login handoff like Snallabot, then connect your Madden Companion export directly to Project Madden.</div>
         </div>
         <span class="badge">AVAILABLE</span>
       </div>
-      <a href="/dashboard/ea-companion/{{ guild.setup_token }}" style="display:block;text-align:center;margin-top:14px;padding:14px;border-radius:12px;background:linear-gradient(135deg,#58baff,#7c62ff);color:#05111c;font-weight:950;text-decoration:none">SET UP DIRECT EA EXPORT</a>
+      <a href="/dashboard/ea-companion/{{ guild.setup_token }}" style="display:block;text-align:center;margin-top:14px;padding:14px;border-radius:12px;background:linear-gradient(135deg,#58baff,#7c62ff);color:#05111c;font-weight:950;text-decoration:none">CONNECT EA ACCOUNT</a>
     </div>
 
     <div class="auto">
@@ -25978,6 +26067,12 @@ def project_madden_setup_link_preview(
 )
 def project_madden_setup_health():
     return jsonify({
+        "ea_login_handoff_ui":
+            True,
+        "ea_login_handoff_stores_passwords":
+            False,
+        "ea_login_handoff_exchanges_tokens":
+            False,
         "official_madden_data_source":
             "ea_companion_direct_or_snallabot",
         "snallabot_required":
@@ -26064,56 +26159,282 @@ EA_COMPANION_CONNECT_HTML = """
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>EA Companion Direct • Project Madden</title>
+<title>Connect EA • Project Madden</title>
 <style>
-:root{--bg:#070b12;--panel:#101722;--line:#243044;--text:#f4f7fb;--muted:#9facbf;--accent:#55b8ff;--good:#57d38c;--warn:#f4c95d}
-*{box-sizing:border-box}body{margin:0;background:#070b12;color:var(--text);font-family:Inter,system-ui,-apple-system,sans-serif}
-.wrap{max-width:820px;margin:auto;padding:26px 18px 60px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:24px}
-h1{margin-top:0;font-size:36px}.muted{color:var(--muted);line-height:1.6}.box{background:#0b111a;border:1px solid var(--line);border-radius:14px;padding:16px;margin:14px 0}
-.url{word-break:break-all;background:#071018;border:1px solid var(--line);padding:14px;border-radius:10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-.ok{background:#10291d;border:1px solid #245b3e;color:#85eeb2;padding:12px;border-radius:10px}.wait{background:#302912;border:1px solid #5a4b1c;color:#f1d071;padding:12px;border-radius:10px}
-.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.item{background:#081019;border:1px solid var(--line);border-radius:10px;padding:12px}.label{font-size:11px;color:#8fa0b6;text-transform:uppercase;font-weight:900}.value{margin-top:4px;font-weight:800}
-.footer{text-align:center;color:var(--muted);padding-top:24px;font-size:13px}
-@media(max-width:640px){.grid{grid-template-columns:1fr}}
+:root{
+  --bg:#f5f7fb;
+  --panel:#ffffff;
+  --line:#d9dee7;
+  --text:#14191f;
+  --muted:#5f6875;
+  --blue:#1578ff;
+  --teal:#ddf7f5;
+  --teal-line:#88d9d4;
+  --green:#6eb797;
+  --shadow:0 8px 28px rgba(24,39,75,.12)
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:var(--bg);
+  color:var(--text);
+  font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif
+}
+.wrap{max-width:760px;margin:0 auto;padding:24px 16px 56px}
+.brand{
+  text-align:center;
+  font-size:20px;
+  font-weight:950;
+  margin:2px 0 18px
+}
+.card{
+  background:var(--panel);
+  border:1px solid var(--line);
+  border-radius:14px;
+  box-shadow:var(--shadow);
+  overflow:hidden
+}
+.head{padding:24px 28px 14px}
+h1{margin:0 0 8px;font-size:34px;line-height:1.1}
+p{color:var(--muted);line-height:1.55}
+.notice{
+  margin:0 28px 20px;
+  padding:16px 18px;
+  border:1px solid var(--teal-line);
+  background:var(--teal);
+  border-radius:10px;
+  font-size:16px;
+  line-height:1.55
+}
+.steps{padding:0 28px 6px}
+.steps h2{font-size:20px;margin:4px 0 10px}
+.steps ol{margin:0;padding-left:28px}
+.steps li{margin:10px 0;line-height:1.48;font-size:17px}
+.local{color:#d93f8f;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.divider{height:1px;background:var(--line);margin:18px 28px}
+.action{padding:0 28px 26px}
+.btn{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-height:52px;
+  padding:0 24px;
+  border:0;
+  border-radius:10px;
+  font-size:18px;
+  font-weight:900;
+  cursor:pointer;
+  text-decoration:none
+}
+.btn-blue{background:var(--blue);color:#fff}
+label{display:block;margin:24px 0 10px;font-size:17px;font-weight:850}
+.row{display:flex}
+input{
+  flex:1;
+  min-width:0;
+  height:54px;
+  border:1px solid var(--line);
+  border-radius:10px 0 0 10px;
+  padding:0 16px;
+  font-size:17px;
+  outline:none
+}
+input:focus{border-color:#9db7db}
+.paste{
+  width:120px;
+  border:0;
+  background:#7d8794;
+  color:#fff;
+  border-radius:0 10px 10px 0;
+  font-size:17px;
+  font-weight:850
+}
+.tip{font-size:14px;margin-top:8px}
+.status{
+  margin-top:12px;
+  padding:11px 13px;
+  border-radius:9px;
+  font-size:14px;
+  display:none
+}
+.status.good{display:block;background:#e4f5ec;color:#216443;border:1px solid #a7d7bd}
+.status.bad{display:block;background:#fff0f0;color:#8e3030;border:1px solid #efbaba}
+.continue-wrap{display:flex;justify-content:flex-end;margin-top:22px}
+.continue{
+  min-width:280px;
+  background:var(--green);
+  color:white
+}
+.continue[disabled]{opacity:.5;cursor:not-allowed}
+.legal{
+  margin:18px 28px 26px;
+  padding-top:18px;
+  border-top:1px solid var(--line);
+  text-align:center;
+  color:#515861;
+  font-style:italic;
+  font-size:14px
+}
+.export-box{
+  display:none;
+  margin-top:18px;
+  padding:16px;
+  border-radius:10px;
+  background:#f3f7ff;
+  border:1px solid #bfd2f3
+}
+.export-url{
+  word-break:break-all;
+  background:white;
+  border:1px solid var(--line);
+  padding:12px;
+  border-radius:8px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:13px
+}
+.footer{text-align:center;color:#77808c;padding-top:22px;font-size:13px}
+@media(max-width:620px){
+  .head,.steps,.action{padding-left:20px;padding-right:20px}
+  .notice{margin-left:20px;margin-right:20px}
+  h1{font-size:30px}
+  .steps li{font-size:16px}
+  .continue{width:100%;min-width:0}
+}
 </style>
 </head>
 <body>
 <div class="wrap">
-<div class="panel">
-<h1>EA Companion Direct <span style="color:#55b8ff">BETA</span></h1>
-<p class="muted">This is the safe direct connector: Madden Companion exports straight to Project Madden. No EA password, access token, or private client secret is required.</p>
+  <div class="brand">PROJECT MADDEN</div>
 
-<div class="box">
-<h3>Your Project Madden Export URL</h3>
-<div class="url">{{ export_url }}</div>
-<p class="muted">Open the official Madden Companion App, choose your Franchise, open its export screen, and use this Project Madden URL as the export destination.</p>
+  <div class="card">
+    <div class="head">
+      <h1>Connect Your EA Account</h1>
+      <p>Use EA's sign-in page, then bring the localhost redirect back to Project Madden.</p>
+    </div>
+
+    <div class="notice">
+      <b>Project Madden does not store your EA password or console credentials.</b>
+      The login handoff only checks that the browser returned to a local EA redirect.
+      Your league data still reaches Project Madden through the Companion export connection.
+    </div>
+
+    <div class="steps">
+      <h2>Follow these steps:</h2>
+      <ol>
+        <li>Tap <b>Login to EA</b>. EA opens in a new browser tab.</li>
+        <li>After signing in, EA may send the browser to a blank/error page at <span class="local">http://127.0.0.1</span> or localhost.</li>
+        <li>Copy the <b>entire URL</b> from the browser address bar and paste it below.</li>
+      </ol>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="action">
+      <a class="btn btn-blue" href="{{ ea_login_url }}" target="_blank" rel="noopener">Login to EA</a>
+
+      <label>Paste the URL shown in your browser</label>
+      <div class="row">
+        <input id="eaRedirect" placeholder="e.g. http://127.0.0.1:PORT/..." autocomplete="off" autocapitalize="off" spellcheck="false">
+        <button class="paste" type="button" onclick="pasteRedirect()">Paste</button>
+      </div>
+
+      <div class="tip">
+        Copy the full URL from the browser address bar. The continue button becomes available when Project Madden recognizes a local EA redirect.
+      </div>
+
+      <div id="urlStatus" class="status"></div>
+
+      <div class="continue-wrap">
+        <button id="continueBtn" class="btn continue" type="button" disabled onclick="continueSetup()">Continue to Next Step</button>
+      </div>
+
+      <div id="exportBox" class="export-box">
+        <b>Next: connect Madden Companion export</b>
+        <p style="margin:8px 0 10px;color:#5f6875">
+          Project Madden does not exchange the EA authorization code itself. Use this unique receiver URL in the Madden Companion export screen:
+        </p>
+        <div class="export-url">{{ export_url }}</div>
+        {% if status.last_export_at %}
+          <p style="color:#216443;font-weight:800">✅ Companion export received {{ status.last_export_at }}</p>
+        {% else %}
+          <p style="color:#6d7480">Waiting for your first Madden Companion export.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="legal">
+      Project Madden uses EA's normal sign-in page and does not request or store your EA password.
+    </div>
+  </div>
+
+  <div class="footer">Built for Project Madden • Thanks to Developer Jay</div>
 </div>
 
-{% if status.last_export_at %}
-<div class="ok">✅ Project Madden received an EA Companion export at {{ status.last_export_at }}.</div>
-{% else %}
-<div class="wait">Waiting for your first Companion App export…</div>
-{% endif %}
+<script>
+const validateUrl = "/dashboard/ea-companion/validate/{{ guild.setup_token }}";
+const input = document.getElementById("eaRedirect");
+const button = document.getElementById("continueBtn");
+const statusEl = document.getElementById("urlStatus");
+const exportBox = document.getElementById("exportBox");
 
-<div class="box">
-<h3>Connection Status</h3>
-<div class="grid">
-  <div class="item"><div class="label">Teams</div><div class="value">{{ "✅ Received" if status.exports.get("leagueteams") else "○ Waiting" }}</div></div>
-  <div class="item"><div class="label">Standings</div><div class="value">{{ "✅ Received" if status.exports.get("standings") else "○ Waiting" }}</div></div>
-  <div class="item"><div class="label">League Info</div><div class="value">{{ "✅ Received" if status.exports.get("extra") else "○ Waiting" }}</div></div>
-  <div class="item"><div class="label">Rosters</div><div class="value">{{ "✅ Received" if status.exports.get("roster") else "○ Waiting" }}</div></div>
-  <div class="item"><div class="label">Free Agents</div><div class="value">{{ "✅ Received" if status.exports.get("freeagents") else "○ Waiting" }}</div></div>
-  <div class="item"><div class="label">Weekly Data</div><div class="value">{{ "✅ Received" if status.exports.get("weekly") else "○ Waiting" }}</div></div>
-</div>
-</div>
+async function checkValue(){
+  const value=input.value.trim();
 
-<p class="muted"><a href="/dashboard/setup/{{ guild.setup_token }}" style="color:#55b8ff">← Back to server setup</a></p>
-</div>
-<div class="footer">Built for Project Madden • Thanks to Developer Jay</div>
-</div>
+  if(!value){
+    button.disabled=true;
+    statusEl.className="status";
+    statusEl.textContent="";
+    return;
+  }
+
+  try{
+    const res=await fetch(validateUrl,{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({url:value})
+    });
+    const data=await res.json();
+
+    if(data.valid){
+      button.disabled=false;
+      statusEl.className="status good";
+      statusEl.textContent=data.code_present
+        ? "Local EA redirect detected. Authorization code is present."
+        : "Local EA redirect detected.";
+    }else{
+      button.disabled=true;
+      statusEl.className="status bad";
+      statusEl.textContent=data.error || "That does not look like a valid local EA redirect.";
+    }
+  }catch(err){
+    button.disabled=true;
+    statusEl.className="status bad";
+    statusEl.textContent="Could not validate the URL.";
+  }
+}
+
+async function pasteRedirect(){
+  try{
+    const text=await navigator.clipboard.readText();
+    input.value=text;
+    checkValue();
+  }catch(err){
+    input.focus();
+  }
+}
+
+function continueSetup(){
+  if(button.disabled) return;
+  exportBox.style.display="block";
+  exportBox.scrollIntoView({behavior:"smooth",block:"center"});
+}
+
+input.addEventListener("input",checkValue);
+</script>
 </body>
 </html>
 """
+
 
 
 @app.route(
@@ -26141,10 +26462,49 @@ def project_madden_ea_companion_page(
     return render_template_string(
         EA_COMPANION_CONNECT_HTML,
         guild=guild,
+        ea_login_url=EA_PUBLIC_LOGIN_URL,
         export_url=ea_companion_export_url(
             setup_token
         ),
         status=status
+    )
+
+
+
+@app.route(
+    "/dashboard/ea-companion/validate/<setup_token>",
+    methods=[
+        "POST"
+    ]
+)
+def project_madden_ea_companion_validate(
+    setup_token
+):
+    guild = get_guild_config_by_token(
+        setup_token
+    )
+
+    if not guild:
+        return jsonify({
+            "valid":
+                False,
+            "error":
+                "Invalid or expired setup link."
+        }), 404
+
+    payload = request.get_json(
+        silent=True
+    ) or {}
+
+    result = parse_ea_localhost_redirect(
+        payload.get(
+            "url"
+        )
+    )
+
+    # Do not store the raw redirect URL or authorization code.
+    return jsonify(
+        result
     )
 
 
