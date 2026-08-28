@@ -72,7 +72,7 @@ GOTW_POLL_CLOSE_SECONDS = 300
 INJURY_HISTORY_FILE = "injury_history.json"
 INJURY_MAJOR_OVR = 85
 
-PROJECT_MADDEN_APP_VERSION = "v33-ea-login-style"
+PROJECT_MADDEN_APP_VERSION = "v34-ea-oauth-ready"
 
 
 
@@ -2364,10 +2364,74 @@ def ea_companion_save_export(
 # EA LOGIN HANDOFF UI
 # =========================================================
 
-EA_PUBLIC_LOGIN_URL = os.environ.get(
-    "PROJECT_MADDEN_EA_LOGIN_URL",
-    "https://www.ea.com/login"
+EA_OAUTH_CLIENT_ID = os.environ.get(
+    "EA_OAUTH_CLIENT_ID",
+    ""
 ).strip()
+
+EA_OAUTH_CLIENT_SECRET = os.environ.get(
+    "EA_OAUTH_CLIENT_SECRET",
+    ""
+).strip()
+
+EA_OAUTH_AUTHORIZE_URL = os.environ.get(
+    "EA_OAUTH_AUTHORIZE_URL",
+    "https://accounts.ea.com/connect/auth"
+).strip()
+
+EA_OAUTH_TOKEN_URL = os.environ.get(
+    "EA_OAUTH_TOKEN_URL",
+    "https://accounts.ea.com/connect/token"
+).strip()
+
+EA_OAUTH_REDIRECT_URI = os.environ.get(
+    "EA_OAUTH_REDIRECT_URI",
+    "http://127.0.0.1/success"
+).strip()
+
+EA_OAUTH_SCOPE = os.environ.get(
+    "EA_OAUTH_SCOPE",
+    ""
+).strip()
+
+
+def ea_oauth_configured():
+    return bool(
+        EA_OAUTH_CLIENT_ID
+        and EA_OAUTH_CLIENT_SECRET
+        and EA_OAUTH_AUTHORIZE_URL
+        and EA_OAUTH_TOKEN_URL
+        and EA_OAUTH_REDIRECT_URI
+    )
+
+
+def ea_oauth_authorize_url():
+    if not ea_oauth_configured():
+        return None
+
+    params = {
+        "response_type":
+            "code",
+        "client_id":
+            EA_OAUTH_CLIENT_ID,
+        "redirect_uri":
+            EA_OAUTH_REDIRECT_URI
+    }
+
+    if EA_OAUTH_SCOPE:
+        params[
+            "scope"
+        ] = EA_OAUTH_SCOPE
+
+    return (
+        EA_OAUTH_AUTHORIZE_URL
+        + "?"
+        + urlencode(
+            params
+        )
+    )
+
+
 
 
 def parse_ea_localhost_redirect(
@@ -26067,6 +26131,12 @@ def project_madden_setup_link_preview(
 )
 def project_madden_setup_health():
     return jsonify({
+        "ea_oauth_client_configured":
+            ea_oauth_configured(),
+        "ea_oauth_redirect_uri":
+            EA_OAUTH_REDIRECT_URI,
+        "ea_oauth_token_storage":
+            "disabled_until_supported_madden_api",
         "ea_login_handoff_ui":
             True,
         "ea_login_handoff_stores_passwords":
@@ -26309,7 +26379,7 @@ input:focus{border-color:#9db7db}
   <div class="card">
     <div class="head">
       <h1>Connect Your EA Account</h1>
-      <p>Use EA's sign-in page, then bring the localhost redirect back to Project Madden.</p>
+      <p>Project Madden is ready for EA's OAuth authorization flow once EA issues Project Madden its own client credentials.</p>
     </div>
 
     <div class="notice">
@@ -26330,7 +26400,14 @@ input:focus{border-color:#9db7db}
     <div class="divider"></div>
 
     <div class="action">
+      {% if ea_oauth_configured %}
       <a class="btn btn-blue" href="{{ ea_login_url }}" target="_blank" rel="noopener">Login to EA</a>
+      {% else %}
+      <button class="btn btn-blue" type="button" disabled style="opacity:.55">Login to EA</button>
+      <div class="status bad" style="display:block;margin-top:12px">
+        EA OAuth is not activated for Project Madden yet. A Project Madden-owned EA OAuth client must be issued/configured before this button can create the real 127.0.0.1 authorization redirect.
+      </div>
+      {% endif %}
 
       <label>Paste the URL shown in your browser</label>
       <div class="row">
@@ -26423,8 +26500,34 @@ async function pasteRedirect(){
   }
 }
 
-function continueSetup(){
+async function continueSetup(){
   if(button.disabled) return;
+
+  {% if ea_oauth_configured %}
+  try{
+    const res=await fetch("/dashboard/ea-oauth/exchange/{{ guild.setup_token }}",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({url:input.value.trim()})
+    });
+
+    const data=await res.json();
+
+    if(!res.ok){
+      statusEl.className="status bad";
+      statusEl.textContent=data.error || "EA authorization could not be completed.";
+      return;
+    }
+
+    statusEl.className="status good";
+    statusEl.textContent=data.message || "EA authorization completed.";
+  }catch(err){
+    statusEl.className="status bad";
+    statusEl.textContent="EA authorization could not be completed.";
+    return;
+  }
+  {% endif %}
+
   exportBox.style.display="block";
   exportBox.scrollIntoView({behavior:"smooth",block:"center"});
 }
@@ -26462,13 +26565,174 @@ def project_madden_ea_companion_page(
     return render_template_string(
         EA_COMPANION_CONNECT_HTML,
         guild=guild,
-        ea_login_url=EA_PUBLIC_LOGIN_URL,
+        ea_login_url=(
+            ea_oauth_authorize_url()
+            or "https://www.ea.com/login"
+        ),
+        ea_oauth_configured=ea_oauth_configured(),
         export_url=ea_companion_export_url(
             setup_token
         ),
         status=status
     )
 
+
+
+
+@app.route(
+    "/dashboard/ea-oauth/exchange/<setup_token>",
+    methods=[
+        "POST"
+    ]
+)
+def project_madden_ea_oauth_exchange(
+    setup_token
+):
+    guild = get_guild_config_by_token(
+        setup_token
+    )
+
+    if not guild:
+        return jsonify({
+            "success":
+                False,
+            "error":
+                "Invalid or expired setup link."
+        }), 404
+
+    if not ea_oauth_configured():
+        return jsonify({
+            "success":
+                False,
+            "configured":
+                False,
+            "error":
+                (
+                    "A legitimate EA OAuth client has not been configured "
+                    "for Project Madden yet."
+                )
+        }), 503
+
+    payload = request.get_json(
+        silent=True
+    ) or {}
+
+    parsed = parse_ea_localhost_redirect(
+        payload.get(
+            "url"
+        )
+    )
+
+    if not parsed.get(
+        "valid"
+    ):
+        return jsonify(
+            parsed
+        ), 400
+
+    raw = str(
+        payload.get(
+            "url"
+        )
+        or ""
+    ).strip()
+
+    try:
+        parsed_url = urlparse(
+            raw
+        )
+
+        auth_code = (
+            parse_qs(
+                parsed_url.query
+            )
+            .get(
+                "code",
+                [
+                    None
+                ]
+            )[
+                0
+            ]
+        )
+
+    except Exception:
+        auth_code = None
+
+    if not auth_code:
+        return jsonify({
+            "success":
+                False,
+            "error":
+                "No OAuth authorization code was present in the localhost URL."
+        }), 400
+
+    try:
+        response = requests.post(
+            EA_OAUTH_TOKEN_URL,
+            data={
+                "grant_type":
+                    "authorization_code",
+                "code":
+                    auth_code,
+                "client_id":
+                    EA_OAUTH_CLIENT_ID,
+                "client_secret":
+                    EA_OAUTH_CLIENT_SECRET,
+                "redirect_uri":
+                    EA_OAUTH_REDIRECT_URI
+            },
+            headers={
+                "Accept":
+                    "application/json",
+                "User-Agent":
+                    "ProjectMaddenAnalytics/1.0"
+            },
+            timeout=20
+        )
+
+        if not response.ok:
+            return jsonify({
+                "success":
+                    False,
+                "error":
+                    "EA rejected the authorization code exchange.",
+                "status_code":
+                    response.status_code
+            }), 400
+
+        token_payload = response.json()
+
+        # Do not persist raw OAuth tokens until Project Madden has a supported
+        # Madden API/data contract to use them with.
+        return jsonify({
+            "success":
+                True,
+            "configured":
+                True,
+            "token_received":
+                bool(
+                    token_payload.get(
+                        "access_token"
+                    )
+                ),
+            "message":
+                (
+                    "EA authorization completed. Project Madden intentionally "
+                    "does not store the token yet because EA does not currently "
+                    "publish a supported Madden Franchise API for this connector."
+                )
+        })
+
+    except Exception as e:
+        return jsonify({
+            "success":
+                False,
+            "error":
+                str(
+                    e
+                )
+        }), 500
 
 
 @app.route(
