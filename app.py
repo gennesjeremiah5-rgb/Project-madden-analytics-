@@ -15,6 +15,7 @@ import time
 from nacl.signing import VerifyKey
 from nacl.exceptions import BadSignatureError
 from datetime import datetime, timezone
+from urllib.parse import urlencode
 
 try:
     import psycopg
@@ -68,7 +69,690 @@ GOTW_POLL_CLOSE_SECONDS = 300
 INJURY_HISTORY_FILE = "injury_history.json"
 INJURY_MAJOR_OVR = 85
 
-PROJECT_MADDEN_APP_VERSION = "v21-injury-system"
+PROJECT_MADDEN_APP_VERSION = "v22-multiserver-dashboard"
+
+
+
+# =========================================================
+# MULTI-SERVER / MULTI-LEAGUE FOUNDATION
+# =========================================================
+
+MULTI_SERVER_DB_READY = False
+MULTI_SERVER_DB_LOCK = threading.Lock()
+
+PROJECT_MADDEN_BASE_URL = os.environ.get(
+    "PROJECT_MADDEN_BASE_URL",
+    "https://project-madden-analytics.onrender.com"
+).strip().rstrip("/")
+
+
+def ensure_multi_server_db():
+    global MULTI_SERVER_DB_READY
+
+    if MULTI_SERVER_DB_READY:
+        return True
+
+    if (
+        not DATABASE_URL
+        or psycopg is None
+    ):
+        return False
+
+    with MULTI_SERVER_DB_LOCK:
+        if MULTI_SERVER_DB_READY:
+            return True
+
+        try:
+            with psycopg.connect(
+                DATABASE_URL,
+                connect_timeout=8
+            ) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS
+                        project_madden_guilds (
+                            guild_id TEXT PRIMARY KEY,
+                            guild_name TEXT,
+                            setup_token TEXT UNIQUE,
+                            league_name TEXT,
+                            snallabot_league_id TEXT,
+                            platform TEXT,
+                            settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+                            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                        )
+                        """
+                    )
+
+                    cur.execute(
+                        """
+                        CREATE INDEX IF NOT EXISTS
+                        project_madden_guilds_snallabot_idx
+                        ON project_madden_guilds (
+                            snallabot_league_id
+                        )
+                        """
+                    )
+
+            MULTI_SERVER_DB_READY = True
+            return True
+
+        except Exception as e:
+            print(
+                "MULTI SERVER DB ERROR:",
+                repr(
+                    e
+                )
+            )
+            return False
+
+
+def fetch_discord_guild_name(
+    guild_id
+):
+    token = discord_bot_token()
+
+    if (
+        not token
+        or not guild_id
+    ):
+        return None
+
+    try:
+        response = requests.get(
+            (
+                "https://discord.com/api/v10/"
+                f"guilds/{guild_id}"
+            ),
+            headers={
+                "Authorization":
+                    f"Bot {token}"
+            },
+            timeout=8
+        )
+
+        if response.status_code != 200:
+            return None
+
+        payload = response.json()
+
+        return (
+            payload.get(
+                "name"
+            )
+            or None
+        )
+
+    except Exception:
+        return None
+
+
+def ensure_guild_config(
+    guild_id,
+    guild_name=None
+):
+    guild_id = str(
+        guild_id
+        or ""
+    ).strip()
+
+    if not guild_id:
+        return None
+
+    if not ensure_multi_server_db():
+        return None
+
+    if not guild_name:
+        guild_name = fetch_discord_guild_name(
+            guild_id
+        )
+
+    setup_token = uuid.uuid4().hex
+
+    try:
+        with psycopg.connect(
+            DATABASE_URL,
+            connect_timeout=8
+        ) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO project_madden_guilds (
+                        guild_id,
+                        guild_name,
+                        setup_token,
+                        settings,
+                        updated_at
+                    )
+                    VALUES (
+                        %s,
+                        %s,
+                        %s,
+                        '{}'::jsonb,
+                        NOW()
+                    )
+                    ON CONFLICT (guild_id)
+                    DO UPDATE SET
+                        guild_name = COALESCE(
+                            EXCLUDED.guild_name,
+                            project_madden_guilds.guild_name
+                        ),
+                        updated_at = NOW()
+                    RETURNING
+                        guild_id,
+                        guild_name,
+                        setup_token,
+                        league_name,
+                        snallabot_league_id,
+                        platform,
+                        settings,
+                        created_at,
+                        updated_at
+                    """,
+                    (
+                        guild_id,
+                        guild_name,
+                        setup_token
+                    )
+                )
+
+                row = cur.fetchone()
+
+        if not row:
+            return None
+
+        return {
+            "guild_id":
+                row[0],
+            "guild_name":
+                row[1],
+            "setup_token":
+                row[2],
+            "league_name":
+                row[3],
+            "snallabot_league_id":
+                row[4],
+            "platform":
+                row[5],
+            "settings":
+                row[6]
+                if isinstance(
+                    row[6],
+                    dict
+                )
+                else {},
+            "created_at":
+                row[7],
+            "updated_at":
+                row[8]
+        }
+
+    except Exception as e:
+        print(
+            "ENSURE GUILD CONFIG ERROR:",
+            repr(
+                e
+            )
+        )
+        return None
+
+
+def get_guild_config(
+    guild_id
+):
+    guild_id = str(
+        guild_id
+        or ""
+    ).strip()
+
+    if (
+        not guild_id
+        or not ensure_multi_server_db()
+    ):
+        return None
+
+    try:
+        with psycopg.connect(
+            DATABASE_URL,
+            connect_timeout=8
+        ) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        guild_id,
+                        guild_name,
+                        setup_token,
+                        league_name,
+                        snallabot_league_id,
+                        platform,
+                        settings,
+                        created_at,
+                        updated_at
+                    FROM project_madden_guilds
+                    WHERE guild_id = %s
+                    """,
+                    (
+                        guild_id,
+                    )
+                )
+
+                row = cur.fetchone()
+
+        if not row:
+            return None
+
+        return {
+            "guild_id":
+                row[0],
+            "guild_name":
+                row[1],
+            "setup_token":
+                row[2],
+            "league_name":
+                row[3],
+            "snallabot_league_id":
+                row[4],
+            "platform":
+                row[5],
+            "settings":
+                row[6]
+                if isinstance(
+                    row[6],
+                    dict
+                )
+                else {},
+            "created_at":
+                row[7],
+            "updated_at":
+                row[8]
+        }
+
+    except Exception:
+        return None
+
+
+def get_guild_config_by_token(
+    setup_token
+):
+    token = str(
+        setup_token
+        or ""
+    ).strip()
+
+    if (
+        not token
+        or not ensure_multi_server_db()
+    ):
+        return None
+
+    try:
+        with psycopg.connect(
+            DATABASE_URL,
+            connect_timeout=8
+        ) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        guild_id,
+                        guild_name,
+                        setup_token,
+                        league_name,
+                        snallabot_league_id,
+                        platform,
+                        settings,
+                        created_at,
+                        updated_at
+                    FROM project_madden_guilds
+                    WHERE setup_token = %s
+                    """,
+                    (
+                        token,
+                    )
+                )
+
+                row = cur.fetchone()
+
+        if not row:
+            return None
+
+        return {
+            "guild_id":
+                row[0],
+            "guild_name":
+                row[1],
+            "setup_token":
+                row[2],
+            "league_name":
+                row[3],
+            "snallabot_league_id":
+                row[4],
+            "platform":
+                row[5],
+            "settings":
+                row[6]
+                if isinstance(
+                    row[6],
+                    dict
+                )
+                else {},
+            "created_at":
+                row[7],
+            "updated_at":
+                row[8]
+        }
+
+    except Exception:
+        return None
+
+
+def list_guild_configs():
+    if not ensure_multi_server_db():
+        return []
+
+    try:
+        with psycopg.connect(
+            DATABASE_URL,
+            connect_timeout=8
+        ) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        guild_id,
+                        guild_name,
+                        league_name,
+                        snallabot_league_id,
+                        platform,
+                        settings,
+                        created_at,
+                        updated_at
+                    FROM project_madden_guilds
+                    ORDER BY
+                        COALESCE(
+                            guild_name,
+                            league_name,
+                            guild_id
+                        )
+                    """
+                )
+
+                rows = cur.fetchall()
+
+        return [
+            {
+                "guild_id":
+                    row[0],
+                "guild_name":
+                    row[1],
+                "league_name":
+                    row[2],
+                "snallabot_league_id":
+                    row[3],
+                "platform":
+                    row[4],
+                "settings":
+                    row[5]
+                    if isinstance(
+                        row[5],
+                        dict
+                    )
+                    else {},
+                "created_at":
+                    row[6],
+                "updated_at":
+                    row[7]
+            }
+            for row in rows
+        ]
+
+    except Exception:
+        return []
+
+
+def save_guild_setup(
+    guild_id,
+    league_name,
+    snallabot_league_id,
+    platform,
+    settings
+):
+    if not ensure_multi_server_db():
+        return False
+
+    guild_id = str(
+        guild_id
+        or ""
+    ).strip()
+
+    if not guild_id:
+        return False
+
+    payload = (
+        Jsonb(
+            settings
+            if isinstance(
+                settings,
+                dict
+            )
+            else {}
+        )
+        if Jsonb is not None
+        else json.dumps(
+            settings
+            if isinstance(
+                settings,
+                dict
+            )
+            else {}
+        )
+    )
+
+    try:
+        with psycopg.connect(
+            DATABASE_URL,
+            connect_timeout=8
+        ) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE project_madden_guilds
+                    SET
+                        league_name = %s,
+                        snallabot_league_id = %s,
+                        platform = %s,
+                        settings = %s,
+                        updated_at = NOW()
+                    WHERE guild_id = %s
+                    """,
+                    (
+                        str(
+                            league_name
+                            or ""
+                        ).strip(),
+                        str(
+                            snallabot_league_id
+                            or ""
+                        ).strip(),
+                        str(
+                            platform
+                            or ""
+                        ).strip(),
+                        payload,
+                        guild_id
+                    )
+                )
+
+        return True
+
+    except Exception as e:
+        print(
+            "SAVE GUILD SETUP ERROR:",
+            repr(
+                e
+            )
+        )
+        return False
+
+
+def rotate_guild_setup_token(
+    guild_id
+):
+    if not ensure_multi_server_db():
+        return None
+
+    new_token = uuid.uuid4().hex
+
+    try:
+        with psycopg.connect(
+            DATABASE_URL,
+            connect_timeout=8
+        ) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE project_madden_guilds
+                    SET
+                        setup_token = %s,
+                        updated_at = NOW()
+                    WHERE guild_id = %s
+                    RETURNING setup_token
+                    """,
+                    (
+                        new_token,
+                        str(
+                            guild_id
+                        )
+                    )
+                )
+
+                row = cur.fetchone()
+
+        return (
+            row[0]
+            if row
+            else None
+        )
+
+    except Exception:
+        return None
+
+
+def guild_setup_url(
+    setup_token
+):
+    return (
+        f"{PROJECT_MADDEN_BASE_URL}/dashboard/setup/"
+        f"{setup_token}"
+    )
+
+
+def discord_install_url():
+    app_id = discord_application_id()
+
+    if not app_id:
+        return ""
+
+    # Manage Channels + View Channel + Send Messages + Embed Links
+    # + Attach Files + Read Message History.
+    permissions = 117776
+
+    return (
+        "https://discord.com/oauth2/authorize?"
+        + urlencode({
+            "client_id":
+                app_id,
+            "permissions":
+                permissions,
+            "integration_type":
+                0,
+            "scope":
+                "bot applications.commands"
+        })
+    )
+
+
+def discord_member_can_manage_guild(
+    interaction
+):
+    member = interaction.get(
+        "member",
+        {}
+    )
+
+    raw = str(
+        member.get(
+            "permissions",
+            "0"
+        )
+        or "0"
+    )
+
+    try:
+        permissions = int(
+            raw
+        )
+    except Exception:
+        permissions = 0
+
+    administrator = bool(
+        permissions
+        & 8
+    )
+
+    manage_guild = bool(
+        permissions
+        & 32
+    )
+
+    return (
+        administrator
+        or manage_guild
+        or discord_member_has_league_owner_role(
+            interaction
+        )
+    )
+
+
+def guild_config_summary(
+    config
+):
+    if not config:
+        return (
+            "Project Madden has not been set up "
+            "for this Discord server yet."
+        )
+
+    league_name = (
+        config.get(
+            "league_name"
+        )
+        or "Not connected"
+    )
+
+    league_id = (
+        config.get(
+            "snallabot_league_id"
+        )
+        or "Not set"
+    )
+
+    platform = (
+        config.get(
+            "platform"
+        )
+        or "Not set"
+    )
+
+    return (
+        "🏈 **PROJECT MADDEN SERVER CONNECTION**\n"
+        f"Server: **{config.get('guild_name') or config.get('guild_id')}**\n"
+        f"League: **{league_name}**\n"
+        f"Snallabot League ID: **{league_id}**\n"
+        f"Platform: **{platform}**"
+    )
 
 
 # =========================================================
@@ -17239,6 +17923,8 @@ def discord_test_role_denied():
 
 def expected_project_madden_commands():
     return [
+        "setup",
+        "server",
         "trade",
         "inducthof",
         "removehof",
@@ -17280,6 +17966,22 @@ def register_trade_slash_command():
             "required": required,
             "autocomplete": True
         }
+
+
+    setup_command = {
+        "name":
+            "setup",
+        "description":
+            "Server admin: connect this Discord server to Project Madden"
+    }
+
+    server_command = {
+        "name":
+            "server",
+        "description":
+            "View this server's Project Madden league connection"
+    }
+
 
     command = {
         "name": "trade",
@@ -17875,6 +18577,8 @@ def register_trade_slash_command():
     }
 
     commands = [
+        setup_command,
+        server_command,
         command,
         induct_hof_command,
         remove_hof_command,
@@ -17898,45 +18602,45 @@ def register_trade_slash_command():
         "Content-Type": "application/json"
     }
 
+    # Register GLOBAL commands so Project Madden works in every
+    # server that installs the Discord app.
+    global_url = (
+        f"{DISCORD_API_BASE}/applications/"
+        f"{app_id}/commands"
+    )
+
+    global_response = requests.put(
+        global_url,
+        headers=headers,
+        json=commands,
+        timeout=15
+    )
+
+    if global_response.status_code not in [
+        200,
+        201
+    ]:
+        return {
+            "success":
+                False,
+            "status_code":
+                global_response.status_code,
+            "scope":
+                "global",
+            "error":
+                global_response.text[:500]
+        }
+
+    # Keep a guild-scoped copy in the home server for near-instant
+    # command refresh while developing/testing.
     if guild_id:
-        # Remove any older GLOBAL command first. Discord can otherwise
-        # keep showing the stale global /trade UI alongside the new
-        # guild-specific command.
-        global_url = (
-            f"{DISCORD_API_BASE}/applications/"
-            f"{app_id}/commands"
-        )
-
-        global_cleanup = requests.put(
-            global_url,
-            headers=headers,
-            json=[],
-            timeout=15
-        )
-
-        if global_cleanup.status_code not in [
-            200,
-            201
-        ]:
-            return {
-                "success": False,
-                "status_code":
-                    global_cleanup.status_code,
-                "scope": "global_cleanup",
-                "error":
-                    global_cleanup.text[:500]
-            }
-
         url = (
             f"{DISCORD_API_BASE}/applications/"
             f"{app_id}/guilds/{guild_id}/commands"
         )
-        scope = "guild"
+        scope = "global+home_guild"
     else:
-        url = (
-            f"{DISCORD_API_BASE}/applications/"
-            f"{app_id}/commands"
-        )
+        url = global_url
         scope = "global"
 
     response = requests.put(
@@ -17989,16 +18693,14 @@ def register_trade_slash_command():
             missing_expected,
         "scope": scope,
         "guild_id_configured": bool(guild_id),
-        "old_global_command_removed": bool(guild_id),
+        "global_commands_enabled": True,
         "trade_ui": (
             "5 clean player/pick asset slots per team "
             "+ optional Madden trade screenshot"
         ),
         "note": (
-            "Guild command updates are nearly instant."
-            if guild_id
-            else
-            "Global slash commands can take time to refresh in Discord."
+            "Global commands are enabled for other Discord servers. "
+            "The home server also receives a guild-scoped copy for fast refresh."
         )
     }
 
@@ -20006,6 +20708,22 @@ def discord_interactions():
         daemon=True
     ).start()
 
+    guild_id_from_interaction = str(
+        interaction.get(
+            "guild_id",
+            ""
+        )
+    ).strip()
+
+    if guild_id_from_interaction:
+        threading.Thread(
+            target=ensure_guild_config,
+            args=(
+                guild_id_from_interaction,
+            ),
+            daemon=True
+        ).start()
+
     print(
         "DISCORD INTERACTION:",
         {
@@ -20063,6 +20781,70 @@ def discord_interactions():
         ):
             return discord_ephemeral(
                 "🔒 Hall of Fame management is locked to @League owner."
+            )
+
+        if command_name == "setup":
+            guild_id = str(
+                interaction.get(
+                    "guild_id",
+                    ""
+                )
+            ).strip()
+
+            if not guild_id:
+                return discord_ephemeral(
+                    "❌ Run /setup inside a Discord server."
+                )
+
+            if not discord_member_can_manage_guild(
+                interaction
+            ):
+                return discord_ephemeral(
+                    "🔒 /setup requires Manage Server or Administrator."
+                )
+
+            config = ensure_guild_config(
+                guild_id
+            )
+
+            if not config:
+                return discord_ephemeral(
+                    "❌ Project Madden could not create this server's setup record. "
+                    "Check DATABASE_URL."
+                )
+
+            setup_url = guild_setup_url(
+                config.get(
+                    "setup_token"
+                )
+            )
+
+            return discord_ephemeral(
+                (
+                    "🏈 **PROJECT MADDEN SERVER SETUP**\n"
+                    "Your private dashboard setup link is ready:\n"
+                    f"{setup_url}\n\n"
+                    "Use it to connect this Discord server to its Madden/Snallabot league. "
+                    "Do not post this private setup link publicly."
+                )
+            )
+
+        if command_name == "server":
+            guild_id = str(
+                interaction.get(
+                    "guild_id",
+                    ""
+                )
+            ).strip()
+
+            config = get_guild_config(
+                guild_id
+            )
+
+            return discord_ephemeral(
+                guild_config_summary(
+                    config
+                )
             )
 
         if command_name == "injuries":
@@ -20750,6 +21532,15 @@ def app_version_route():
 )
 def discord_status():
     return jsonify({
+        "multi_server_enabled":
+            True,
+        "global_commands_enabled":
+            True,
+        "discord_install_url":
+            discord_install_url(),
+        "dashboard_url":
+            PROJECT_MADDEN_BASE_URL
+            + "/dashboard",
         "app_version":
             PROJECT_MADDEN_APP_VERSION,
         "expected_commands":
@@ -21699,6 +22490,398 @@ def snallabot_receiver(subpath):
         "success": True,
         "type": "unknown",
         "path": subpath
+    })
+
+
+
+# =========================================================
+# PROJECT MADDEN WEB DASHBOARD
+# =========================================================
+
+PROJECT_MADDEN_DASHBOARD_HTML = """
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Project Madden Analytics</title>
+<style>
+:root{
+  --bg:#070b12;--panel:#101722;--panel2:#151e2c;--line:#243044;
+  --text:#f4f7fb;--muted:#9facbf;--accent:#55b8ff;--good:#57d38c;
+  --warn:#f4c95d;
+}
+*{box-sizing:border-box}
+body{margin:0;background:linear-gradient(135deg,#070b12,#0c1320 60%,#0a1019);
+color:var(--text);font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+a{color:inherit;text-decoration:none}
+.shell{max-width:1260px;margin:auto;padding:24px}
+.top{display:flex;gap:16px;align-items:center;justify-content:space-between;padding:18px 0 28px}
+.brand{font-size:25px;font-weight:900;letter-spacing:.04em}
+.brand span{color:var(--accent)}
+.btn{display:inline-flex;align-items:center;justify-content:center;padding:12px 18px;border-radius:12px;
+background:var(--accent);color:#04111c;font-weight:800;border:0}
+.btn.secondary{background:var(--panel2);color:var(--text);border:1px solid var(--line)}
+.hero{background:radial-gradient(circle at top right,#153c5c,transparent 45%),var(--panel);
+border:1px solid var(--line);border-radius:22px;padding:30px;margin-bottom:22px}
+.hero h1{font-size:42px;line-height:1.05;margin:0 0 12px}
+.hero p{max-width:740px;color:var(--muted);font-size:17px;line-height:1.6}
+.actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:22px}
+.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:20px}
+.card h3{margin:0 0 8px}.muted{color:var(--muted)}
+.status{display:inline-block;padding:5px 10px;border-radius:999px;font-size:12px;font-weight:800;
+background:#163323;color:#74e9a8;margin-top:10px}
+.status.off{background:#342b13;color:#f2cf72}
+.kpi{font-size:34px;font-weight:900;margin:6px 0}
+.footer{padding:34px 0 12px;text-align:center;color:var(--muted);font-size:14px}
+@media(max-width:800px){.grid{grid-template-columns:1fr}.hero h1{font-size:34px}.top{align-items:flex-start;flex-direction:column}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="top">
+    <div class="brand">PROJECT MADDEN <span>ANALYTICS</span></div>
+    <a class="btn" href="{{ install_url }}">+ Add Project Madden to Discord</a>
+  </div>
+  <section class="hero">
+    <h1>Your Madden league.<br>One control center.</h1>
+    <p>Connect Discord servers and Madden leagues to Project Madden Analytics.
+    Keep the current Snallabot pipeline while Project Madden becomes the dashboard
+    for league setup, media, injuries, Hall of Fame, GOTW, trades, and analytics.</p>
+    <div class="actions">
+      <a class="btn" href="{{ install_url }}">Add to Discord</a>
+      <a class="btn secondary" href="/discord/status">Discord Status</a>
+    </div>
+  </section>
+  <div class="grid">
+    <div class="card">
+      <div class="muted">CONNECTED SERVERS</div>
+      <div class="kpi">{{ guild_count }}</div>
+      <div class="muted">Discord servers registered with Project Madden.</div>
+    </div>
+    <div class="card">
+      <div class="muted">LEAGUES CONNECTED</div>
+      <div class="kpi">{{ league_count }}</div>
+      <div class="muted">Servers with a Snallabot league ID configured.</div>
+    </div>
+    <div class="card">
+      <div class="muted">APP VERSION</div>
+      <div class="kpi" style="font-size:20px">{{ app_version }}</div>
+      <div class="status">MULTI-SERVER FOUNDATION</div>
+    </div>
+  </div>
+
+  <h2 style="margin-top:30px">Connected Servers</h2>
+  <div class="grid">
+    {% for guild in guilds %}
+    <div class="card">
+      <h3>{{ guild.guild_name or ("Discord Server " ~ guild.guild_id) }}</h3>
+      <div class="muted">{{ guild.league_name or "League setup not completed" }}</div>
+      {% if guild.snallabot_league_id %}
+        <div class="status">CONNECTED</div>
+        <p class="muted">Snallabot ID {{ guild.snallabot_league_id }} • {{ guild.platform or "Platform not set" }}</p>
+      {% else %}
+        <div class="status off">SETUP NEEDED</div>
+      {% endif %}
+    </div>
+    {% else %}
+    <div class="card">
+      <h3>No servers connected yet</h3>
+      <p class="muted">Install Project Madden in Discord, then run <b>/setup</b>.</p>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="footer">Built for Project Madden • Thanks to Developer Jay</div>
+</div>
+</body>
+</html>
+"""
+
+
+PROJECT_MADDEN_SETUP_HTML = """
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Connect League • Project Madden</title>
+<style>
+:root{--bg:#070b12;--panel:#101722;--line:#243044;--text:#f4f7fb;--muted:#9facbf;--accent:#55b8ff;--good:#57d38c}
+*{box-sizing:border-box} body{margin:0;background:#070b12;color:var(--text);font-family:Inter,system-ui,-apple-system,sans-serif}
+.wrap{max-width:780px;margin:0 auto;padding:28px 20px 60px}.brand{font-weight:900;font-size:23px;margin-bottom:26px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:24px}
+h1{margin-top:0} p{color:var(--muted);line-height:1.6} label{display:block;font-size:13px;font-weight:800;margin:18px 0 7px}
+input,select{width:100%;padding:13px 14px;background:#0a1018;border:1px solid var(--line);border-radius:11px;color:var(--text);font-size:16px}
+button{margin-top:22px;width:100%;padding:14px;background:var(--accent);border:0;border-radius:12px;font-weight:900;font-size:16px}
+.ok{background:#10291d;border:1px solid #245b3e;color:#85eeb2;padding:12px;border-radius:10px;margin-bottom:16px}
+.info{background:#0d1824;border:1px solid var(--line);padding:14px;border-radius:12px;margin-top:20px;color:var(--muted);word-break:break-all}
+.footer{text-align:center;color:var(--muted);padding-top:28px;font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">PROJECT MADDEN ANALYTICS</div>
+  <div class="panel">
+    <h1>Connect Your Madden League</h1>
+    <p>Server: <b>{{ guild.guild_name or guild.guild_id }}</b>. This setup page was generated privately from Discord.</p>
+    {% if saved %}<div class="ok">✅ League settings saved.</div>{% endif %}
+    <form method="post">
+      <label>League Name</label>
+      <input name="league_name" value="{{ guild.league_name or '' }}" placeholder="Project Madden 32" required>
+
+      <label>Snallabot League ID</label>
+      <input name="snallabot_league_id" value="{{ guild.snallabot_league_id or '' }}" placeholder="1360051" required>
+
+      <label>Platform</label>
+      <select name="platform">
+        {% for value,label in platforms %}
+          <option value="{{ value }}" {% if guild.platform == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+
+      <label>GOTW Channel ID</label>
+      <input name="gotw_channel_id" value="{{ settings.get('gotw_channel_id','') }}" placeholder="Discord channel ID">
+
+      <label>Hall of Fame Channel ID</label>
+      <input name="hall_of_fame_channel_id" value="{{ settings.get('hall_of_fame_channel_id','') }}" placeholder="Discord channel ID">
+
+      <label>Hall of Fame Category ID</label>
+      <input name="hall_of_fame_category_id" value="{{ settings.get('hall_of_fame_category_id','') }}" placeholder="Discord category ID">
+
+      <label>Injury Channel ID</label>
+      <input name="injury_channel_id" value="{{ settings.get('injury_channel_id','') }}" placeholder="Discord channel ID">
+
+      <label>Weekly Show Channel ID</label>
+      <input name="weekly_show_channel_id" value="{{ settings.get('weekly_show_channel_id','') }}" placeholder="Discord channel ID">
+
+      <button type="submit">SAVE LEAGUE CONNECTION</button>
+    </form>
+
+    {% if guild.snallabot_league_id %}
+    <div class="info">
+      <b>Snallabot receiver base</b><br>
+      {{ base_url }}/snallabot/{{ guild.platform or 'xbsx' }}/{{ guild.snallabot_league_id }}
+    </div>
+    {% endif %}
+  </div>
+  <div class="footer">Built for Project Madden • Thanks to Developer Jay</div>
+</div>
+</body>
+</html>
+"""
+
+
+@app.route(
+    "/dashboard"
+)
+def project_madden_dashboard():
+    guilds = list_guild_configs()
+
+    return render_template_string(
+        PROJECT_MADDEN_DASHBOARD_HTML,
+        guilds=guilds,
+        guild_count=len(
+            guilds
+        ),
+        league_count=len(
+            [
+                guild
+                for guild in guilds
+                if guild.get(
+                    "snallabot_league_id"
+                )
+            ]
+        ),
+        install_url=discord_install_url(),
+        app_version=PROJECT_MADDEN_APP_VERSION
+    )
+
+
+@app.route(
+    "/install"
+)
+def project_madden_install():
+    url = discord_install_url()
+
+    if not url:
+        return jsonify({
+            "success":
+                False,
+            "error":
+                "DISCORD_APPLICATION_ID is not configured."
+        }), 500
+
+    return (
+        "<!doctype html><meta name='viewport' "
+        "content='width=device-width,initial-scale=1'>"
+        "<body style='background:#070b12;color:white;font-family:system-ui;"
+        "display:grid;place-items:center;min-height:100vh'>"
+        "<div style='text-align:center'>"
+        "<h1>Add Project Madden to Discord</h1>"
+        f"<a href='{url}' style='display:inline-block;padding:14px 20px;"
+        "background:#55b8ff;color:#05111c;border-radius:12px;"
+        "font-weight:900;text-decoration:none'>CONTINUE TO DISCORD</a>"
+        "<p style='color:#9facbf'>Built for Project Madden • "
+        "Thanks to Developer Jay</p></div></body>"
+    )
+
+
+@app.route(
+    "/dashboard/setup/<setup_token>",
+    methods=[
+        "GET",
+        "POST"
+    ]
+)
+def project_madden_guild_setup(
+    setup_token
+):
+    guild = get_guild_config_by_token(
+        setup_token
+    )
+
+    if not guild:
+        return (
+            "Invalid or expired Project Madden setup link.",
+            404
+        )
+
+    saved = False
+
+    if request.method == "POST":
+        settings = dict(
+            guild.get(
+                "settings",
+                {}
+            )
+        )
+
+        for key in [
+            "gotw_channel_id",
+            "hall_of_fame_channel_id",
+            "hall_of_fame_category_id",
+            "injury_channel_id",
+            "weekly_show_channel_id"
+        ]:
+            value = str(
+                request.form.get(
+                    key,
+                    ""
+                )
+            ).strip()
+
+            if value:
+                settings[
+                    key
+                ] = value
+            else:
+                settings.pop(
+                    key,
+                    None
+                )
+
+        saved = save_guild_setup(
+            guild.get(
+                "guild_id"
+            ),
+            request.form.get(
+                "league_name",
+                ""
+            ),
+            request.form.get(
+                "snallabot_league_id",
+                ""
+            ),
+            request.form.get(
+                "platform",
+                "xbsx"
+            ),
+            settings
+        )
+
+        guild = get_guild_config_by_token(
+            setup_token
+        )
+
+    return render_template_string(
+        PROJECT_MADDEN_SETUP_HTML,
+        guild=guild,
+        settings=(
+            guild.get(
+                "settings",
+                {}
+            )
+            if guild
+            else {}
+        ),
+        saved=saved,
+        base_url=PROJECT_MADDEN_BASE_URL,
+        platforms=[
+            (
+                "xbsx",
+                "Xbox Series X|S"
+            ),
+            (
+                "ps5",
+                "PlayStation 5"
+            ),
+            (
+                "pc",
+                "PC"
+            )
+        ]
+    )
+
+
+@app.route(
+    "/dashboard/api/servers"
+)
+def project_madden_servers_api():
+    guilds = list_guild_configs()
+
+    safe_guilds = []
+
+    for guild in guilds:
+        safe_guilds.append({
+            "guild_id":
+                guild.get(
+                    "guild_id"
+                ),
+            "guild_name":
+                guild.get(
+                    "guild_name"
+                ),
+            "league_name":
+                guild.get(
+                    "league_name"
+                ),
+            "snallabot_league_id":
+                guild.get(
+                    "snallabot_league_id"
+                ),
+            "platform":
+                guild.get(
+                    "platform"
+                ),
+            "connected":
+                bool(
+                    guild.get(
+                        "snallabot_league_id"
+                    )
+                )
+        })
+
+    return jsonify({
+        "app_version":
+            PROJECT_MADDEN_APP_VERSION,
+        "server_count":
+            len(
+                safe_guilds
+            ),
+        "servers":
+            safe_guilds
     })
 
 
