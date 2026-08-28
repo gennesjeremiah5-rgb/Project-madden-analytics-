@@ -16,7 +16,7 @@ import time
 from nacl.signing import VerifyKey
 from nacl.exceptions import BadSignatureError
 from datetime import datetime, timezone
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote
 
 try:
     import psycopg
@@ -56,7 +56,6 @@ PERSISTENT_JSON_FILES = {
     "gotw_poll_history.json",
     "injury_history.json",
     "project_madden_guilds.json",
-    "ea_companion_connections.json",
 }
 
 PERSISTENT_DB_LOCK = threading.Lock()
@@ -72,7 +71,7 @@ GOTW_POLL_CLOSE_SECONDS = 300
 INJURY_HISTORY_FILE = "injury_history.json"
 INJURY_MAJOR_OVR = 85
 
-PROJECT_MADDEN_APP_VERSION = "v34-ea-oauth-ready"
+PROJECT_MADDEN_APP_VERSION = "v35-snallabot-ea-bridge"
 
 
 
@@ -1636,879 +1635,159 @@ def ea_connector_configured():
 def project_madden_data_source_status():
     return {
         "official_source":
-            "ea_companion_direct_or_snallabot",
-        "snallabot_required":
+            "snallabot",
+        "ea_connector":
+            "snallabot",
+        "ea_authentication":
+            "handled_by_snallabot",
+        "project_madden_stores_ea_credentials":
             False,
-        "snallabot_supported":
-            True,
-        "ea_companion_direct":
-            True,
-        "direct_ea_login":
-            False,
+        "data_flow":
+            "EA → Snallabot → Project Madden",
         "message":
             (
-                "Project Madden can receive franchise exports directly "
-                "from the official Madden Companion App. Snallabot remains "
-                "supported as an optional fallback."
+                "Project Madden uses Snallabot's EA connector for Madden "
+                "authentication and league discovery, then receives the "
+                "exported league data."
             )
     }
 
 
 
 # =========================================================
-# EA COMPANION DIRECT EXPORT CONNECTOR
+# SNALLABOT EA CONNECTOR BRIDGE
+# Project Madden uses Snallabot's existing EA connection flow instead
+# of collecting EA credentials itself.
 # =========================================================
 
-EA_COMPANION_CONNECTIONS_FILE = "ea_companion_connections.json"
+SNALLABOT_DASHBOARD_BASE = os.environ.get(
+    "SNALLABOT_DASHBOARD_BASE",
+    "https://snallabot.me/dashboard"
+).strip().rstrip("/")
 
 
-def load_ea_companion_connections():
-    data = load_json_file(
-        EA_COMPANION_CONNECTIONS_FILE
-    )
-
-    if not isinstance(
-        data,
-        dict
-    ):
-        data = {}
-
-    data.setdefault(
-        "guilds",
-        {}
-    )
-
-    return data
-
-
-def save_ea_companion_connections(
-    data
-):
-    save_json_file(
-        EA_COMPANION_CONNECTIONS_FILE,
-        data
-    )
-
-
-def ea_companion_export_url(
-    setup_token
-):
-    return (
-        f"{PROJECT_MADDEN_BASE_URL}/ea-export/"
-        f"{setup_token}"
-    )
-
-
-def ea_companion_guild_dir(
+def snallabot_ea_connect_url(
     guild_id
 ):
-    path = os.path.join(
-        DATA_DIR,
-        "ea_direct",
-        str(
-            guild_id
-        )
-    )
-
-    os.makedirs(
-        path,
-        exist_ok=True
-    )
-
-    return path
-
-
-def ea_companion_update_status(
-    guild,
-    export_type,
-    subpath,
-    extra=None
-):
-    data = load_ea_companion_connections()
-
     guild_id = str(
-        guild.get(
-            "guild_id"
-        )
-    )
-
-    current = (
-        data[
-            "guilds"
-        ].get(
-            guild_id
-        )
-    )
-
-    if not isinstance(
-        current,
-        dict
-    ):
-        current = {
-            "guild_id":
-                guild_id,
-            "guild_name":
-                guild.get(
-                    "guild_name"
-                ),
-            "league_name":
-                guild.get(
-                    "league_name"
-                ),
-            "exports":
-                {}
-        }
-
-    current[
-        "guild_name"
-    ] = (
-        guild.get(
-            "guild_name"
-        )
-        or current.get(
-            "guild_name"
-        )
-    )
-
-    current[
-        "league_name"
-    ] = (
-        guild.get(
-            "league_name"
-        )
-        or current.get(
-            "league_name"
-        )
-    )
-
-    current[
-        "last_export_at"
-    ] = datetime.now(
-        timezone.utc
-    ).isoformat()
-
-    current[
-        "last_export_type"
-    ] = export_type
-
-    current[
-        "last_subpath"
-    ] = subpath
-
-    exports = current.get(
-        "exports"
-    )
-
-    if not isinstance(
-        exports,
-        dict
-    ):
-        exports = {}
-
-    exports[
-        export_type
-    ] = {
-        "received_at":
-            current[
-                "last_export_at"
-            ],
-        "subpath":
-            subpath
-    }
-
-    if isinstance(
-        extra,
-        dict
-    ):
-        exports[
-            export_type
-        ].update(
-            extra
-        )
-
-    current[
-        "exports"
-    ] = exports
-
-    data[
-        "guilds"
-    ][
         guild_id
-    ] = current
-
-    save_ea_companion_connections(
-        data
-    )
-
-    return current
-
-
-def ea_companion_get_status(
-    guild_id
-):
-    data = load_ea_companion_connections()
-
-    current = (
-        data
-        .get(
-            "guilds",
-            {}
-        )
-        .get(
-            str(
-                guild_id
-            )
-        )
-    )
-
-    if not isinstance(
-        current,
-        dict
-    ):
-        current = {
-            "guild_id":
-                str(
-                    guild_id
-                ),
-            "exports":
-                {}
-        }
-
-    return current
-
-
-def ea_companion_classify_export(
-    subpath
-):
-    parts = [
-        part
-        for part in str(
-            subpath
-            or ""
-        ).split(
-            "/"
-        )
-        if part
-    ]
-
-    if not parts:
-        return {
-            "type":
-                "unknown"
-        }
-
-    last = parts[
-        -1
-    ].lower()
-
-    if last in [
-        "leagueteams",
-        "teams"
-    ]:
-        return {
-            "type":
-                "leagueteams"
-        }
-
-    if last == "standings":
-        return {
-            "type":
-                "standings"
-        }
-
-    if last in [
-        "extra",
-        "league",
-        "leagueinfo"
-    ]:
-        return {
-            "type":
-                "extra"
-        }
-
-    if (
-        "freeagents"
-        in [
-            item.lower()
-            for item in parts
-        ]
-        and last
-        == "roster"
-    ):
-        return {
-            "type":
-                "freeagents"
-        }
-
-    lowered = [
-        item.lower()
-        for item in parts
-    ]
-
-    if (
-        "team"
-        in lowered
-        and last
-        == "roster"
-    ):
-        team_index = lowered.index(
-            "team"
-        )
-
-        team_id = (
-            parts[
-                team_index + 1
-            ]
-            if len(
-                parts
-            )
-            > team_index + 1
-            else "unknown"
-        )
-
-        return {
-            "type":
-                "roster",
-            "team_id":
-                team_id
-        }
-
-    if "week" in lowered:
-        try:
-            index = lowered.index(
-                "week"
-            )
-
-            return {
-                "type":
-                    "weekly",
-                "season_type":
-                    parts[
-                        index + 1
-                    ].lower(),
-                "week":
-                    int(
-                        parts[
-                            index + 2
-                        ]
-                    ),
-                "stat_type":
-                    parts[
-                        index + 3
-                    ].lower()
-            }
-
-        except Exception:
-            return {
-                "type":
-                    "unknown"
-            }
-
-    # Some Companion exporters use only the dataset name as the path.
-    weekly_names = {
-        "schedules",
-        "teamstats",
-        "passing",
-        "rushing",
-        "receiving",
-        "defense",
-        "kicking",
-        "punting"
-    }
-
-    if last in weekly_names:
-        return {
-            "type":
-                "weekly_unscoped",
-            "stat_type":
-                last
-        }
-
-    return {
-        "type":
-            last
-    }
-
-
-def ea_companion_save_export(
-    guild,
-    subpath,
-    payload
-):
-    classification = ea_companion_classify_export(
-        subpath
-    )
-
-    export_type = classification.get(
-        "type",
-        "unknown"
-    )
-
-    guild_id = str(
-        guild.get(
-            "guild_id"
-        )
-    )
-
-    guild_dir = ea_companion_guild_dir(
-        guild_id
-    )
-
-    # Keep a raw copy for troubleshooting.
-    raw_dir = os.path.join(
-        guild_dir,
-        "raw"
-    )
-
-    os.makedirs(
-        raw_dir,
-        exist_ok=True
-    )
-
-    safe_subpath = re.sub(
-        r"[^a-zA-Z0-9_.-]+",
-        "_",
-        str(
-            subpath
-            or "root"
-        )
-    )[:180]
-
-    raw_path = os.path.join(
-        raw_dir,
-        safe_subpath
-        + ".json"
-    )
-
-    with open(
-        raw_path,
-        "w",
-        encoding="utf-8"
-    ) as f:
-        json.dump(
-            payload,
-            f,
-            indent=2
-        )
-
-    # Save both isolated per-server data and compatibility copies for the
-    # current Project Madden analytics engine.
-    if export_type == "leagueteams":
-        isolated = os.path.join(
-            guild_dir,
-            "leagueteams.json"
-        )
-
-        with open(
-            isolated,
-            "w",
-            encoding="utf-8"
-        ) as f:
-            json.dump(
-                payload,
-                f,
-                indent=2
-            )
-
-        save_json_file(
-            "leagueteams.json",
-            payload
-        )
-
-    elif export_type == "standings":
-        isolated = os.path.join(
-            guild_dir,
-            "standings.json"
-        )
-
-        with open(
-            isolated,
-            "w",
-            encoding="utf-8"
-        ) as f:
-            json.dump(
-                payload,
-                f,
-                indent=2
-            )
-
-        save_json_file(
-            "standings.json",
-            payload
-        )
-
-    elif export_type == "extra":
-        isolated = os.path.join(
-            guild_dir,
-            "extra.json"
-        )
-
-        with open(
-            isolated,
-            "w",
-            encoding="utf-8"
-        ) as f:
-            json.dump(
-                payload,
-                f,
-                indent=2
-            )
-
-        save_json_file(
-            "extra.json",
-            payload
-        )
-
-    elif export_type == "freeagents":
-        isolated = os.path.join(
-            guild_dir,
-            "freeagents_roster.json"
-        )
-
-        with open(
-            isolated,
-            "w",
-            encoding="utf-8"
-        ) as f:
-            json.dump(
-                payload,
-                f,
-                indent=2
-            )
-
-        save_json_file(
-            "freeagents_roster.json",
-            payload
-        )
-
-    elif export_type == "roster":
-        team_id = classification.get(
-            "team_id",
-            "unknown"
-        )
-
-        roster_dir = os.path.join(
-            guild_dir,
-            "rosters"
-        )
-
-        os.makedirs(
-            roster_dir,
-            exist_ok=True
-        )
-
-        isolated = os.path.join(
-            roster_dir,
-            f"roster_{team_id}.json"
-        )
-
-        with open(
-            isolated,
-            "w",
-            encoding="utf-8"
-        ) as f:
-            json.dump(
-                payload,
-                f,
-                indent=2
-            )
-
-        save_json_file(
-            f"roster_{team_id}.json",
-            payload
-        )
-
-        try:
-            process_team_injury_export(
-                team_id,
-                payload
-            )
-        except Exception as e:
-            print(
-                "EA DIRECT INJURY PROCESS ERROR:",
-                repr(
-                    e
-                )
-            )
-
-    elif export_type == "weekly":
-        season_type = classification[
-            "season_type"
-        ]
-
-        week_number = classification[
-            "week"
-        ]
-
-        stat_type = classification[
-            "stat_type"
-        ]
-
-        isolated_week_dir = os.path.join(
-            guild_dir,
-            "weekly",
-            season_type,
-            f"week_{week_number}"
-        )
-
-        os.makedirs(
-            isolated_week_dir,
-            exist_ok=True
-        )
-
-        with open(
-            os.path.join(
-                isolated_week_dir,
-                f"{stat_type}.json"
-            ),
-            "w",
-            encoding="utf-8"
-        ) as f:
-            json.dump(
-                payload,
-                f,
-                indent=2
-            )
-
-        legacy_week_dir = os.path.join(
-            DATA_DIR,
-            "weekly",
-            season_type,
-            f"week_{week_number}"
-        )
-
-        os.makedirs(
-            legacy_week_dir,
-            exist_ok=True
-        )
-
-        with open(
-            os.path.join(
-                legacy_week_dir,
-                f"{stat_type}.json"
-            ),
-            "w",
-            encoding="utf-8"
-        ) as f:
-            json.dump(
-                payload,
-                f,
-                indent=2
-            )
-
-    status = ea_companion_update_status(
-        guild,
-        export_type,
-        subpath,
-        extra=classification
-    )
-
-    # Switch this server's preferred data source after the first successful
-    # Companion export.
-    try:
-        current = get_guild_config(
-            guild_id
-        )
-
-        if current:
-            settings = dict(
-                current.get(
-                    "settings",
-                    {}
-                )
-            )
-
-            settings[
-                "data_source"
-            ] = "ea_companion_direct"
-
-            save_guild_setup(
-                current.get(
-                    "guild_id"
-                ),
-                current.get(
-                    "league_name",
-                    ""
-                ),
-                current.get(
-                    "snallabot_league_id",
-                    ""
-                ),
-                current.get(
-                    "platform",
-                    ""
-                ),
-                settings
-            )
-
-    except Exception as e:
-        print(
-            "EA DIRECT SOURCE SAVE ERROR:",
-            repr(
-                e
-            )
-        )
-
-    return {
-        "success":
-            True,
-        "classification":
-            classification,
-        "status":
-            status
-    }
-
-
-
-# =========================================================
-# EA LOGIN HANDOFF UI
-# =========================================================
-
-EA_OAUTH_CLIENT_ID = os.environ.get(
-    "EA_OAUTH_CLIENT_ID",
-    ""
-).strip()
-
-EA_OAUTH_CLIENT_SECRET = os.environ.get(
-    "EA_OAUTH_CLIENT_SECRET",
-    ""
-).strip()
-
-EA_OAUTH_AUTHORIZE_URL = os.environ.get(
-    "EA_OAUTH_AUTHORIZE_URL",
-    "https://accounts.ea.com/connect/auth"
-).strip()
-
-EA_OAUTH_TOKEN_URL = os.environ.get(
-    "EA_OAUTH_TOKEN_URL",
-    "https://accounts.ea.com/connect/token"
-).strip()
-
-EA_OAUTH_REDIRECT_URI = os.environ.get(
-    "EA_OAUTH_REDIRECT_URI",
-    "http://127.0.0.1/success"
-).strip()
-
-EA_OAUTH_SCOPE = os.environ.get(
-    "EA_OAUTH_SCOPE",
-    ""
-).strip()
-
-
-def ea_oauth_configured():
-    return bool(
-        EA_OAUTH_CLIENT_ID
-        and EA_OAUTH_CLIENT_SECRET
-        and EA_OAUTH_AUTHORIZE_URL
-        and EA_OAUTH_TOKEN_URL
-        and EA_OAUTH_REDIRECT_URI
-    )
-
-
-def ea_oauth_authorize_url():
-    if not ea_oauth_configured():
-        return None
-
-    params = {
-        "response_type":
-            "code",
-        "client_id":
-            EA_OAUTH_CLIENT_ID,
-        "redirect_uri":
-            EA_OAUTH_REDIRECT_URI
-    }
-
-    if EA_OAUTH_SCOPE:
-        params[
-            "scope"
-        ] = EA_OAUTH_SCOPE
-
-    return (
-        EA_OAUTH_AUTHORIZE_URL
-        + "?"
-        + urlencode(
-            params
-        )
-    )
-
-
-
-
-def parse_ea_localhost_redirect(
-    value
-):
-    raw = str(
-        value
         or ""
     ).strip()
 
-    if not raw:
-        return {
-            "valid":
-                False,
-            "error":
-                "Paste the full localhost redirect URL."
-        }
-
-    try:
-        parsed = urlparse(
-            raw
+    if not guild_id:
+        return (
+            SNALLABOT_DASHBOARD_BASE
+            + "/"
         )
-    except Exception:
-        return {
-            "valid":
-                False,
-            "error":
-                "That URL could not be parsed."
-        }
 
-    host = str(
-        parsed.hostname
+    return (
+        SNALLABOT_DASHBOARD_BASE
+        + "/?discord_connection="
+        + quote(
+            guild_id,
+            safe=""
+        )
+    )
+
+
+def snallabot_league_dashboard_url(
+    league_id
+):
+    league_id = str(
+        league_id
         or ""
-    ).lower()
+    ).strip()
 
-    if host not in [
-        "127.0.0.1",
-        "localhost"
-    ]:
-        return {
-            "valid":
-                False,
-            "error":
-                "The redirect must point to 127.0.0.1 or localhost."
-        }
+    if not league_id:
+        return (
+            SNALLABOT_DASHBOARD_BASE
+            + "/"
+        )
 
-    query = parse_qs(
-        parsed.query
+    return (
+        SNALLABOT_DASHBOARD_BASE
+        + "/league/"
+        + quote(
+            league_id,
+            safe=""
+        )
     )
 
-    code_value = (
-        query.get(
-            "code",
-            [
-                None
-            ]
-        )[
-            0
-        ]
+
+def project_madden_snallabot_receiver_base(
+    platform,
+    league_id
+):
+    platform = str(
+        platform
+        or "xbsx"
+    ).strip().lower()
+
+    league_id = str(
+        league_id
+        or ""
+    ).strip()
+
+    return (
+        f"{PROJECT_MADDEN_BASE_URL}/snallabot/"
+        f"{platform}/{league_id}"
     )
+
+
+def snallabot_bridge_status(
+    guild
+):
+    league_id = str(
+        guild.get(
+            "snallabot_league_id"
+        )
+        or ""
+    ).strip()
+
+    platform = str(
+        guild.get(
+            "platform"
+        )
+        or "xbsx"
+    ).strip().lower()
 
     return {
-        "valid":
-            True,
-        "host":
-            host,
-        "has_code":
+        "connected":
             bool(
-                code_value
+                league_id
             ),
-        "code_present":
-            bool(
-                code_value
+        "league_id":
+            league_id
+            or None,
+        "platform":
+            platform,
+        "snallabot_dashboard":
+            snallabot_ea_connect_url(
+                guild.get(
+                    "guild_id"
+                )
             ),
-        "path":
-            parsed.path
-            or "/"
+        "snallabot_league_dashboard":
+            (
+                snallabot_league_dashboard_url(
+                    league_id
+                )
+                if league_id
+                else None
+            ),
+        "project_madden_receiver":
+            (
+                project_madden_snallabot_receiver_base(
+                    platform,
+                    league_id
+                )
+                if league_id
+                else None
+            ),
+        "data_flow":
+            (
+                "EA → Snallabot → Project Madden"
+            )
     }
 
 
@@ -25056,14 +24335,14 @@ background:#163323;color:#74e9a8;margin-top:10px}
   <div class="grid" style="margin-bottom:22px">
     <div class="card">
       <div class="muted">CURRENT OFFICIAL DATA SOURCE</div>
-      <div class="kpi" style="font-size:25px">Companion Direct</div>
-      <div class="status">AVAILABLE</div>
+      <div class="kpi" style="font-size:25px">Snallabot</div>
+      <div class="status">OFFICIAL SOURCE</div>
       <p class="muted">Project Madden receives the league exports and powers the dashboard around them.</p>
     </div>
     <div class="card">
-      <div class="muted">SNALLABOT COMPATIBILITY</div>
-      <div class="kpi" style="font-size:25px">Supported</div>
-      <div class="status off">OPTIONAL FALLBACK</div>
+      <div class="muted">EA CONNECTOR</div>
+      <div class="kpi" style="font-size:25px">Snallabot</div>
+      <div class="status">AVAILABLE</div>
       <p class="muted">Goal: connect Madden/EA directly and remove the Snallabot requirement.</p>
     </div>
     <div class="card">
@@ -25171,7 +24450,7 @@ button.secondary{margin-top:10px;background:#141d2a;color:#e9f2ff;border:1px sol
     <h1>Connect Your Madden League</h1>
     <div class="server-pill">🟢 Discord Server: <b id="serverName">{{ guild.guild_name or guild.guild_id }}</b></div>
 
-    <div class="info"><b>Important:</b> Project Madden now supports direct Madden Companion exports. Snallabot can stay connected as a fallback, but it is no longer required once your direct Companion export is working.</div>
+    <div class="info"><b>Important:</b> Project Madden uses Snallabot’s existing EA connector for Madden authentication and league discovery. EA login happens through Snallabot; Project Madden receives the resulting league exports.</div>
 
     {% if saved %}<div class="ok">✅ League settings saved.</div>{% endif %}
 
@@ -25206,26 +24485,12 @@ button.secondary{margin-top:10px;background:#141d2a;color:#e9f2ff;border:1px sol
     <div class="auto">
       <div class="auto-head">
         <div>
-          <div class="auto-title">🎮 Direct EA Connection</div>
-          <div class="note">Coming soon. Project Madden will not ask you for an EA client secret or private EA developer credential.</div>
-        </div>
-        <span class="badge wait">COMING SOON</span>
-      </div>
-      <div class="info">
-        <b>Current official Madden data source:</b> Snallabot.<br>
-        Keep your Snallabot League ID connected so Project Madden can receive teams, rosters, standings, schedules, stats, and injuries.
-      </div>
-    </div>
-
-    <div class="auto">
-      <div class="auto-head">
-        <div>
-          <div class="auto-title">🎮 EA Companion Direct <span style="color:#55b8ff">BETA</span></div>
-          <div class="note">Use a guided EA login handoff like Snallabot, then connect your Madden Companion export directly to Project Madden.</div>
+          <div class="auto-title">🎮 EA Connector — Powered by Snallabot</div>
+          <div class="note">Use Snallabot's existing EA login and Madden league connector, then send those exports into Project Madden.</div>
         </div>
         <span class="badge">AVAILABLE</span>
       </div>
-      <a href="/dashboard/ea-companion/{{ guild.setup_token }}" style="display:block;text-align:center;margin-top:14px;padding:14px;border-radius:12px;background:linear-gradient(135deg,#58baff,#7c62ff);color:#05111c;font-weight:950;text-decoration:none">CONNECT EA ACCOUNT</a>
+      <a href="/dashboard/snallabot-ea/{{ guild.setup_token }}" style="display:block;text-align:center;margin-top:14px;padding:14px;border-radius:12px;background:linear-gradient(135deg,#58baff,#7c62ff);color:#05111c;font-weight:950;text-decoration:none">CONNECT EA THROUGH SNALLABOT</a>
     </div>
 
     <div class="auto">
@@ -25270,7 +24535,7 @@ button.secondary{margin-top:10px;background:#141d2a;color:#e9f2ff;border:1px sol
 
       <label>Snallabot League ID</label>
       <input name="snallabot_league_id" value="{{ guild.snallabot_league_id or '' }}" placeholder="1360051" inputmode="numeric" required>
-      <div class="note">Optional fallback. You can leave this blank after the EA Companion Direct export is connected.</div>
+      <div class="note">Required for now. Project Madden uses this Snallabot league connection as the official Madden data source.</div>
 
       <label>Platform</label>
       <select name="platform">
@@ -26131,27 +25396,17 @@ def project_madden_setup_link_preview(
 )
 def project_madden_setup_health():
     return jsonify({
-        "ea_oauth_client_configured":
-            ea_oauth_configured(),
-        "ea_oauth_redirect_uri":
-            EA_OAUTH_REDIRECT_URI,
-        "ea_oauth_token_storage":
-            "disabled_until_supported_madden_api",
-        "ea_login_handoff_ui":
-            True,
-        "ea_login_handoff_stores_passwords":
-            False,
-        "ea_login_handoff_exchanges_tokens":
-            False,
+        "snallabot_dashboard_base":
+            SNALLABOT_DASHBOARD_BASE,
         "official_madden_data_source":
-            "ea_companion_direct_or_snallabot",
+            PROJECT_MADDEN_DATA_SOURCE,
         "snallabot_required":
-            False,
-        "snallabot_supported":
             True,
-        "ea_companion_direct_enabled":
+        "ea_connector":
+            "snallabot",
+        "ea_connector_enabled":
             True,
-        "direct_ea_login_enabled":
+        "project_madden_stores_ea_credentials":
             False,
         "discord_required_permissions_integer":
             discord_required_permissions(),
@@ -26220,330 +25475,117 @@ def project_madden_data_source_status_route():
 
 
 # =========================================================
-# EA COMPANION DIRECT EXPORT ROUTES
+# SNALLABOT EA BRIDGE WEB UI
 # =========================================================
 
-EA_COMPANION_CONNECT_HTML = """
+SNALLABOT_EA_BRIDGE_HTML = """
 <!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Connect EA • Project Madden</title>
+<title>Connect EA via Snallabot • Project Madden</title>
 <style>
 :root{
-  --bg:#f5f7fb;
-  --panel:#ffffff;
-  --line:#d9dee7;
-  --text:#14191f;
-  --muted:#5f6875;
-  --blue:#1578ff;
-  --teal:#ddf7f5;
-  --teal-line:#88d9d4;
-  --green:#6eb797;
-  --shadow:0 8px 28px rgba(24,39,75,.12)
+  --bg:#f5f7fb;--panel:#fff;--line:#d9dee7;--text:#14191f;
+  --muted:#65707f;--blue:#1578ff;--green:#70b895;--soft:#eaf4ff;
+  --warn:#fff8df;--warnline:#ecd57b;--shadow:0 8px 28px rgba(24,39,75,.12)
 }
 *{box-sizing:border-box}
-body{
-  margin:0;
-  background:var(--bg);
-  color:var(--text);
-  font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif
-}
-.wrap{max-width:760px;margin:0 auto;padding:24px 16px 56px}
-.brand{
-  text-align:center;
-  font-size:20px;
-  font-weight:950;
-  margin:2px 0 18px
-}
-.card{
-  background:var(--panel);
-  border:1px solid var(--line);
-  border-radius:14px;
-  box-shadow:var(--shadow);
-  overflow:hidden
-}
-.head{padding:24px 28px 14px}
-h1{margin:0 0 8px;font-size:34px;line-height:1.1}
-p{color:var(--muted);line-height:1.55}
-.notice{
-  margin:0 28px 20px;
-  padding:16px 18px;
-  border:1px solid var(--teal-line);
-  background:var(--teal);
-  border-radius:10px;
-  font-size:16px;
-  line-height:1.55
-}
-.steps{padding:0 28px 6px}
-.steps h2{font-size:20px;margin:4px 0 10px}
-.steps ol{margin:0;padding-left:28px}
-.steps li{margin:10px 0;line-height:1.48;font-size:17px}
-.local{color:#d93f8f;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-.divider{height:1px;background:var(--line);margin:18px 28px}
-.action{padding:0 28px 26px}
-.btn{
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  min-height:52px;
-  padding:0 24px;
-  border:0;
-  border-radius:10px;
-  font-size:18px;
-  font-weight:900;
-  cursor:pointer;
-  text-decoration:none
-}
-.btn-blue{background:var(--blue);color:#fff}
-label{display:block;margin:24px 0 10px;font-size:17px;font-weight:850}
-.row{display:flex}
-input{
-  flex:1;
-  min-width:0;
-  height:54px;
-  border:1px solid var(--line);
-  border-radius:10px 0 0 10px;
-  padding:0 16px;
-  font-size:17px;
-  outline:none
-}
-input:focus{border-color:#9db7db}
-.paste{
-  width:120px;
-  border:0;
-  background:#7d8794;
-  color:#fff;
-  border-radius:0 10px 10px 0;
-  font-size:17px;
-  font-weight:850
-}
-.tip{font-size:14px;margin-top:8px}
-.status{
-  margin-top:12px;
-  padding:11px 13px;
-  border-radius:9px;
-  font-size:14px;
-  display:none
-}
-.status.good{display:block;background:#e4f5ec;color:#216443;border:1px solid #a7d7bd}
-.status.bad{display:block;background:#fff0f0;color:#8e3030;border:1px solid #efbaba}
-.continue-wrap{display:flex;justify-content:flex-end;margin-top:22px}
-.continue{
-  min-width:280px;
-  background:var(--green);
-  color:white
-}
-.continue[disabled]{opacity:.5;cursor:not-allowed}
-.legal{
-  margin:18px 28px 26px;
-  padding-top:18px;
-  border-top:1px solid var(--line);
-  text-align:center;
-  color:#515861;
-  font-style:italic;
-  font-size:14px
-}
-.export-box{
-  display:none;
-  margin-top:18px;
-  padding:16px;
-  border-radius:10px;
-  background:#f3f7ff;
-  border:1px solid #bfd2f3
-}
-.export-url{
-  word-break:break-all;
-  background:white;
-  border:1px solid var(--line);
-  padding:12px;
-  border-radius:8px;
-  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
-  font-size:13px
-}
-.footer{text-align:center;color:#77808c;padding-top:22px;font-size:13px}
-@media(max-width:620px){
-  .head,.steps,.action{padding-left:20px;padding-right:20px}
-  .notice{margin-left:20px;margin-right:20px}
-  h1{font-size:30px}
-  .steps li{font-size:16px}
-  .continue{width:100%;min-width:0}
-}
+body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,sans-serif}
+.wrap{max-width:820px;margin:auto;padding:24px 16px 60px}
+.brand{text-align:center;font-weight:950;font-size:20px;margin-bottom:18px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:26px}
+h1{margin:0 0 8px;font-size:34px}.muted{color:var(--muted);line-height:1.6}
+.notice{background:var(--soft);border:1px solid #bdd9f6;padding:15px;border-radius:10px;margin:18px 0}
+.step{border-top:1px solid var(--line);padding-top:20px;margin-top:20px}
+.num{display:inline-grid;place-items:center;width:30px;height:30px;border-radius:50%;background:#111827;color:#fff;font-weight:900;margin-right:8px}
+.btn{display:inline-flex;align-items:center;justify-content:center;min-height:52px;padding:0 22px;border:0;border-radius:10px;font-weight:900;font-size:17px;text-decoration:none;cursor:pointer}
+.primary{background:var(--blue);color:#fff}.green{background:var(--green);color:#fff}.secondary{background:#eef2f7;color:#17202a}
+label{display:block;font-weight:850;margin:16px 0 7px}
+input,select{width:100%;height:52px;border:1px solid var(--line);border-radius:10px;padding:0 14px;font-size:17px;background:#fff}
+.receiver{word-break:break-all;background:#0d1722;color:#dff0ff;border-radius:10px;padding:14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.ok{background:#e8f7ef;border:1px solid #acd8bf;color:#236443;padding:14px;border-radius:10px;margin:14px 0}
+.wait{background:var(--warn);border:1px solid var(--warnline);color:#735d12;padding:14px;border-radius:10px;margin:14px 0}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.box{border:1px solid var(--line);border-radius:10px;padding:13px}.small{font-size:12px;color:var(--muted);font-weight:800;text-transform:uppercase}.value{margin-top:5px;font-weight:850}
+.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+.footer{text-align:center;color:#7b8490;font-size:13px;padding-top:22px}
+@media(max-width:640px){.card{padding:20px}.grid{grid-template-columns:1fr}.btn{width:100%}}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="brand">PROJECT MADDEN</div>
+<div class="brand">PROJECT MADDEN</div>
+<div class="card">
+<h1>Connect EA Through Snallabot</h1>
+<p class="muted">Project Madden will use Snallabot's existing EA connector. Project Madden does not need your EA password, EA OAuth client secret, access token, or refresh token.</p>
 
-  <div class="card">
-    <div class="head">
-      <h1>Connect Your EA Account</h1>
-      <p>Project Madden is ready for EA's OAuth authorization flow once EA issues Project Madden its own client credentials.</p>
-    </div>
-
-    <div class="notice">
-      <b>Project Madden does not store your EA password or console credentials.</b>
-      The login handoff only checks that the browser returned to a local EA redirect.
-      Your league data still reaches Project Madden through the Companion export connection.
-    </div>
-
-    <div class="steps">
-      <h2>Follow these steps:</h2>
-      <ol>
-        <li>Tap <b>Login to EA</b>. EA opens in a new browser tab.</li>
-        <li>After signing in, EA may send the browser to a blank/error page at <span class="local">http://127.0.0.1</span> or localhost.</li>
-        <li>Copy the <b>entire URL</b> from the browser address bar and paste it below.</li>
-      </ol>
-    </div>
-
-    <div class="divider"></div>
-
-    <div class="action">
-      {% if ea_oauth_configured %}
-      <a class="btn btn-blue" href="{{ ea_login_url }}" target="_blank" rel="noopener">Login to EA</a>
-      {% else %}
-      <button class="btn btn-blue" type="button" disabled style="opacity:.55">Login to EA</button>
-      <div class="status bad" style="display:block;margin-top:12px">
-        EA OAuth is not activated for Project Madden yet. A Project Madden-owned EA OAuth client must be issued/configured before this button can create the real 127.0.0.1 authorization redirect.
-      </div>
-      {% endif %}
-
-      <label>Paste the URL shown in your browser</label>
-      <div class="row">
-        <input id="eaRedirect" placeholder="e.g. http://127.0.0.1:PORT/..." autocomplete="off" autocapitalize="off" spellcheck="false">
-        <button class="paste" type="button" onclick="pasteRedirect()">Paste</button>
-      </div>
-
-      <div class="tip">
-        Copy the full URL from the browser address bar. The continue button becomes available when Project Madden recognizes a local EA redirect.
-      </div>
-
-      <div id="urlStatus" class="status"></div>
-
-      <div class="continue-wrap">
-        <button id="continueBtn" class="btn continue" type="button" disabled onclick="continueSetup()">Continue to Next Step</button>
-      </div>
-
-      <div id="exportBox" class="export-box">
-        <b>Next: connect Madden Companion export</b>
-        <p style="margin:8px 0 10px;color:#5f6875">
-          Project Madden does not exchange the EA authorization code itself. Use this unique receiver URL in the Madden Companion export screen:
-        </p>
-        <div class="export-url">{{ export_url }}</div>
-        {% if status.last_export_at %}
-          <p style="color:#216443;font-weight:800">✅ Companion export received {{ status.last_export_at }}</p>
-        {% else %}
-          <p style="color:#6d7480">Waiting for your first Madden Companion export.</p>
-        {% endif %}
-      </div>
-    </div>
-
-    <div class="legal">
-      Project Madden uses EA's normal sign-in page and does not request or store your EA password.
-    </div>
-  </div>
-
-  <div class="footer">Built for Project Madden • Thanks to Developer Jay</div>
+<div class="notice">
+<b>Data flow:</b> EA → Snallabot → Project Madden.<br>
+Snallabot handles the EA login, Madden persona, league discovery, and token refresh. Project Madden receives the exported league data and powers your dashboard/Discord features.
 </div>
 
-<script>
-const validateUrl = "/dashboard/ea-companion/validate/{{ guild.setup_token }}";
-const input = document.getElementById("eaRedirect");
-const button = document.getElementById("continueBtn");
-const statusEl = document.getElementById("urlStatus");
-const exportBox = document.getElementById("exportBox");
+<div class="step">
+<h2><span class="num">1</span>Connect Madden in Snallabot</h2>
+<p class="muted">Open Snallabot's dashboard. Complete the EA login flow there, select your Madden persona, then select the Franchise league you want to use.</p>
+<div class="actions">
+<a class="btn primary" href="{{ connect_url }}" target="_blank" rel="noopener">OPEN SNALLABOT EA CONNECTOR</a>
+</div>
+</div>
 
-async function checkValue(){
-  const value=input.value.trim();
+<div class="step">
+<h2><span class="num">2</span>Link that league to Project Madden</h2>
+<form method="post" action="/dashboard/snallabot-ea/save/{{ guild.setup_token }}">
+<label>Snallabot League ID</label>
+<input name="league_id" value="{{ status.league_id or '' }}" placeholder="Example: 1360051" inputmode="numeric" required>
 
-  if(!value){
-    button.disabled=true;
-    statusEl.className="status";
-    statusEl.textContent="";
-    return;
-  }
+<label>Platform</label>
+<select name="platform">
+{% for value,label in platforms %}
+<option value="{{ value }}" {% if status.platform == value %}selected{% endif %}>{{ label }}</option>
+{% endfor %}
+</select>
 
-  try{
-    const res=await fetch(validateUrl,{
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({url:value})
-    });
-    const data=await res.json();
+<button class="btn green" type="submit" style="margin-top:18px">SAVE SNALLABOT CONNECTION</button>
+</form>
+</div>
 
-    if(data.valid){
-      button.disabled=false;
-      statusEl.className="status good";
-      statusEl.textContent=data.code_present
-        ? "Local EA redirect detected. Authorization code is present."
-        : "Local EA redirect detected.";
-    }else{
-      button.disabled=true;
-      statusEl.className="status bad";
-      statusEl.textContent=data.error || "That does not look like a valid local EA redirect.";
-    }
-  }catch(err){
-    button.disabled=true;
-    statusEl.className="status bad";
-    statusEl.textContent="Could not validate the URL.";
-  }
-}
+{% if status.connected %}
+<div class="step">
+<h2><span class="num">3</span>Send Snallabot exports to Project Madden</h2>
+<div class="ok">✅ Snallabot league {{ status.league_id }} is linked to this Project Madden server.</div>
 
-async function pasteRedirect(){
-  try{
-    const text=await navigator.clipboard.readText();
-    input.value=text;
-    checkValue();
-  }catch(err){
-    input.focus();
-  }
-}
+<p class="muted">Use the Project Madden receiver as the export destination in Snallabot:</p>
+<div class="receiver">{{ status.project_madden_receiver }}</div>
 
-async function continueSetup(){
-  if(button.disabled) return;
+<div class="actions">
+<a class="btn primary" href="{{ status.snallabot_league_dashboard }}" target="_blank" rel="noopener">OPEN SNALLABOT LEAGUE DASHBOARD</a>
+<a class="btn secondary" href="/dashboard/setup/{{ guild.setup_token }}">BACK TO PROJECT MADDEN</a>
+</div>
 
-  {% if ea_oauth_configured %}
-  try{
-    const res=await fetch("/dashboard/ea-oauth/exchange/{{ guild.setup_token }}",{
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({url:input.value.trim()})
-    });
+<div class="grid" style="margin-top:18px">
+<div class="box"><div class="small">EA Authentication</div><div class="value">Handled by Snallabot</div></div>
+<div class="box"><div class="small">Project Madden Source</div><div class="value">Snallabot Exports</div></div>
+<div class="box"><div class="small">League ID</div><div class="value">{{ status.league_id }}</div></div>
+<div class="box"><div class="small">Platform</div><div class="value">{{ status.platform|upper }}</div></div>
+</div>
+</div>
+{% else %}
+<div class="wait">Complete steps 1 and 2 to activate the Project Madden receiver.</div>
+{% endif %}
 
-    const data=await res.json();
-
-    if(!res.ok){
-      statusEl.className="status bad";
-      statusEl.textContent=data.error || "EA authorization could not be completed.";
-      return;
-    }
-
-    statusEl.className="status good";
-    statusEl.textContent=data.message || "EA authorization completed.";
-  }catch(err){
-    statusEl.className="status bad";
-    statusEl.textContent="EA authorization could not be completed.";
-    return;
-  }
-  {% endif %}
-
-  exportBox.style.display="block";
-  exportBox.scrollIntoView({behavior:"smooth",block:"center"});
-}
-
-input.addEventListener("input",checkValue);
-</script>
+</div>
+<div class="footer">Built for Project Madden • Thanks to Developer Jay</div>
+</div>
 </body>
 </html>
 """
 
 
-
 @app.route(
-    "/dashboard/ea-companion/<setup_token>"
+    "/dashboard/snallabot-ea/<setup_token>"
 )
-def project_madden_ea_companion_page(
+def project_madden_snallabot_ea_page(
     setup_token
 ):
     guild = get_guild_config_by_token(
@@ -26556,36 +25598,43 @@ def project_madden_ea_companion_page(
             404
         )
 
-    status = ea_companion_get_status(
-        guild.get(
-            "guild_id"
-        )
+    status = snallabot_bridge_status(
+        guild
     )
 
     return render_template_string(
-        EA_COMPANION_CONNECT_HTML,
+        SNALLABOT_EA_BRIDGE_HTML,
         guild=guild,
-        ea_login_url=(
-            ea_oauth_authorize_url()
-            or "https://www.ea.com/login"
+        status=status,
+        connect_url=snallabot_ea_connect_url(
+            guild.get(
+                "guild_id"
+            )
         ),
-        ea_oauth_configured=ea_oauth_configured(),
-        export_url=ea_companion_export_url(
-            setup_token
-        ),
-        status=status
+        platforms=[
+            (
+                "xbsx",
+                "Xbox Series X|S"
+            ),
+            (
+                "ps5",
+                "PlayStation 5"
+            ),
+            (
+                "pc",
+                "PC"
+            )
+        ]
     )
 
 
-
-
 @app.route(
-    "/dashboard/ea-oauth/exchange/<setup_token>",
+    "/dashboard/snallabot-ea/save/<setup_token>",
     methods=[
         "POST"
     ]
 )
-def project_madden_ea_oauth_exchange(
+def project_madden_snallabot_ea_save(
     setup_token
 ):
     guild = get_guild_config_by_token(
@@ -26593,189 +25642,88 @@ def project_madden_ea_oauth_exchange(
     )
 
     if not guild:
-        return jsonify({
-            "success":
-                False,
-            "error":
-                "Invalid or expired setup link."
-        }), 404
-
-    if not ea_oauth_configured():
-        return jsonify({
-            "success":
-                False,
-            "configured":
-                False,
-            "error":
-                (
-                    "A legitimate EA OAuth client has not been configured "
-                    "for Project Madden yet."
-                )
-        }), 503
-
-    payload = request.get_json(
-        silent=True
-    ) or {}
-
-    parsed = parse_ea_localhost_redirect(
-        payload.get(
-            "url"
+        return (
+            "Invalid or expired Project Madden setup link.",
+            404
         )
-    )
 
-    if not parsed.get(
-        "valid"
-    ):
-        return jsonify(
-            parsed
-        ), 400
-
-    raw = str(
-        payload.get(
-            "url"
+    league_id = str(
+        request.form.get(
+            "league_id",
+            ""
         )
-        or ""
     ).strip()
 
-    try:
-        parsed_url = urlparse(
-            raw
+    platform = str(
+        request.form.get(
+            "platform",
+            "xbsx"
+        )
+    ).strip().lower()
+
+    if not re.fullmatch(
+        r"\d+",
+        league_id
+    ):
+        return (
+            "Snallabot League ID must be numeric.",
+            400
         )
 
-        auth_code = (
-            parse_qs(
-                parsed_url.query
-            )
-            .get(
-                "code",
-                [
-                    None
-                ]
-            )[
-                0
-            ]
+    if platform not in [
+        "xbsx",
+        "ps5",
+        "pc"
+    ]:
+        return (
+            "Unsupported platform.",
+            400
         )
 
-    except Exception:
-        auth_code = None
-
-    if not auth_code:
-        return jsonify({
-            "success":
-                False,
-            "error":
-                "No OAuth authorization code was present in the localhost URL."
-        }), 400
-
-    try:
-        response = requests.post(
-            EA_OAUTH_TOKEN_URL,
-            data={
-                "grant_type":
-                    "authorization_code",
-                "code":
-                    auth_code,
-                "client_id":
-                    EA_OAUTH_CLIENT_ID,
-                "client_secret":
-                    EA_OAUTH_CLIENT_SECRET,
-                "redirect_uri":
-                    EA_OAUTH_REDIRECT_URI
-            },
-            headers={
-                "Accept":
-                    "application/json",
-                "User-Agent":
-                    "ProjectMaddenAnalytics/1.0"
-            },
-            timeout=20
-        )
-
-        if not response.ok:
-            return jsonify({
-                "success":
-                    False,
-                "error":
-                    "EA rejected the authorization code exchange.",
-                "status_code":
-                    response.status_code
-            }), 400
-
-        token_payload = response.json()
-
-        # Do not persist raw OAuth tokens until Project Madden has a supported
-        # Madden API/data contract to use them with.
-        return jsonify({
-            "success":
-                True,
-            "configured":
-                True,
-            "token_received":
-                bool(
-                    token_payload.get(
-                        "access_token"
-                    )
-                ),
-            "message":
-                (
-                    "EA authorization completed. Project Madden intentionally "
-                    "does not store the token yet because EA does not currently "
-                    "publish a supported Madden Franchise API for this connector."
-                )
-        })
-
-    except Exception as e:
-        return jsonify({
-            "success":
-                False,
-            "error":
-                str(
-                    e
-                )
-        }), 500
-
-
-@app.route(
-    "/dashboard/ea-companion/validate/<setup_token>",
-    methods=[
-        "POST"
-    ]
-)
-def project_madden_ea_companion_validate(
-    setup_token
-):
-    guild = get_guild_config_by_token(
-        setup_token
-    )
-
-    if not guild:
-        return jsonify({
-            "valid":
-                False,
-            "error":
-                "Invalid or expired setup link."
-        }), 404
-
-    payload = request.get_json(
-        silent=True
-    ) or {}
-
-    result = parse_ea_localhost_redirect(
-        payload.get(
-            "url"
+    settings = dict(
+        guild.get(
+            "settings",
+            {}
         )
     )
 
-    # Do not store the raw redirect URL or authorization code.
-    return jsonify(
-        result
+    settings[
+        "data_source"
+    ] = "snallabot"
+
+    settings[
+        "ea_connector"
+    ] = "snallabot"
+
+    saved = save_guild_setup(
+        guild.get(
+            "guild_id"
+        ),
+        guild.get(
+            "league_name",
+            ""
+        ),
+        league_id,
+        platform,
+        settings
+    )
+
+    if not saved:
+        return (
+            "Project Madden could not save the Snallabot connection.",
+            500
+        )
+
+    return redirect(
+        f"/dashboard/snallabot-ea/{setup_token}",
+        code=302
     )
 
 
 @app.route(
-    "/dashboard/ea-companion/status/<setup_token>"
+    "/dashboard/snallabot-ea/status/<setup_token>"
 )
-def project_madden_ea_companion_status(
+def project_madden_snallabot_ea_status(
     setup_token
 ):
     guild = get_guild_config_by_token(
@@ -26790,129 +25738,14 @@ def project_madden_ea_companion_status(
                 "Invalid or expired setup token."
         }), 404
 
-    status = ea_companion_get_status(
-        guild.get(
-            "guild_id"
-        )
-    )
-
     return jsonify({
         "success":
             True,
-        "source":
-            (
-                "ea_companion_direct"
-                if status.get(
-                    "last_export_at"
-                )
-                else "waiting"
-            ),
-        "export_url":
-            ea_companion_export_url(
-                setup_token
-            ),
-        "status":
-            status
-    })
-
-
-@app.route(
-    "/ea-export/<setup_token>",
-    defaults={
-        "subpath":
-            ""
-    },
-    methods=[
-        "GET",
-        "POST",
-        "PUT"
-    ]
-)
-@app.route(
-    "/ea-export/<setup_token>/<path:subpath>",
-    methods=[
-        "GET",
-        "POST",
-        "PUT"
-    ]
-)
-def ea_companion_direct_receiver(
-    setup_token,
-    subpath
-):
-    guild = get_guild_config_by_token(
-        setup_token
-    )
-
-    if not guild:
-        return jsonify({
-            "success":
-                False,
-            "error":
-                "Invalid Project Madden export URL."
-        }), 404
-
-    if request.method == "GET":
-        return jsonify({
-            "success":
-                True,
-            "service":
-                "Project Madden EA Companion Direct",
-            "guild_id":
-                guild.get(
-                    "guild_id"
-                ),
-            "path":
-                subpath,
-            "message":
-                "Export receiver is online."
-        })
-
-    payload = request.get_json(
-        silent=True
-    )
-
-    if payload is None:
-        raw = request.get_data(
-            cache=False,
-            as_text=True
-        )
-
-        try:
-            payload = json.loads(
-                raw
+        "bridge":
+            snallabot_bridge_status(
+                guild
             )
-        except Exception:
-            payload = {
-                "_raw":
-                    raw
-            }
-
-    try:
-        result = ea_companion_save_export(
-            guild,
-            subpath,
-            payload
-        )
-
-        return jsonify({
-            "success":
-                True,
-            "message":
-                "Project Madden received the Madden Companion export.",
-            "result":
-                result
-        })
-
-    except Exception as e:
-        return jsonify({
-            "success":
-                False,
-            "error":
-                str(
-                    e
-                )
-        }), 500
+    })
 
 
 # =========================================================
