@@ -71,7 +71,7 @@ GOTW_POLL_CLOSE_SECONDS = 300
 INJURY_HISTORY_FILE = "injury_history.json"
 INJURY_MAJOR_OVR = 85
 
-PROJECT_MADDEN_APP_VERSION = "v26-setup-storage-fix"
+PROJECT_MADDEN_APP_VERSION = "v28-dashboard-v3-channel-creator"
 
 
 
@@ -155,6 +155,616 @@ def ensure_multi_server_db():
                 )
             )
             return False
+
+
+
+def fetch_discord_guild_channels(
+    guild_id
+):
+    token = discord_bot_token()
+
+    if (
+        not token
+        or not guild_id
+    ):
+        return []
+
+    try:
+        response = requests.get(
+            (
+                "https://discord.com/api/v10/"
+                f"guilds/{guild_id}/channels"
+            ),
+            headers={
+                "Authorization":
+                    f"Bot {token}"
+            },
+            timeout=10
+        )
+
+        if response.status_code != 200:
+            print(
+                "DISCORD CHANNEL FETCH ERROR:",
+                response.status_code,
+                response.text[:300]
+            )
+            return []
+
+        payload = response.json()
+
+        return (
+            payload
+            if isinstance(
+                payload,
+                list
+            )
+            else []
+        )
+
+    except Exception as e:
+        print(
+            "DISCORD CHANNEL FETCH EXCEPTION:",
+            repr(
+                e
+            )
+        )
+        return []
+
+
+def normalize_discord_channel_name(
+    value
+):
+    text = str(
+        value
+        or ""
+    ).strip().lower()
+
+    text = re.sub(
+        r"[^a-z0-9]+",
+        "-",
+        text
+    )
+
+    return re.sub(
+        r"-+",
+        "-",
+        text
+    ).strip("-")
+
+
+def best_discord_channel_match(
+    channels,
+    aliases,
+    allowed_types
+):
+    aliases = [
+        normalize_discord_channel_name(
+            alias
+        )
+        for alias in aliases
+    ]
+
+    candidates = [
+        item
+        for item in channels
+        if (
+            isinstance(
+                item,
+                dict
+            )
+            and int(
+                item.get(
+                    "type",
+                    -1
+                )
+            )
+            in allowed_types
+        )
+    ]
+
+    # Exact normalized-name match first.
+    for alias in aliases:
+        for item in candidates:
+            if (
+                normalize_discord_channel_name(
+                    item.get(
+                        "name"
+                    )
+                )
+                == alias
+            ):
+                return item
+
+    # Then a contains match.
+    for alias in aliases:
+        for item in candidates:
+            name = normalize_discord_channel_name(
+                item.get(
+                    "name"
+                )
+            )
+
+            if (
+                alias
+                and (
+                    alias in name
+                    or name in alias
+                )
+            ):
+                return item
+
+    return None
+
+
+
+def create_discord_channel(
+    guild_id,
+    name,
+    channel_type=0,
+    parent_id=None,
+    topic=None
+):
+    token = discord_bot_token()
+
+    if (
+        not token
+        or not guild_id
+    ):
+        return {
+            "success":
+                False,
+            "error":
+                "DISCORD_BOT_TOKEN or guild ID is missing."
+        }
+
+    payload = {
+        "name":
+            safe_discord_channel_name(
+                name
+            ),
+        "type":
+            int(
+                channel_type
+            )
+    }
+
+    if (
+        parent_id
+        and re.fullmatch(
+            r"\d{15,22}",
+            str(
+                parent_id
+            )
+        )
+    ):
+        payload[
+            "parent_id"
+        ] = str(
+            parent_id
+        )
+
+    if topic:
+        payload[
+            "topic"
+        ] = str(
+            topic
+        )[:1024]
+
+    try:
+        response = requests.post(
+            (
+                "https://discord.com/api/v10/"
+                f"guilds/{guild_id}/channels"
+            ),
+            headers={
+                "Authorization":
+                    f"Bot {token}",
+                "Content-Type":
+                    "application/json"
+            },
+            json=payload,
+            timeout=15
+        )
+
+        if response.status_code not in [
+            200,
+            201
+        ]:
+            return {
+                "success":
+                    False,
+                "status_code":
+                    response.status_code,
+                "error":
+                    response.text[:500]
+            }
+
+        data = response.json()
+
+        return {
+            "success":
+                True,
+            "channel": {
+                "id":
+                    str(
+                        data.get(
+                            "id"
+                        )
+                    ),
+                "name":
+                    data.get(
+                        "name"
+                    ),
+                "type":
+                    data.get(
+                        "type"
+                    ),
+                "parent_id":
+                    data.get(
+                        "parent_id"
+                    )
+            }
+        }
+
+    except Exception as e:
+        return {
+            "success":
+                False,
+            "error":
+                str(
+                    e
+                )
+        }
+
+
+def create_project_madden_channel_bundle(
+    guild_id,
+    create_category=True,
+    create_gotw=True,
+    create_hof=True,
+    create_injuries=True,
+    create_weekly_show=True
+):
+    guild_id = str(
+        guild_id
+        or ""
+    ).strip()
+
+    if not guild_id:
+        return {
+            "success":
+                False,
+            "error":
+                "Missing Discord server ID."
+        }
+
+    results = {}
+    category_id = None
+
+    if create_category:
+        category_result = create_discord_channel(
+            guild_id,
+            "project-madden",
+            channel_type=4
+        )
+
+        results[
+            "category"
+        ] = category_result
+
+        if category_result.get(
+            "success"
+        ):
+            category_id = (
+                category_result
+                .get(
+                    "channel",
+                    {}
+                )
+                .get(
+                    "id"
+                )
+            )
+
+    specs = []
+
+    if create_gotw:
+        specs.append(
+            (
+                "gotw",
+                "gotw",
+                "Project Madden Game of the Week voting and announcements."
+            )
+        )
+
+    if create_hof:
+        specs.append(
+            (
+                "hall_of_fame",
+                "hall-of-fame",
+                "Project Madden Hall of Fame announcements and profiles."
+            )
+        )
+
+    if create_injuries:
+        specs.append(
+            (
+                "injuries",
+                "injuries",
+                "Project Madden league-wide injury reports and updates."
+            )
+        )
+
+    if create_weekly_show:
+        specs.append(
+            (
+                "weekly_show",
+                "weekly-show",
+                "Project Madden Weekly Show, analyst reactions, and media."
+            )
+        )
+
+    for key, name, topic in specs:
+        results[
+            key
+        ] = create_discord_channel(
+            guild_id,
+            name,
+            channel_type=0,
+            parent_id=category_id,
+            topic=topic
+        )
+
+    created = {
+        key:
+            value.get(
+                "channel"
+            )
+        for key, value in results.items()
+        if (
+            isinstance(
+                value,
+                dict
+            )
+            and value.get(
+                "success"
+            )
+        )
+    }
+
+    failures = {
+        key:
+            value
+        for key, value in results.items()
+        if (
+            isinstance(
+                value,
+                dict
+            )
+            and not value.get(
+                "success"
+            )
+        )
+    }
+
+    return {
+        "success":
+            len(
+                failures
+            )
+            == 0,
+        "created":
+            created,
+        "failures":
+            failures,
+        "results":
+            results
+    }
+
+
+def detect_discord_setup(
+    guild_id
+):
+    guild_id = str(
+        guild_id
+        or ""
+    ).strip()
+
+    channels = fetch_discord_guild_channels(
+        guild_id
+    )
+
+    guild_name = fetch_discord_guild_name(
+        guild_id
+    )
+
+    text_channels = [
+        {
+            "id":
+                str(
+                    item.get(
+                        "id"
+                    )
+                ),
+            "name":
+                str(
+                    item.get(
+                        "name"
+                    )
+                    or "unnamed-channel"
+                ),
+            "type":
+                int(
+                    item.get(
+                        "type",
+                        0
+                    )
+                )
+        }
+        for item in channels
+        if (
+            isinstance(
+                item,
+                dict
+            )
+            and int(
+                item.get(
+                    "type",
+                    -1
+                )
+            )
+            in [
+                0,   # guild text
+                5,   # announcement
+                15   # forum
+            ]
+        )
+    ]
+
+    categories = [
+        {
+            "id":
+                str(
+                    item.get(
+                        "id"
+                    )
+                ),
+            "name":
+                str(
+                    item.get(
+                        "name"
+                    )
+                    or "unnamed-category"
+                ),
+            "type":
+                4
+        }
+        for item in channels
+        if (
+            isinstance(
+                item,
+                dict
+            )
+            and int(
+                item.get(
+                    "type",
+                    -1
+                )
+            )
+            == 4
+        )
+    ]
+
+    suggestions = {}
+
+    match_specs = {
+        "gotw_channel_id": (
+            [
+                "gotw",
+                "game-of-the-week",
+                "gameoftheweek",
+                "game-week"
+            ],
+            [
+                0,
+                5,
+                15
+            ]
+        ),
+        "hall_of_fame_channel_id": (
+            [
+                "hall-of-fame",
+                "halloffame",
+                "hof"
+            ],
+            [
+                0,
+                5,
+                15
+            ]
+        ),
+        "injury_channel_id": (
+            [
+                "injuries",
+                "injury",
+                "injury-report",
+                "injury-updates"
+            ],
+            [
+                0,
+                5,
+                15
+            ]
+        ),
+        "weekly_show_channel_id": (
+            [
+                "weekly-show",
+                "weeklyshow",
+                "weekly",
+                "media"
+            ],
+            [
+                0,
+                5,
+                15
+            ]
+        ),
+        "hall_of_fame_category_id": (
+            [
+                "hall-of-fame",
+                "halloffame",
+                "hof",
+                "league-office"
+            ],
+            [
+                4
+            ]
+        )
+    }
+
+    for key, (
+        aliases,
+        types
+    ) in match_specs.items():
+        match = best_discord_channel_match(
+            channels,
+            aliases,
+            types
+        )
+
+        if match:
+            suggestions[
+                key
+            ] = str(
+                match.get(
+                    "id"
+                )
+            )
+
+    return {
+        "success":
+            bool(
+                channels
+            ),
+        "guild_id":
+            guild_id,
+        "guild_name":
+            guild_name,
+        "text_channels":
+            text_channels,
+        "categories":
+            categories,
+        "suggestions":
+            suggestions,
+        "channel_count":
+            len(
+                text_channels
+            ),
+        "category_count":
+            len(
+                categories
+            )
+    }
 
 
 def fetch_discord_guild_name(
@@ -23456,32 +24066,116 @@ PROJECT_MADDEN_SETUP_HTML = """
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Connect League • Project Madden</title>
 <style>
-:root{--bg:#070b12;--panel:#101722;--line:#243044;--text:#f4f7fb;--muted:#9facbf;--accent:#55b8ff;--good:#57d38c}
-*{box-sizing:border-box} body{margin:0;background:#070b12;color:var(--text);font-family:Inter,system-ui,-apple-system,sans-serif}
-.wrap{max-width:780px;margin:0 auto;padding:28px 20px 60px}.brand{font-weight:900;font-size:23px;margin-bottom:26px}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:24px}
-h1{margin-top:0} p{color:var(--muted);line-height:1.6} label{display:block;font-size:13px;font-weight:800;margin:18px 0 7px}
-input,select{width:100%;padding:13px 14px;background:#0a1018;border:1px solid var(--line);border-radius:11px;color:var(--text);font-size:16px}
-button{margin-top:22px;width:100%;padding:14px;background:var(--accent);border:0;border-radius:12px;font-weight:900;font-size:16px}
-.ok{background:#10291d;border:1px solid #245b3e;color:#85eeb2;padding:12px;border-radius:10px;margin-bottom:16px}
-.info{background:#0d1824;border:1px solid var(--line);padding:14px;border-radius:12px;margin-top:20px;color:var(--muted);word-break:break-all}
+:root{
+  --bg:#070b12;--panel:#101722;--panel2:#0b111a;--line:#243044;
+  --text:#f4f7fb;--muted:#9facbf;--accent:#55b8ff;--good:#57d38c;
+  --warn:#f4c95d;--purple:#8b5cf6
+}
+*{box-sizing:border-box}
+body{margin:0;background:linear-gradient(180deg,#070b12,#09111b);color:var(--text);
+font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.wrap{max-width:850px;margin:0 auto;padding:28px 18px 70px}
+.brand{font-weight:950;font-size:24px;margin-bottom:24px;letter-spacing:.02em}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:22px;padding:24px;box-shadow:0 20px 60px rgba(0,0,0,.25)}
+h1{margin:0 0 8px;font-size:38px;line-height:1.08}
+p{color:var(--muted);line-height:1.6}
+.server-pill{display:inline-flex;align-items:center;gap:8px;background:#0c1722;border:1px solid var(--line);border-radius:999px;padding:8px 12px;color:#dce7f5;font-size:13px;margin:6px 0 14px}
+.info{background:#0d1824;border:1px solid var(--line);padding:14px;border-radius:12px;margin:14px 0;color:var(--muted);word-break:break-word}
+.auto{background:linear-gradient(135deg,#10283a,#171d39);border:1px solid #315778;border-radius:16px;padding:16px;margin:18px 0}
+.auto-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.auto-title{font-weight:900;font-size:17px}
+.badge{padding:5px 9px;border-radius:999px;background:#162d22;color:#7ee8ac;font-size:11px;font-weight:900}
+.badge.wait{background:#302912;color:#f1d071}
+label{display:block;font-size:13px;font-weight:850;margin:18px 0 7px}
+input,select{width:100%;padding:13px 14px;background:var(--panel2);border:1px solid var(--line);border-radius:11px;color:var(--text);font-size:16px}
+select{appearance:auto}
+button{margin-top:20px;width:100%;padding:14px;background:linear-gradient(135deg,#58baff,#7c62ff);color:#05111c;border:0;border-radius:12px;font-weight:950;font-size:16px}
+button.secondary{margin-top:10px;background:#141d2a;color:#e9f2ff;border:1px solid var(--line)}
+.ok{background:#10291d;border:1px solid #245b3e;color:#85eeb2;padding:12px;border-radius:10px;margin:14px 0}
+.detect-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+.detect-item{background:#0a1119;border:1px solid #243044;border-radius:10px;padding:10px}
+.detect-label{font-size:11px;color:#8fa0b6;text-transform:uppercase;font-weight:900}
+.detect-value{margin-top:4px;font-weight:850;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.note{font-size:12px;color:#8fa0b6;margin-top:6px}
 .footer{text-align:center;color:var(--muted);padding-top:28px;font-size:13px}
+@media(max-width:640px){
+  h1{font-size:34px}.panel{padding:20px}.detect-grid{grid-template-columns:1fr}
+}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="brand">PROJECT MADDEN ANALYTICS</div>
+  <div class="brand">PROJECT MADDEN ANALYTICS <span style="color:#55b8ff">V3</span></div>
   <div class="panel">
     <h1>Connect Your Madden League</h1>
-    <p>Server: <b>{{ guild.guild_name or guild.guild_id }}</b>. This setup page was generated privately from Discord.</p>
-    <div class="info"><b>Important:</b> Snallabot is currently required for Project Madden to receive official Madden league data. The direct EA connector is being researched and is not active yet.</div>
+    <div class="server-pill">🟢 Discord Server: <b id="serverName">{{ guild.guild_name or guild.guild_id }}</b></div>
+
+    <div class="info"><b>Important:</b> Snallabot is currently required for Project Madden to receive official Madden league data. Project Madden can now auto-detect your Discord server and league channels, but the Snallabot League ID still has to be entered until our direct EA connector replaces that dependency.</div>
+
     {% if saved %}<div class="ok">✅ League settings saved.</div>{% endif %}
+
+    <div class="auto">
+      <div class="auto-head">
+        <div>
+          <div class="auto-title">✨ Discord Auto Detect</div>
+          <div class="note">Project Madden scans the server the bot is installed in and tries to match your channels automatically.</div>
+        </div>
+        <span class="badge wait" id="detectBadge">SCANNING</span>
+      </div>
+
+      <div class="detect-grid" id="detectGrid">
+        <div class="detect-item"><div class="detect-label">Server</div><div class="detect-value" id="detServer">Checking…</div></div>
+        <div class="detect-item"><div class="detect-label">Channels</div><div class="detect-value" id="detChannels">Checking…</div></div>
+        <div class="detect-item"><div class="detect-label">GOTW</div><div class="detect-value" id="detGotw">Checking…</div></div>
+        <div class="detect-item"><div class="detect-label">Injuries</div><div class="detect-value" id="detInjuries">Checking…</div></div>
+      </div>
+
+      <button type="button" class="secondary" onclick="runAutoDetect(true)">RUN AUTO DETECT AGAIN</button>
+    </div>
+
+    <div class="auto">
+      <div class="auto-head">
+        <div>
+          <div class="auto-title">🛠️ Create Project Madden Channels</div>
+          <div class="note">If your server does not already have the channels, Project Madden can create them for you.</div>
+        </div>
+        <span class="badge wait" id="createBadge">OPTIONAL</span>
+      </div>
+
+      <div class="detect-grid">
+        <label class="detect-item" style="margin:0;cursor:pointer">
+          <div class="detect-label">Category</div>
+          <div class="detect-value"><input type="checkbox" id="makeCategory" checked style="width:auto"> project-madden</div>
+        </label>
+        <label class="detect-item" style="margin:0;cursor:pointer">
+          <div class="detect-label">Channel</div>
+          <div class="detect-value"><input type="checkbox" id="makeGotw" checked style="width:auto"> #gotw</div>
+        </label>
+        <label class="detect-item" style="margin:0;cursor:pointer">
+          <div class="detect-label">Channel</div>
+          <div class="detect-value"><input type="checkbox" id="makeHof" checked style="width:auto"> #hall-of-fame</div>
+        </label>
+        <label class="detect-item" style="margin:0;cursor:pointer">
+          <div class="detect-label">Channel</div>
+          <div class="detect-value"><input type="checkbox" id="makeInjuries" checked style="width:auto"> #injuries</div>
+        </label>
+        <label class="detect-item" style="margin:0;cursor:pointer">
+          <div class="detect-label">Channel</div>
+          <div class="detect-value"><input type="checkbox" id="makeWeekly" checked style="width:auto"> #weekly-show</div>
+        </label>
+      </div>
+
+      <button type="button" onclick="createChannels()">CREATE SELECTED CHANNELS</button>
+      <div class="note" id="createResult">Requires the Project Madden bot to have Manage Channels permission.</div>
+    </div>
+
     <form method="post">
       <label>League Name</label>
       <input name="league_name" value="{{ guild.league_name or '' }}" placeholder="Project Madden 32" required>
 
       <label>Snallabot League ID</label>
-      <input name="snallabot_league_id" value="{{ guild.snallabot_league_id or '' }}" placeholder="1360051" required>
+      <input name="snallabot_league_id" value="{{ guild.snallabot_league_id or '' }}" placeholder="1360051" inputmode="numeric" required>
+      <div class="note">This is the one piece we cannot reliably pull from Discord itself yet.</div>
 
       <label>Platform</label>
       <select name="platform">
@@ -23490,20 +24184,30 @@ button{margin-top:22px;width:100%;padding:14px;background:var(--accent);border:0
         {% endfor %}
       </select>
 
-      <label>GOTW Channel ID</label>
-      <input name="gotw_channel_id" value="{{ settings.get('gotw_channel_id','') }}" placeholder="Discord channel ID">
+      <label>GOTW Channel</label>
+      <select name="gotw_channel_id" id="gotw_channel_id" data-current="{{ settings.get('gotw_channel_id','') }}">
+        <option value="">Auto detect / Not configured</option>
+      </select>
 
-      <label>Hall of Fame Channel ID</label>
-      <input name="hall_of_fame_channel_id" value="{{ settings.get('hall_of_fame_channel_id','') }}" placeholder="Discord channel ID">
+      <label>Hall of Fame Channel</label>
+      <select name="hall_of_fame_channel_id" id="hall_of_fame_channel_id" data-current="{{ settings.get('hall_of_fame_channel_id','') }}">
+        <option value="">Auto detect / Not configured</option>
+      </select>
 
-      <label>Hall of Fame Category ID</label>
-      <input name="hall_of_fame_category_id" value="{{ settings.get('hall_of_fame_category_id','') }}" placeholder="Discord category ID">
+      <label>Hall of Fame Category</label>
+      <select name="hall_of_fame_category_id" id="hall_of_fame_category_id" data-current="{{ settings.get('hall_of_fame_category_id','') }}">
+        <option value="">Auto detect / Not configured</option>
+      </select>
 
-      <label>Injury Channel ID</label>
-      <input name="injury_channel_id" value="{{ settings.get('injury_channel_id','') }}" placeholder="Discord channel ID">
+      <label>Injury Channel</label>
+      <select name="injury_channel_id" id="injury_channel_id" data-current="{{ settings.get('injury_channel_id','') }}">
+        <option value="">Auto detect / Not configured</option>
+      </select>
 
-      <label>Weekly Show Channel ID</label>
-      <input name="weekly_show_channel_id" value="{{ settings.get('weekly_show_channel_id','') }}" placeholder="Discord channel ID">
+      <label>Weekly Show Channel</label>
+      <select name="weekly_show_channel_id" id="weekly_show_channel_id" data-current="{{ settings.get('weekly_show_channel_id','') }}">
+        <option value="">Auto detect / Not configured</option>
+      </select>
 
       <button type="submit">SAVE LEAGUE CONNECTION</button>
     </form>
@@ -23515,11 +24219,149 @@ button{margin-top:22px;width:100%;padding:14px;background:var(--accent);border:0
     </div>
     {% endif %}
   </div>
+
   <div class="footer">Built for Project Madden • Thanks to Developer Jay</div>
 </div>
+
+<script>
+const autoDetectUrl = "/dashboard/setup/autodetect/{{ guild.setup_token }}";
+const createChannelsUrl = "/dashboard/setup/create-channels/{{ guild.setup_token }}";
+
+function escapeText(value){
+  return String(value ?? "");
+}
+
+function channelNameById(list,id){
+  const found=(list||[]).find(x=>String(x.id)===String(id));
+  return found ? "#" + found.name : "Not found";
+}
+
+function fillSelect(id,items,suggested){
+  const el=document.getElementById(id);
+  if(!el) return;
+
+  const current=el.dataset.current || "";
+  const desired=current || suggested || "";
+
+  el.innerHTML='<option value="">Not configured</option>';
+
+  (items||[]).forEach(item=>{
+    const opt=document.createElement("option");
+    opt.value=String(item.id);
+    opt.textContent=(item.type===4 ? "📁 " : "#") + item.name;
+    if(String(item.id)===String(desired)){
+      opt.selected=true;
+    }
+    el.appendChild(opt);
+  });
+}
+
+async function runAutoDetect(manual=false){
+  const badge=document.getElementById("detectBadge");
+  badge.textContent="SCANNING";
+  badge.className="badge wait";
+
+  try{
+    const res=await fetch(autoDetectUrl,{cache:"no-store"});
+    const data=await res.json();
+
+    if(!res.ok || !data.success){
+      throw new Error(data.error || "Discord channels could not be read.");
+    }
+
+    const text=data.text_channels || [];
+    const cats=data.categories || [];
+    const s=data.suggestions || {};
+
+    if(data.guild_name){
+      document.getElementById("serverName").textContent=data.guild_name;
+      document.getElementById("detServer").textContent=data.guild_name;
+    }else{
+      document.getElementById("detServer").textContent="Connected";
+    }
+
+    document.getElementById("detChannels").textContent=
+      `${data.channel_count || 0} channels • ${data.category_count || 0} categories`;
+
+    document.getElementById("detGotw").textContent=
+      s.gotw_channel_id ? channelNameById(text,s.gotw_channel_id) : "No exact match";
+
+    document.getElementById("detInjuries").textContent=
+      s.injury_channel_id ? channelNameById(text,s.injury_channel_id) : "No exact match";
+
+    fillSelect("gotw_channel_id",text,s.gotw_channel_id);
+    fillSelect("hall_of_fame_channel_id",text,s.hall_of_fame_channel_id);
+    fillSelect("injury_channel_id",text,s.injury_channel_id);
+    fillSelect("weekly_show_channel_id",text,s.weekly_show_channel_id);
+    fillSelect("hall_of_fame_category_id",cats,s.hall_of_fame_category_id);
+
+    badge.textContent="DETECTED";
+    badge.className="badge";
+  }catch(err){
+    badge.textContent="MANUAL";
+    badge.className="badge wait";
+    document.getElementById("detServer").textContent="Could not read";
+    document.getElementById("detChannels").textContent="Check bot permissions";
+    document.getElementById("detGotw").textContent="Choose manually";
+    document.getElementById("detInjuries").textContent="Choose manually";
+    console.error(err);
+  }
+}
+
+
+async function createChannels(){
+  const badge=document.getElementById("createBadge");
+  const resultEl=document.getElementById("createResult");
+
+  badge.textContent="CREATING";
+  badge.className="badge wait";
+  resultEl.textContent="Creating selected Project Madden channels…";
+
+  try{
+    const res=await fetch(createChannelsUrl,{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({
+        create_category:document.getElementById("makeCategory").checked,
+        create_gotw:document.getElementById("makeGotw").checked,
+        create_hof:document.getElementById("makeHof").checked,
+        create_injuries:document.getElementById("makeInjuries").checked,
+        create_weekly_show:document.getElementById("makeWeekly").checked
+      })
+    });
+
+    const data=await res.json();
+
+    if(!res.ok){
+      throw new Error(data.error || "Channel creation failed.");
+    }
+
+    const created=Object.keys(data.created || {});
+    const failed=Object.keys(data.failures || {});
+
+    if(created.length){
+      resultEl.textContent="Created: " + created.join(", ") + (failed.length ? " • Failed: " + failed.join(", ") : "");
+    }else{
+      resultEl.textContent="No channels were created. Check bot Manage Channels permission.";
+    }
+
+    badge.textContent=failed.length ? "PARTIAL" : "CREATED";
+    badge.className=failed.length ? "badge wait" : "badge";
+
+    await runAutoDetect(true);
+  }catch(err){
+    badge.textContent="FAILED";
+    badge.className="badge wait";
+    resultEl.textContent=String(err.message || err);
+  }
+}
+
+document.addEventListener("DOMContentLoaded",()=>runAutoDetect(false));
+</script>
 </body>
 </html>
 """
+
 
 
 @app.route(
@@ -23621,6 +24463,268 @@ def project_madden_setup_start(
             )
         ),
         code=302
+    )
+
+
+
+
+@app.route(
+    "/dashboard/setup/create-channels/<setup_token>",
+    methods=[
+        "POST"
+    ]
+)
+def project_madden_setup_create_channels(
+    setup_token
+):
+    guild = get_guild_config_by_token(
+        setup_token
+    )
+
+    if not guild:
+        return jsonify({
+            "success":
+                False,
+            "error":
+                "Invalid or expired setup token."
+        }), 404
+
+    payload = request.get_json(
+        silent=True
+    ) or {}
+
+    result = create_project_madden_channel_bundle(
+        guild.get(
+            "guild_id"
+        ),
+        create_category=bool(
+            payload.get(
+                "create_category",
+                True
+            )
+        ),
+        create_gotw=bool(
+            payload.get(
+                "create_gotw",
+                True
+            )
+        ),
+        create_hof=bool(
+            payload.get(
+                "create_hof",
+                True
+            )
+        ),
+        create_injuries=bool(
+            payload.get(
+                "create_injuries",
+                True
+            )
+        ),
+        create_weekly_show=bool(
+            payload.get(
+                "create_weekly_show",
+                True
+            )
+        )
+    )
+
+    # Save newly created channel IDs into this server's setup settings.
+    try:
+        current = get_guild_config_by_token(
+            setup_token
+        )
+
+        settings = dict(
+            current.get(
+                "settings",
+                {}
+            )
+            if current
+            else {}
+        )
+
+        created = result.get(
+            "created",
+            {}
+        )
+
+        mapping = {
+            "gotw":
+                "gotw_channel_id",
+            "hall_of_fame":
+                "hall_of_fame_channel_id",
+            "injuries":
+                "injury_channel_id",
+            "weekly_show":
+                "weekly_show_channel_id",
+            "category":
+                "hall_of_fame_category_id"
+        }
+
+        for created_key, setting_key in mapping.items():
+            item = created.get(
+                created_key
+            )
+
+            if (
+                isinstance(
+                    item,
+                    dict
+                )
+                and item.get(
+                    "id"
+                )
+            ):
+                settings[
+                    setting_key
+                ] = str(
+                    item[
+                        "id"
+                    ]
+                )
+
+        if current:
+            save_guild_setup(
+                current.get(
+                    "guild_id"
+                ),
+                current.get(
+                    "league_name",
+                    ""
+                ),
+                current.get(
+                    "snallabot_league_id",
+                    ""
+                ),
+                current.get(
+                    "platform",
+                    ""
+                ),
+                settings
+            )
+
+    except Exception as e:
+        result[
+            "settings_save_error"
+        ] = str(
+            e
+        )
+
+    result[
+        "note"
+    ] = (
+        "The bot must have Manage Channels permission in this Discord server."
+    )
+
+    return jsonify(
+        result
+    )
+
+
+@app.route(
+    "/dashboard/setup/autodetect/<setup_token>",
+    methods=[
+        "GET"
+    ]
+)
+def project_madden_setup_autodetect(
+    setup_token
+):
+    guild = get_guild_config_by_token(
+        setup_token
+    )
+
+    if not guild:
+        return jsonify({
+            "success":
+                False,
+            "error":
+                "Invalid or expired setup token."
+        }), 404
+
+    detected = detect_discord_setup(
+        guild.get(
+            "guild_id"
+        )
+    )
+
+    # If Discord returned the real server name, persist it.
+    if detected.get(
+        "guild_name"
+    ):
+        try:
+            store = _load_guild_store()
+
+            guild_id = str(
+                guild.get(
+                    "guild_id"
+                )
+            )
+
+            current = (
+                store
+                .get(
+                    "guilds",
+                    {}
+                )
+                .get(
+                    guild_id
+                )
+            )
+
+            if isinstance(
+                current,
+                dict
+            ):
+                current[
+                    "guild_name"
+                ] = detected[
+                    "guild_name"
+                ]
+
+                current[
+                    "updated_at"
+                ] = datetime.now(
+                    timezone.utc
+                ).isoformat()
+
+                store[
+                    "guilds"
+                ][
+                    guild_id
+                ] = current
+
+                _save_guild_store(
+                    store
+                )
+        except Exception as e:
+            print(
+                "GUILD NAME AUTODETECT SAVE ERROR:",
+                repr(
+                    e
+                )
+            )
+
+    detected[
+        "snallabot_required"
+    ] = True
+
+    detected[
+        "league_id_auto_detected"
+    ] = False
+
+    detected[
+        "league_id_note"
+    ] = (
+        "Discord channel IDs and the server name can be auto-detected. "
+        "The Snallabot League ID still has to be entered unless the server "
+        "has already been connected, because Discord does not expose "
+        "Snallabot's league mapping."
+    )
+
+    return jsonify(
+        detected
     )
 
 
@@ -23834,6 +24938,14 @@ def project_madden_setup_link_preview(
 )
 def project_madden_setup_health():
     return jsonify({
+        "dashboard_setup_version":
+            "v3-auto-detect",
+        "discord_channel_auto_detect":
+            True,
+        "discord_channel_creator":
+            True,
+        "snallabot_league_id_auto_detect":
+            False,
         "app_version":
             PROJECT_MADDEN_APP_VERSION,
         "database_url_configured":
