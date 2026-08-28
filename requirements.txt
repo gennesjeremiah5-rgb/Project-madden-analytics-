@@ -4,4 +4,3 @@ requests
 PyNaCl
 Pillow
 psycopg[binary]
-cryptography
