@@ -6,6 +6,7 @@ import json
 import os
 import io
 import hashlib
+import hmac
 import uuid
 import re
 import requests
@@ -69,7 +70,7 @@ GOTW_POLL_CLOSE_SECONDS = 300
 INJURY_HISTORY_FILE = "injury_history.json"
 INJURY_MAJOR_OVR = 85
 
-PROJECT_MADDEN_APP_VERSION = "v23-setup-fix-snalla-required"
+PROJECT_MADDEN_APP_VERSION = "v24-setup-hardfix"
 
 
 
@@ -653,6 +654,83 @@ def guild_setup_url(
     return (
         f"{PROJECT_MADDEN_BASE_URL}/dashboard/setup/"
         f"{setup_token}"
+    )
+
+
+def setup_link_secret():
+    """
+    Fast local signing secret for Discord /setup links.
+    No database or external request is needed to generate the link,
+    so Discord receives its response immediately.
+    """
+    explicit = os.environ.get(
+        "PROJECT_MADDEN_SETUP_SECRET",
+        ""
+    ).strip()
+
+    if explicit:
+        return explicit
+
+    return (
+        discord_bot_token()
+        or discord_public_key()
+        or "project-madden-setup-fallback"
+    )
+
+
+def setup_link_signature(
+    guild_id
+):
+    message = str(
+        guild_id
+        or ""
+    ).encode(
+        "utf-8"
+    )
+
+    secret = setup_link_secret().encode(
+        "utf-8"
+    )
+
+    return hmac.new(
+        secret,
+        message,
+        hashlib.sha256
+    ).hexdigest()
+
+
+def setup_start_url(
+    guild_id
+):
+    guild_id = str(
+        guild_id
+        or ""
+    ).strip()
+
+    signature = setup_link_signature(
+        guild_id
+    )
+
+    return (
+        f"{PROJECT_MADDEN_BASE_URL}/dashboard/setup/start/"
+        f"{guild_id}/{signature}"
+    )
+
+
+def valid_setup_start_signature(
+    guild_id,
+    signature
+):
+    expected = setup_link_signature(
+        guild_id
+    )
+
+    return hmac.compare_digest(
+        str(
+            signature
+            or ""
+        ),
+        expected
     )
 
 
@@ -20921,15 +20999,43 @@ def discord_interactions():
             )
 
         if command_name == "setup":
-            threading.Thread(
-                target=process_setup_interaction_background,
-                args=(
-                    interaction,
-                ),
-                daemon=True
-            ).start()
+            guild_id = str(
+                interaction.get(
+                    "guild_id",
+                    ""
+                )
+            ).strip()
 
-            return discord_deferred_ephemeral()
+            if not guild_id:
+                return discord_ephemeral(
+                    "❌ Run /setup inside a Discord server."
+                )
+
+            if not discord_member_can_manage_guild(
+                interaction
+            ):
+                return discord_ephemeral(
+                    "🔒 /setup requires Manage Server or Administrator."
+                )
+
+            # IMPORTANT: no database call, Discord API call, or network
+            # request occurs here. This keeps the response comfortably
+            # inside Discord's acknowledgement window.
+            setup_url = setup_start_url(
+                guild_id
+            )
+
+            return discord_ephemeral(
+                (
+                    "🏈 **PROJECT MADDEN SERVER SETUP**\\n"
+                    "Open your private setup link:\\n"
+                    f"{setup_url}\\n\\n"
+                    "⚠️ **Snallabot is required right now** for official "
+                    "Madden league data. Project Madden's direct EA "
+                    "connector is still being developed.\\n\\n"
+                    "Do not post this private setup link publicly."
+                )
+            )
 
         if command_name == "server":
             threading.Thread(
@@ -21548,6 +21654,103 @@ def discord_test_readiness():
             )
     })
 
+
+
+
+@app.route(
+    "/discord/register-setup",
+    methods=["GET", "POST"]
+)
+def register_setup_commands_only():
+    app_id = discord_application_id()
+    token = discord_bot_token()
+    guild_id = discord_guild_id()
+
+    if not app_id or not token:
+        return jsonify({
+            "success": False,
+            "error": (
+                "DISCORD_APPLICATION_ID or DISCORD_BOT_TOKEN is missing."
+            )
+        }), 500
+
+    commands = [
+        {
+            "name": "setup",
+            "description": (
+                "Server admin: connect this Discord server to Project Madden"
+            )
+        },
+        {
+            "name": "server",
+            "description": (
+                "View this server's Project Madden league connection"
+            )
+        }
+    ]
+
+    headers = {
+        "Authorization": f"Bot {token}",
+        "Content-Type": "application/json"
+    }
+
+    results = {}
+
+    # Upsert individually so this endpoint never deletes the rest of the
+    # Project Madden command set.
+    for scope_name, base in [
+        (
+            "global",
+            f"{DISCORD_API_BASE}/applications/{app_id}/commands"
+        ),
+        (
+            "home_guild",
+            (
+                f"{DISCORD_API_BASE}/applications/{app_id}/guilds/"
+                f"{guild_id}/commands"
+                if guild_id
+                else ""
+            )
+        )
+    ]:
+        if not base:
+            continue
+
+        scope_results = []
+
+        for command in commands:
+            response = requests.post(
+                base,
+                headers=headers,
+                json=command,
+                timeout=15
+            )
+
+            scope_results.append({
+                "command": command["name"],
+                "status_code": response.status_code,
+                "success": response.status_code in [200, 201],
+                "response": (
+                    response.json()
+                    if response.status_code in [200, 201]
+                    else response.text[:500]
+                )
+            })
+
+        results[scope_name] = scope_results
+
+    return jsonify({
+        "success": all(
+            item.get("success")
+            for group in results.values()
+            for item in group
+        ),
+        "results": results,
+        "note": (
+            "This endpoint only upserts /setup and /server and does not "
+            "delete any other Project Madden commands."
+        )
+    })
 
 
 @app.route(
@@ -22848,6 +23051,49 @@ def project_madden_install():
 
 
 @app.route(
+    "/dashboard/setup/start/<guild_id>/<signature>"
+)
+def project_madden_setup_start(
+    guild_id,
+    signature
+):
+    if not valid_setup_start_signature(
+        guild_id,
+        signature
+    ):
+        return (
+            "Invalid Project Madden setup link.",
+            403
+        )
+
+    config = ensure_guild_config(
+        guild_id
+    )
+
+    if not config:
+        return (
+            "<!doctype html><meta name='viewport' "
+            "content='width=device-width,initial-scale=1'>"
+            "<body style='background:#070b12;color:white;"
+            "font-family:system-ui;padding:28px'>"
+            "<h1>Project Madden Setup</h1>"
+            "<p>We could not create the server record.</p>"
+            "<p>Check that Render has a working DATABASE_URL and "
+            "PostgreSQL is reachable, then reload this page.</p>"
+            "<p><b>Snallabot is still required for official Madden "
+            "league data right now.</b></p>"
+            "</body>",
+            503
+        )
+
+    return (
+        "<!doctype html><meta http-equiv='refresh' "
+        f"content='0;url={guild_setup_url(config.get('setup_token'))}'>"
+        "<body>Opening Project Madden setup...</body>"
+    )
+
+
+@app.route(
     "/dashboard/setup/<setup_token>",
     methods=[
         "GET",
@@ -23044,8 +23290,15 @@ def project_madden_setup_health():
             True,
         "direct_ea_connector_status":
             DIRECT_EA_CONNECTOR_STATUS,
+        "setup_link_secret_configured":
+            bool(
+                os.environ.get(
+                    "PROJECT_MADDEN_SETUP_SECRET",
+                    ""
+                ).strip()
+            ),
         "setup_command":
-            "deferred-background-v23"
+            "instant-signed-link-v24"
     })
 
 
