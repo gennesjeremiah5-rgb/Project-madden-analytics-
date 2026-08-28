@@ -56,6 +56,7 @@ PERSISTENT_JSON_FILES = {
     "gotw_poll_history.json",
     "injury_history.json",
     "project_madden_guilds.json",
+    "ea_companion_connections.json",
 }
 
 PERSISTENT_DB_LOCK = threading.Lock()
@@ -71,7 +72,7 @@ GOTW_POLL_CLOSE_SECONDS = 300
 INJURY_HISTORY_FILE = "injury_history.json"
 INJURY_MAJOR_OVR = 85
 
-PROJECT_MADDEN_APP_VERSION = "v31-snallabot-official-source"
+PROJECT_MADDEN_APP_VERSION = "v32-ea-companion-direct"
 
 
 
@@ -1635,18 +1636,726 @@ def ea_connector_configured():
 def project_madden_data_source_status():
     return {
         "official_source":
-            PROJECT_MADDEN_DATA_SOURCE,
+            "ea_companion_direct_or_snallabot",
         "snallabot_required":
+            False,
+        "snallabot_supported":
             True,
-        "direct_ea_connector":
-            PROJECT_MADDEN_DIRECT_EA_STATUS,
-        "direct_ea_enabled":
+        "ea_companion_direct":
+            True,
+        "direct_ea_login":
             False,
         "message":
             (
-                "Snallabot is currently required for official Madden "
-                "league data. Direct EA connection is coming soon."
+                "Project Madden can receive franchise exports directly "
+                "from the official Madden Companion App. Snallabot remains "
+                "supported as an optional fallback."
             )
+    }
+
+
+
+# =========================================================
+# EA COMPANION DIRECT EXPORT CONNECTOR
+# =========================================================
+
+EA_COMPANION_CONNECTIONS_FILE = "ea_companion_connections.json"
+
+
+def load_ea_companion_connections():
+    data = load_json_file(
+        EA_COMPANION_CONNECTIONS_FILE
+    )
+
+    if not isinstance(
+        data,
+        dict
+    ):
+        data = {}
+
+    data.setdefault(
+        "guilds",
+        {}
+    )
+
+    return data
+
+
+def save_ea_companion_connections(
+    data
+):
+    save_json_file(
+        EA_COMPANION_CONNECTIONS_FILE,
+        data
+    )
+
+
+def ea_companion_export_url(
+    setup_token
+):
+    return (
+        f"{PROJECT_MADDEN_BASE_URL}/ea-export/"
+        f"{setup_token}"
+    )
+
+
+def ea_companion_guild_dir(
+    guild_id
+):
+    path = os.path.join(
+        DATA_DIR,
+        "ea_direct",
+        str(
+            guild_id
+        )
+    )
+
+    os.makedirs(
+        path,
+        exist_ok=True
+    )
+
+    return path
+
+
+def ea_companion_update_status(
+    guild,
+    export_type,
+    subpath,
+    extra=None
+):
+    data = load_ea_companion_connections()
+
+    guild_id = str(
+        guild.get(
+            "guild_id"
+        )
+    )
+
+    current = (
+        data[
+            "guilds"
+        ].get(
+            guild_id
+        )
+    )
+
+    if not isinstance(
+        current,
+        dict
+    ):
+        current = {
+            "guild_id":
+                guild_id,
+            "guild_name":
+                guild.get(
+                    "guild_name"
+                ),
+            "league_name":
+                guild.get(
+                    "league_name"
+                ),
+            "exports":
+                {}
+        }
+
+    current[
+        "guild_name"
+    ] = (
+        guild.get(
+            "guild_name"
+        )
+        or current.get(
+            "guild_name"
+        )
+    )
+
+    current[
+        "league_name"
+    ] = (
+        guild.get(
+            "league_name"
+        )
+        or current.get(
+            "league_name"
+        )
+    )
+
+    current[
+        "last_export_at"
+    ] = datetime.now(
+        timezone.utc
+    ).isoformat()
+
+    current[
+        "last_export_type"
+    ] = export_type
+
+    current[
+        "last_subpath"
+    ] = subpath
+
+    exports = current.get(
+        "exports"
+    )
+
+    if not isinstance(
+        exports,
+        dict
+    ):
+        exports = {}
+
+    exports[
+        export_type
+    ] = {
+        "received_at":
+            current[
+                "last_export_at"
+            ],
+        "subpath":
+            subpath
+    }
+
+    if isinstance(
+        extra,
+        dict
+    ):
+        exports[
+            export_type
+        ].update(
+            extra
+        )
+
+    current[
+        "exports"
+    ] = exports
+
+    data[
+        "guilds"
+    ][
+        guild_id
+    ] = current
+
+    save_ea_companion_connections(
+        data
+    )
+
+    return current
+
+
+def ea_companion_get_status(
+    guild_id
+):
+    data = load_ea_companion_connections()
+
+    current = (
+        data
+        .get(
+            "guilds",
+            {}
+        )
+        .get(
+            str(
+                guild_id
+            )
+        )
+    )
+
+    if not isinstance(
+        current,
+        dict
+    ):
+        current = {
+            "guild_id":
+                str(
+                    guild_id
+                ),
+            "exports":
+                {}
+        }
+
+    return current
+
+
+def ea_companion_classify_export(
+    subpath
+):
+    parts = [
+        part
+        for part in str(
+            subpath
+            or ""
+        ).split(
+            "/"
+        )
+        if part
+    ]
+
+    if not parts:
+        return {
+            "type":
+                "unknown"
+        }
+
+    last = parts[
+        -1
+    ].lower()
+
+    if last in [
+        "leagueteams",
+        "teams"
+    ]:
+        return {
+            "type":
+                "leagueteams"
+        }
+
+    if last == "standings":
+        return {
+            "type":
+                "standings"
+        }
+
+    if last in [
+        "extra",
+        "league",
+        "leagueinfo"
+    ]:
+        return {
+            "type":
+                "extra"
+        }
+
+    if (
+        "freeagents"
+        in [
+            item.lower()
+            for item in parts
+        ]
+        and last
+        == "roster"
+    ):
+        return {
+            "type":
+                "freeagents"
+        }
+
+    lowered = [
+        item.lower()
+        for item in parts
+    ]
+
+    if (
+        "team"
+        in lowered
+        and last
+        == "roster"
+    ):
+        team_index = lowered.index(
+            "team"
+        )
+
+        team_id = (
+            parts[
+                team_index + 1
+            ]
+            if len(
+                parts
+            )
+            > team_index + 1
+            else "unknown"
+        )
+
+        return {
+            "type":
+                "roster",
+            "team_id":
+                team_id
+        }
+
+    if "week" in lowered:
+        try:
+            index = lowered.index(
+                "week"
+            )
+
+            return {
+                "type":
+                    "weekly",
+                "season_type":
+                    parts[
+                        index + 1
+                    ].lower(),
+                "week":
+                    int(
+                        parts[
+                            index + 2
+                        ]
+                    ),
+                "stat_type":
+                    parts[
+                        index + 3
+                    ].lower()
+            }
+
+        except Exception:
+            return {
+                "type":
+                    "unknown"
+            }
+
+    # Some Companion exporters use only the dataset name as the path.
+    weekly_names = {
+        "schedules",
+        "teamstats",
+        "passing",
+        "rushing",
+        "receiving",
+        "defense",
+        "kicking",
+        "punting"
+    }
+
+    if last in weekly_names:
+        return {
+            "type":
+                "weekly_unscoped",
+            "stat_type":
+                last
+        }
+
+    return {
+        "type":
+            last
+    }
+
+
+def ea_companion_save_export(
+    guild,
+    subpath,
+    payload
+):
+    classification = ea_companion_classify_export(
+        subpath
+    )
+
+    export_type = classification.get(
+        "type",
+        "unknown"
+    )
+
+    guild_id = str(
+        guild.get(
+            "guild_id"
+        )
+    )
+
+    guild_dir = ea_companion_guild_dir(
+        guild_id
+    )
+
+    # Keep a raw copy for troubleshooting.
+    raw_dir = os.path.join(
+        guild_dir,
+        "raw"
+    )
+
+    os.makedirs(
+        raw_dir,
+        exist_ok=True
+    )
+
+    safe_subpath = re.sub(
+        r"[^a-zA-Z0-9_.-]+",
+        "_",
+        str(
+            subpath
+            or "root"
+        )
+    )[:180]
+
+    raw_path = os.path.join(
+        raw_dir,
+        safe_subpath
+        + ".json"
+    )
+
+    with open(
+        raw_path,
+        "w",
+        encoding="utf-8"
+    ) as f:
+        json.dump(
+            payload,
+            f,
+            indent=2
+        )
+
+    # Save both isolated per-server data and compatibility copies for the
+    # current Project Madden analytics engine.
+    if export_type == "leagueteams":
+        isolated = os.path.join(
+            guild_dir,
+            "leagueteams.json"
+        )
+
+        with open(
+            isolated,
+            "w",
+            encoding="utf-8"
+        ) as f:
+            json.dump(
+                payload,
+                f,
+                indent=2
+            )
+
+        save_json_file(
+            "leagueteams.json",
+            payload
+        )
+
+    elif export_type == "standings":
+        isolated = os.path.join(
+            guild_dir,
+            "standings.json"
+        )
+
+        with open(
+            isolated,
+            "w",
+            encoding="utf-8"
+        ) as f:
+            json.dump(
+                payload,
+                f,
+                indent=2
+            )
+
+        save_json_file(
+            "standings.json",
+            payload
+        )
+
+    elif export_type == "extra":
+        isolated = os.path.join(
+            guild_dir,
+            "extra.json"
+        )
+
+        with open(
+            isolated,
+            "w",
+            encoding="utf-8"
+        ) as f:
+            json.dump(
+                payload,
+                f,
+                indent=2
+            )
+
+        save_json_file(
+            "extra.json",
+            payload
+        )
+
+    elif export_type == "freeagents":
+        isolated = os.path.join(
+            guild_dir,
+            "freeagents_roster.json"
+        )
+
+        with open(
+            isolated,
+            "w",
+            encoding="utf-8"
+        ) as f:
+            json.dump(
+                payload,
+                f,
+                indent=2
+            )
+
+        save_json_file(
+            "freeagents_roster.json",
+            payload
+        )
+
+    elif export_type == "roster":
+        team_id = classification.get(
+            "team_id",
+            "unknown"
+        )
+
+        roster_dir = os.path.join(
+            guild_dir,
+            "rosters"
+        )
+
+        os.makedirs(
+            roster_dir,
+            exist_ok=True
+        )
+
+        isolated = os.path.join(
+            roster_dir,
+            f"roster_{team_id}.json"
+        )
+
+        with open(
+            isolated,
+            "w",
+            encoding="utf-8"
+        ) as f:
+            json.dump(
+                payload,
+                f,
+                indent=2
+            )
+
+        save_json_file(
+            f"roster_{team_id}.json",
+            payload
+        )
+
+        try:
+            process_team_injury_export(
+                team_id,
+                payload
+            )
+        except Exception as e:
+            print(
+                "EA DIRECT INJURY PROCESS ERROR:",
+                repr(
+                    e
+                )
+            )
+
+    elif export_type == "weekly":
+        season_type = classification[
+            "season_type"
+        ]
+
+        week_number = classification[
+            "week"
+        ]
+
+        stat_type = classification[
+            "stat_type"
+        ]
+
+        isolated_week_dir = os.path.join(
+            guild_dir,
+            "weekly",
+            season_type,
+            f"week_{week_number}"
+        )
+
+        os.makedirs(
+            isolated_week_dir,
+            exist_ok=True
+        )
+
+        with open(
+            os.path.join(
+                isolated_week_dir,
+                f"{stat_type}.json"
+            ),
+            "w",
+            encoding="utf-8"
+        ) as f:
+            json.dump(
+                payload,
+                f,
+                indent=2
+            )
+
+        legacy_week_dir = os.path.join(
+            DATA_DIR,
+            "weekly",
+            season_type,
+            f"week_{week_number}"
+        )
+
+        os.makedirs(
+            legacy_week_dir,
+            exist_ok=True
+        )
+
+        with open(
+            os.path.join(
+                legacy_week_dir,
+                f"{stat_type}.json"
+            ),
+            "w",
+            encoding="utf-8"
+        ) as f:
+            json.dump(
+                payload,
+                f,
+                indent=2
+            )
+
+    status = ea_companion_update_status(
+        guild,
+        export_type,
+        subpath,
+        extra=classification
+    )
+
+    # Switch this server's preferred data source after the first successful
+    # Companion export.
+    try:
+        current = get_guild_config(
+            guild_id
+        )
+
+        if current:
+            settings = dict(
+                current.get(
+                    "settings",
+                    {}
+                )
+            )
+
+            settings[
+                "data_source"
+            ] = "ea_companion_direct"
+
+            save_guild_setup(
+                current.get(
+                    "guild_id"
+                ),
+                current.get(
+                    "league_name",
+                    ""
+                ),
+                current.get(
+                    "snallabot_league_id",
+                    ""
+                ),
+                current.get(
+                    "platform",
+                    ""
+                ),
+                settings
+            )
+
+    except Exception as e:
+        print(
+            "EA DIRECT SOURCE SAVE ERROR:",
+            repr(
+                e
+            )
+        )
+
+    return {
+        "success":
+            True,
+        "classification":
+            classification,
+        "status":
+            status
     }
 
 
@@ -24194,14 +24903,14 @@ background:#163323;color:#74e9a8;margin-top:10px}
   <div class="grid" style="margin-bottom:22px">
     <div class="card">
       <div class="muted">CURRENT OFFICIAL DATA SOURCE</div>
-      <div class="kpi" style="font-size:25px">Snallabot</div>
-      <div class="status">OFFICIAL SOURCE</div>
+      <div class="kpi" style="font-size:25px">Companion Direct</div>
+      <div class="status">AVAILABLE</div>
       <p class="muted">Project Madden receives the league exports and powers the dashboard around them.</p>
     </div>
     <div class="card">
-      <div class="muted">PROJECT MADDEN DIRECT EA CONNECTOR</div>
-      <div class="kpi" style="font-size:25px">Coming Soon</div>
-      <div class="status off">DISABLED FOR NOW</div>
+      <div class="muted">SNALLABOT COMPATIBILITY</div>
+      <div class="kpi" style="font-size:25px">Supported</div>
+      <div class="status off">OPTIONAL FALLBACK</div>
       <p class="muted">Goal: connect Madden/EA directly and remove the Snallabot requirement.</p>
     </div>
     <div class="card">
@@ -24309,7 +25018,7 @@ button.secondary{margin-top:10px;background:#141d2a;color:#e9f2ff;border:1px sol
     <h1>Connect Your Madden League</h1>
     <div class="server-pill">🟢 Discord Server: <b id="serverName">{{ guild.guild_name or guild.guild_id }}</b></div>
 
-    <div class="info"><b>Important:</b> Snallabot is currently required for Project Madden to receive official Madden league data. Direct EA connection is coming soon and will not require you to provide a private EA client secret.</div>
+    <div class="info"><b>Important:</b> Project Madden now supports direct Madden Companion exports. Snallabot can stay connected as a fallback, but it is no longer required once your direct Companion export is working.</div>
 
     {% if saved %}<div class="ok">✅ League settings saved.</div>{% endif %}
 
@@ -24358,6 +25067,17 @@ button.secondary{margin-top:10px;background:#141d2a;color:#e9f2ff;border:1px sol
     <div class="auto">
       <div class="auto-head">
         <div>
+          <div class="auto-title">🎮 EA Companion Direct <span style="color:#55b8ff">BETA</span></div>
+          <div class="note">Export straight from the official Madden Companion App into Project Madden. No EA password or private client secret needed.</div>
+        </div>
+        <span class="badge">AVAILABLE</span>
+      </div>
+      <a href="/dashboard/ea-companion/{{ guild.setup_token }}" style="display:block;text-align:center;margin-top:14px;padding:14px;border-radius:12px;background:linear-gradient(135deg,#58baff,#7c62ff);color:#05111c;font-weight:950;text-decoration:none">SET UP DIRECT EA EXPORT</a>
+    </div>
+
+    <div class="auto">
+      <div class="auto-head">
+        <div>
           <div class="auto-title">🛠️ Create Project Madden Channels</div>
           <div class="note">If your server does not already have the channels, Project Madden can create them for you.</div>
         </div>
@@ -24397,7 +25117,7 @@ button.secondary{margin-top:10px;background:#141d2a;color:#e9f2ff;border:1px sol
 
       <label>Snallabot League ID</label>
       <input name="snallabot_league_id" value="{{ guild.snallabot_league_id or '' }}" placeholder="1360051" inputmode="numeric" required>
-      <div class="note">Required for now. Project Madden uses this Snallabot league connection as the official Madden data source.</div>
+      <div class="note">Optional fallback. You can leave this blank after the EA Companion Direct export is connected.</div>
 
       <label>Platform</label>
       <select name="platform">
@@ -25259,12 +25979,14 @@ def project_madden_setup_link_preview(
 def project_madden_setup_health():
     return jsonify({
         "official_madden_data_source":
-            PROJECT_MADDEN_DATA_SOURCE,
+            "ea_companion_direct_or_snallabot",
         "snallabot_required":
+            False,
+        "snallabot_supported":
             True,
-        "direct_ea_connector":
-            PROJECT_MADDEN_DIRECT_EA_STATUS,
-        "direct_ea_enabled":
+        "ea_companion_direct_enabled":
+            True,
+        "direct_ea_login_enabled":
             False,
         "discord_required_permissions_integer":
             discord_required_permissions(),
@@ -25329,6 +26051,244 @@ def project_madden_data_source_status_route():
     return jsonify(
         project_madden_data_source_status()
     )
+
+
+
+# =========================================================
+# EA COMPANION DIRECT EXPORT ROUTES
+# =========================================================
+
+EA_COMPANION_CONNECT_HTML = """
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EA Companion Direct • Project Madden</title>
+<style>
+:root{--bg:#070b12;--panel:#101722;--line:#243044;--text:#f4f7fb;--muted:#9facbf;--accent:#55b8ff;--good:#57d38c;--warn:#f4c95d}
+*{box-sizing:border-box}body{margin:0;background:#070b12;color:var(--text);font-family:Inter,system-ui,-apple-system,sans-serif}
+.wrap{max-width:820px;margin:auto;padding:26px 18px 60px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:24px}
+h1{margin-top:0;font-size:36px}.muted{color:var(--muted);line-height:1.6}.box{background:#0b111a;border:1px solid var(--line);border-radius:14px;padding:16px;margin:14px 0}
+.url{word-break:break-all;background:#071018;border:1px solid var(--line);padding:14px;border-radius:10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.ok{background:#10291d;border:1px solid #245b3e;color:#85eeb2;padding:12px;border-radius:10px}.wait{background:#302912;border:1px solid #5a4b1c;color:#f1d071;padding:12px;border-radius:10px}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.item{background:#081019;border:1px solid var(--line);border-radius:10px;padding:12px}.label{font-size:11px;color:#8fa0b6;text-transform:uppercase;font-weight:900}.value{margin-top:4px;font-weight:800}
+.footer{text-align:center;color:var(--muted);padding-top:24px;font-size:13px}
+@media(max-width:640px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="panel">
+<h1>EA Companion Direct <span style="color:#55b8ff">BETA</span></h1>
+<p class="muted">This is the safe direct connector: Madden Companion exports straight to Project Madden. No EA password, access token, or private client secret is required.</p>
+
+<div class="box">
+<h3>Your Project Madden Export URL</h3>
+<div class="url">{{ export_url }}</div>
+<p class="muted">Open the official Madden Companion App, choose your Franchise, open its export screen, and use this Project Madden URL as the export destination.</p>
+</div>
+
+{% if status.last_export_at %}
+<div class="ok">✅ Project Madden received an EA Companion export at {{ status.last_export_at }}.</div>
+{% else %}
+<div class="wait">Waiting for your first Companion App export…</div>
+{% endif %}
+
+<div class="box">
+<h3>Connection Status</h3>
+<div class="grid">
+  <div class="item"><div class="label">Teams</div><div class="value">{{ "✅ Received" if status.exports.get("leagueteams") else "○ Waiting" }}</div></div>
+  <div class="item"><div class="label">Standings</div><div class="value">{{ "✅ Received" if status.exports.get("standings") else "○ Waiting" }}</div></div>
+  <div class="item"><div class="label">League Info</div><div class="value">{{ "✅ Received" if status.exports.get("extra") else "○ Waiting" }}</div></div>
+  <div class="item"><div class="label">Rosters</div><div class="value">{{ "✅ Received" if status.exports.get("roster") else "○ Waiting" }}</div></div>
+  <div class="item"><div class="label">Free Agents</div><div class="value">{{ "✅ Received" if status.exports.get("freeagents") else "○ Waiting" }}</div></div>
+  <div class="item"><div class="label">Weekly Data</div><div class="value">{{ "✅ Received" if status.exports.get("weekly") else "○ Waiting" }}</div></div>
+</div>
+</div>
+
+<p class="muted"><a href="/dashboard/setup/{{ guild.setup_token }}" style="color:#55b8ff">← Back to server setup</a></p>
+</div>
+<div class="footer">Built for Project Madden • Thanks to Developer Jay</div>
+</div>
+</body>
+</html>
+"""
+
+
+@app.route(
+    "/dashboard/ea-companion/<setup_token>"
+)
+def project_madden_ea_companion_page(
+    setup_token
+):
+    guild = get_guild_config_by_token(
+        setup_token
+    )
+
+    if not guild:
+        return (
+            "Invalid or expired Project Madden setup link.",
+            404
+        )
+
+    status = ea_companion_get_status(
+        guild.get(
+            "guild_id"
+        )
+    )
+
+    return render_template_string(
+        EA_COMPANION_CONNECT_HTML,
+        guild=guild,
+        export_url=ea_companion_export_url(
+            setup_token
+        ),
+        status=status
+    )
+
+
+@app.route(
+    "/dashboard/ea-companion/status/<setup_token>"
+)
+def project_madden_ea_companion_status(
+    setup_token
+):
+    guild = get_guild_config_by_token(
+        setup_token
+    )
+
+    if not guild:
+        return jsonify({
+            "success":
+                False,
+            "error":
+                "Invalid or expired setup token."
+        }), 404
+
+    status = ea_companion_get_status(
+        guild.get(
+            "guild_id"
+        )
+    )
+
+    return jsonify({
+        "success":
+            True,
+        "source":
+            (
+                "ea_companion_direct"
+                if status.get(
+                    "last_export_at"
+                )
+                else "waiting"
+            ),
+        "export_url":
+            ea_companion_export_url(
+                setup_token
+            ),
+        "status":
+            status
+    })
+
+
+@app.route(
+    "/ea-export/<setup_token>",
+    defaults={
+        "subpath":
+            ""
+    },
+    methods=[
+        "GET",
+        "POST",
+        "PUT"
+    ]
+)
+@app.route(
+    "/ea-export/<setup_token>/<path:subpath>",
+    methods=[
+        "GET",
+        "POST",
+        "PUT"
+    ]
+)
+def ea_companion_direct_receiver(
+    setup_token,
+    subpath
+):
+    guild = get_guild_config_by_token(
+        setup_token
+    )
+
+    if not guild:
+        return jsonify({
+            "success":
+                False,
+            "error":
+                "Invalid Project Madden export URL."
+        }), 404
+
+    if request.method == "GET":
+        return jsonify({
+            "success":
+                True,
+            "service":
+                "Project Madden EA Companion Direct",
+            "guild_id":
+                guild.get(
+                    "guild_id"
+                ),
+            "path":
+                subpath,
+            "message":
+                "Export receiver is online."
+        })
+
+    payload = request.get_json(
+        silent=True
+    )
+
+    if payload is None:
+        raw = request.get_data(
+            cache=False,
+            as_text=True
+        )
+
+        try:
+            payload = json.loads(
+                raw
+            )
+        except Exception:
+            payload = {
+                "_raw":
+                    raw
+            }
+
+    try:
+        result = ea_companion_save_export(
+            guild,
+            subpath,
+            payload
+        )
+
+        return jsonify({
+            "success":
+                True,
+            "message":
+                "Project Madden received the Madden Companion export.",
+            "result":
+                result
+        })
+
+    except Exception as e:
+        return jsonify({
+            "success":
+                False,
+            "error":
+                str(
+                    e
+                )
+        }), 500
 
 
 # =========================================================
