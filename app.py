@@ -55,6 +55,7 @@ PERSISTENT_JSON_FILES = {
     "rivalry_history.json",
     "gotw_poll_history.json",
     "injury_history.json",
+    "project_madden_guilds.json",
 }
 
 PERSISTENT_DB_LOCK = threading.Lock()
@@ -70,7 +71,7 @@ GOTW_POLL_CLOSE_SECONDS = 300
 INJURY_HISTORY_FILE = "injury_history.json"
 INJURY_MAJOR_OVR = 85
 
-PROJECT_MADDEN_APP_VERSION = "v25-setup-button-fix"
+PROJECT_MADDEN_APP_VERSION = "v26-setup-storage-fix"
 
 
 
@@ -843,6 +844,504 @@ def guild_config_summary(
 # =========================================================
 # FILE HELPERS
 # =========================================================
+
+# =========================================================
+# V26 MULTI-SERVER STORAGE OVERRIDE
+# Uses the app's already-proven persistent JSON layer instead
+# of requiring a separate project_madden_guilds SQL table.
+# =========================================================
+
+GUILD_CONFIG_FILE = "project_madden_guilds.json"
+
+
+def _load_guild_store():
+    data = load_json_file(
+        GUILD_CONFIG_FILE
+    )
+
+    if not isinstance(
+        data,
+        dict
+    ):
+        data = {}
+
+    guilds = data.get(
+        "guilds"
+    )
+
+    if not isinstance(
+        guilds,
+        dict
+    ):
+        guilds = {}
+
+    data[
+        "guilds"
+    ] = guilds
+
+    return data
+
+
+def _save_guild_store(
+    data
+):
+    save_json_file(
+        GUILD_CONFIG_FILE,
+        data
+    )
+
+    return True
+
+
+def ensure_multi_server_db():
+    """
+    Compatibility name retained for older routes.
+    Multi-server setup now uses the same persistent JSON backend as
+    trades/HOF/receipts. This removes the fragile extra SQL table.
+    """
+    try:
+        data = _load_guild_store()
+
+        _save_guild_store(
+            data
+        )
+
+        return True
+
+    except Exception as e:
+        print(
+            "GUILD STORAGE ERROR:",
+            repr(
+                e
+            )
+        )
+
+        return False
+
+
+def ensure_guild_config(
+    guild_id,
+    guild_name=None
+):
+    guild_id = str(
+        guild_id
+        or ""
+    ).strip()
+
+    if not guild_id:
+        return None
+
+    try:
+        store = _load_guild_store()
+
+        guilds = store[
+            "guilds"
+        ]
+
+        existing = guilds.get(
+            guild_id
+        )
+
+        if not isinstance(
+            existing,
+            dict
+        ):
+            existing = {
+                "guild_id":
+                    guild_id,
+                "guild_name":
+                    guild_name,
+                "setup_token":
+                    uuid.uuid4().hex,
+                "league_name":
+                    "",
+                "snallabot_league_id":
+                    "",
+                "platform":
+                    "",
+                "settings":
+                    {},
+                "created_at":
+                    datetime.now(
+                        timezone.utc
+                    ).isoformat(),
+                "updated_at":
+                    datetime.now(
+                        timezone.utc
+                    ).isoformat()
+            }
+
+        if (
+            not guild_name
+            and not existing.get(
+                "guild_name"
+            )
+        ):
+            # Fetching the Discord name is optional. Setup must still work
+            # if Discord's guild endpoint is unavailable.
+            try:
+                guild_name = fetch_discord_guild_name(
+                    guild_id
+                )
+            except Exception:
+                guild_name = None
+
+        if guild_name:
+            existing[
+                "guild_name"
+            ] = guild_name
+
+        if not existing.get(
+            "setup_token"
+        ):
+            existing[
+                "setup_token"
+            ] = uuid.uuid4().hex
+
+        if not isinstance(
+            existing.get(
+                "settings"
+            ),
+            dict
+        ):
+            existing[
+                "settings"
+            ] = {}
+
+        existing[
+            "updated_at"
+        ] = datetime.now(
+            timezone.utc
+        ).isoformat()
+
+        guilds[
+            guild_id
+        ] = existing
+
+        _save_guild_store(
+            store
+        )
+
+        return existing
+
+    except Exception as e:
+        print(
+            "ENSURE GUILD CONFIG V26 ERROR:",
+            repr(
+                e
+            )
+        )
+
+        return None
+
+
+def get_guild_config(
+    guild_id
+):
+    guild_id = str(
+        guild_id
+        or ""
+    ).strip()
+
+    if not guild_id:
+        return None
+
+    try:
+        store = _load_guild_store()
+
+        config = (
+            store
+            .get(
+                "guilds",
+                {}
+            )
+            .get(
+                guild_id
+            )
+        )
+
+        return (
+            config
+            if isinstance(
+                config,
+                dict
+            )
+            else None
+        )
+
+    except Exception:
+        return None
+
+
+def get_guild_config_by_token(
+    setup_token
+):
+    setup_token = str(
+        setup_token
+        or ""
+    ).strip()
+
+    if not setup_token:
+        return None
+
+    try:
+        store = _load_guild_store()
+
+        for config in (
+            store
+            .get(
+                "guilds",
+                {}
+            )
+            .values()
+        ):
+            if (
+                isinstance(
+                    config,
+                    dict
+                )
+                and str(
+                    config.get(
+                        "setup_token",
+                        ""
+                    )
+                ) == setup_token
+            ):
+                return config
+
+        return None
+
+    except Exception:
+        return None
+
+
+def list_guild_configs():
+    try:
+        store = _load_guild_store()
+
+        configs = [
+            config
+            for config in (
+                store
+                .get(
+                    "guilds",
+                    {}
+                )
+                .values()
+            )
+            if isinstance(
+                config,
+                dict
+            )
+        ]
+
+        configs.sort(
+            key=lambda item: str(
+                item.get(
+                    "guild_name"
+                )
+                or item.get(
+                    "league_name"
+                )
+                or item.get(
+                    "guild_id",
+                    ""
+                )
+            ).lower()
+        )
+
+        return configs
+
+    except Exception:
+        return []
+
+
+def save_guild_setup(
+    guild_id,
+    league_name,
+    snallabot_league_id,
+    platform,
+    settings
+):
+    guild_id = str(
+        guild_id
+        or ""
+    ).strip()
+
+    if not guild_id:
+        return False
+
+    try:
+        store = _load_guild_store()
+
+        guilds = store[
+            "guilds"
+        ]
+
+        config = guilds.get(
+            guild_id
+        )
+
+        if not isinstance(
+            config,
+            dict
+        ):
+            config = ensure_guild_config(
+                guild_id
+            )
+
+            if not config:
+                return False
+
+            store = _load_guild_store()
+
+            guilds = store[
+                "guilds"
+            ]
+
+            config = guilds.get(
+                guild_id,
+                {}
+            )
+
+        config[
+            "league_name"
+        ] = str(
+            league_name
+            or ""
+        ).strip()
+
+        config[
+            "snallabot_league_id"
+        ] = str(
+            snallabot_league_id
+            or ""
+        ).strip()
+
+        config[
+            "platform"
+        ] = str(
+            platform
+            or ""
+        ).strip()
+
+        config[
+            "settings"
+        ] = (
+            dict(
+                settings
+            )
+            if isinstance(
+                settings,
+                dict
+            )
+            else {}
+        )
+
+        config[
+            "updated_at"
+        ] = datetime.now(
+            timezone.utc
+        ).isoformat()
+
+        guilds[
+            guild_id
+        ] = config
+
+        _save_guild_store(
+            store
+        )
+
+        return True
+
+    except Exception as e:
+        print(
+            "SAVE GUILD SETUP V26 ERROR:",
+            repr(
+                e
+            )
+        )
+
+        return False
+
+
+def rotate_guild_setup_token(
+    guild_id
+):
+    guild_id = str(
+        guild_id
+        or ""
+    ).strip()
+
+    if not guild_id:
+        return None
+
+    try:
+        store = _load_guild_store()
+
+        config = (
+            store
+            .get(
+                "guilds",
+                {}
+            )
+            .get(
+                guild_id
+            )
+        )
+
+        if not isinstance(
+            config,
+            dict
+        ):
+            config = ensure_guild_config(
+                guild_id
+            )
+
+            if not config:
+                return None
+
+            store = _load_guild_store()
+
+            config = (
+                store
+                .get(
+                    "guilds",
+                    {}
+                )
+                .get(
+                    guild_id
+                )
+            )
+
+        new_token = uuid.uuid4().hex
+
+        config[
+            "setup_token"
+        ] = new_token
+
+        config[
+            "updated_at"
+        ] = datetime.now(
+            timezone.utc
+        ).isoformat()
+
+        store[
+            "guilds"
+        ][
+            guild_id
+        ] = config
+
+        _save_guild_store(
+            store
+        )
+
+        return new_token
+
+    except Exception:
+        return None
+
+
 
 def local_json_path(filename):
     return os.path.join(
@@ -23106,8 +23605,9 @@ def project_madden_setup_start(
             "font-family:system-ui;padding:28px'>"
             "<h1>Project Madden Setup</h1>"
             "<p>We could not create the server record.</p>"
-            "<p>Check that Render has a working DATABASE_URL and "
-            "PostgreSQL is reachable, then reload this page.</p>"
+            "<p>Project Madden could not write the server configuration. "
+            "Open /dashboard/setup-health for the exact storage status, "
+            "then reload this page.</p>"
             "<p><b>Snallabot is still required for official Madden "
             "league data right now.</b></p>"
             "</body>",
@@ -23344,6 +23844,10 @@ def project_madden_setup_health():
             psycopg is not None,
         "multi_server_database_ready":
             ensure_multi_server_db(),
+        "guild_storage_backend":
+            "persistent_json",
+        "guild_storage_file":
+            GUILD_CONFIG_FILE,
         "discord_application_id_configured":
             bool(
                 discord_application_id()
