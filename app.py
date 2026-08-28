@@ -1,7 +1,7 @@
 from pathlib import Path
 import math
 from io import BytesIO
-from flask import Flask, request, jsonify, render_template_string, send_file
+from flask import Flask, request, jsonify, render_template_string, send_file, redirect
 import json
 import os
 import io
@@ -70,7 +70,7 @@ GOTW_POLL_CLOSE_SECONDS = 300
 INJURY_HISTORY_FILE = "injury_history.json"
 INJURY_MAJOR_OVR = 85
 
-PROJECT_MADDEN_APP_VERSION = "v24-setup-hardfix"
+PROJECT_MADDEN_APP_VERSION = "v25-setup-button-fix"
 
 
 
@@ -18817,6 +18817,33 @@ def discord_ephemeral(content):
     })
 
 
+def discord_ephemeral_link(
+    content,
+    label,
+    url
+):
+    return jsonify({
+        "type": 4,
+        "data": {
+            "content": content,
+            "flags": 64,
+            "components": [
+                {
+                    "type": 1,
+                    "components": [
+                        {
+                            "type": 2,
+                            "style": 5,
+                            "label": str(label)[:80],
+                            "url": str(url)
+                        }
+                    ]
+                }
+            ]
+        }
+    })
+
+
 def handle_trade_autocomplete(interaction):
     options = (
         interaction
@@ -21025,16 +21052,17 @@ def discord_interactions():
                 guild_id
             )
 
-            return discord_ephemeral(
+            return discord_ephemeral_link(
                 (
                     "🏈 **PROJECT MADDEN SERVER SETUP**\\n"
-                    "Open your private setup link:\\n"
-                    f"{setup_url}\\n\\n"
+                    "Tap the button below to open your private setup dashboard.\\n\\n"
                     "⚠️ **Snallabot is required right now** for official "
                     "Madden league data. Project Madden's direct EA "
                     "connector is still being developed.\\n\\n"
-                    "Do not post this private setup link publicly."
-                )
+                    "Do not share the setup button/link publicly."
+                ),
+                "OPEN SETUP DASHBOARD",
+                setup_url
             )
 
         if command_name == "server":
@@ -23086,10 +23114,13 @@ def project_madden_setup_start(
             503
         )
 
-    return (
-        "<!doctype html><meta http-equiv='refresh' "
-        f"content='0;url={guild_setup_url(config.get('setup_token'))}'>"
-        "<body>Opening Project Madden setup...</body>"
+    return redirect(
+        guild_setup_url(
+            config.get(
+                "setup_token"
+            )
+        ),
+        code=302
     )
 
 
@@ -23255,6 +23286,47 @@ def project_madden_servers_api():
             safe_guilds
     })
 
+
+
+@app.route(
+    "/dashboard/setup-link-preview/<guild_id>"
+)
+def project_madden_setup_link_preview(
+    guild_id
+):
+    url = setup_start_url(
+        guild_id
+    )
+
+    return jsonify({
+        "success": bool(
+            url.startswith(
+                "https://"
+            )
+        ),
+        "base_url": PROJECT_MADDEN_BASE_URL,
+        "guild_id": str(
+            guild_id
+        ),
+        "url_scheme": (
+            "https"
+            if url.startswith(
+                "https://"
+            )
+            else "invalid"
+        ),
+        "url_path_present": (
+            "/dashboard/setup/start/"
+            in url
+        ),
+        "message": (
+            "Signed setup URL generated correctly."
+            if url.startswith(
+                "https://"
+            )
+            else "Setup URL is invalid. Check PROJECT_MADDEN_BASE_URL."
+        )
+    })
 
 
 @app.route(
