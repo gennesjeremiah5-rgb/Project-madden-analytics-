@@ -74,7 +74,7 @@ GOTW_POLL_CLOSE_SECONDS = 300
 INJURY_HISTORY_FILE = "injury_history.json"
 INJURY_MAJOR_OVR = 85
 
-PROJECT_MADDEN_APP_VERSION = "v29-ea-direct-connector-beta"
+PROJECT_MADDEN_APP_VERSION = "v30-discord-autodetect-fix"
 
 
 
@@ -178,10 +178,7 @@ def fetch_discord_guild_channels(
                 "https://discord.com/api/v10/"
                 f"guilds/{guild_id}/channels"
             ),
-            headers={
-                "Authorization":
-                    f"Bot {token}"
-            },
+            headers=discord_api_headers(),
             timeout=10
         )
 
@@ -787,10 +784,7 @@ def fetch_discord_guild_name(
                 "https://discord.com/api/v10/"
                 f"guilds/{guild_id}"
             ),
-            headers={
-                "Authorization":
-                    f"Bot {token}"
-            },
+            headers=discord_api_headers(),
             timeout=8
         )
 
@@ -1348,29 +1342,197 @@ def valid_setup_start_signature(
     )
 
 
-def discord_install_url():
+def discord_required_permissions():
+    return 117776
+
+
+def discord_install_url(
+    guild_id=None
+):
     app_id = discord_application_id()
 
     if not app_id:
         return ""
 
-    # Manage Channels + View Channel + Send Messages + Embed Links
-    # + Attach Files + Read Message History.
-    permissions = 117776
+    params = {
+        "client_id": app_id,
+        "permissions": discord_required_permissions(),
+        "integration_type": 0,
+        "scope": "bot applications.commands"
+    }
+
+    guild_id = str(
+        guild_id
+        or ""
+    ).strip()
+
+    if guild_id:
+        params["guild_id"] = guild_id
+        params["disable_guild_select"] = "true"
 
     return (
         "https://discord.com/oauth2/authorize?"
-        + urlencode({
-            "client_id":
-                app_id,
-            "permissions":
-                permissions,
-            "integration_type":
-                0,
-            "scope":
-                "bot applications.commands"
-        })
+        + urlencode(
+            params
+        )
     )
+
+
+def discord_api_headers():
+    return {
+        "Authorization":
+            f"Bot {discord_bot_token()}",
+        "Content-Type":
+            "application/json",
+        "User-Agent":
+            "ProjectMaddenAnalytics/1.0"
+    }
+
+
+def discord_guild_api_diagnostic(
+    guild_id
+):
+    guild_id = str(
+        guild_id
+        or ""
+    ).strip()
+
+    result = {
+        "success": False,
+        "bot_token_configured": bool(
+            discord_bot_token()
+        ),
+        "guild_id": guild_id,
+        "guild_access": False,
+        "channels_access": False,
+        "guild_status_code": None,
+        "channels_status_code": None,
+        "guild_name": None,
+        "channel_count": 0,
+        "error": None
+    }
+
+    if not discord_bot_token():
+        result["error"] = (
+            "DISCORD_BOT_TOKEN is not configured."
+        )
+        return result
+
+    try:
+        r = requests.get(
+            f"https://discord.com/api/v10/guilds/{guild_id}",
+            headers=discord_api_headers(),
+            timeout=10
+        )
+
+        result[
+            "guild_status_code"
+        ] = r.status_code
+
+        if r.status_code == 200:
+            result[
+                "guild_access"
+            ] = True
+
+            payload = r.json()
+
+            result[
+                "guild_name"
+            ] = payload.get(
+                "name"
+            )
+
+    except Exception as e:
+        result[
+            "guild_error"
+        ] = str(
+            e
+        )
+
+    try:
+        r = requests.get(
+            f"https://discord.com/api/v10/guilds/{guild_id}/channels",
+            headers=discord_api_headers(),
+            timeout=10
+        )
+
+        result[
+            "channels_status_code"
+        ] = r.status_code
+
+        if r.status_code == 200:
+            result[
+                "channels_access"
+            ] = True
+
+            payload = r.json()
+
+            if isinstance(
+                payload,
+                list
+            ):
+                result[
+                    "channel_count"
+                ] = len(
+                    payload
+                )
+
+    except Exception as e:
+        result[
+            "channels_error"
+        ] = str(
+            e
+        )
+
+    result[
+        "success"
+    ] = bool(
+        result[
+            "guild_access"
+        ]
+        and result[
+            "channels_access"
+        ]
+    )
+
+    if not result[
+        "success"
+    ]:
+        status = (
+            result.get(
+                "guild_status_code"
+            )
+            or result.get(
+                "channels_status_code"
+            )
+        )
+
+        if status in [
+            403,
+            404
+        ]:
+            result[
+                "error"
+            ] = (
+                "Project Madden's bot is not installed in this "
+                "Discord server or cannot access it."
+            )
+
+        elif status == 401:
+            result[
+                "error"
+            ] = (
+                "Discord rejected the bot token."
+            )
+
+        else:
+            result[
+                "error"
+            ] = (
+                "Project Madden could not read this Discord server."
+            )
+
+    return result
 
 
 def discord_member_can_manage_guild(
@@ -25767,6 +25929,15 @@ button.secondary{margin-top:10px;background:#141d2a;color:#e9f2ff;border:1px sol
       </div>
 
       <button type="button" class="secondary" onclick="runAutoDetect(true)">RUN AUTO DETECT AGAIN</button>
+
+      <div id="discordRepair" style="display:none;margin-top:14px;padding:14px;border:1px solid #6b4e13;background:#2b2410;border-radius:12px">
+        <div style="font-weight:900;color:#ffd66b">Discord Bot Access Required</div>
+        <div class="note" id="discordRepairText" style="margin:7px 0 12px">Project Madden cannot read this server yet.</div>
+        <a id="discordRepairLink" href="#" target="_blank" rel="noopener"
+           style="display:block;text-align:center;padding:12px;border-radius:10px;background:#5865F2;color:white;font-weight:900;text-decoration:none">
+          RECONNECT PROJECT MADDEN BOT
+        </a>
+      </div>
     </div>
 
     <div class="auto">
@@ -25905,12 +26076,50 @@ function fillSelect(id,items,suggested){
 
 async function runAutoDetect(manual=false){
   const badge=document.getElementById("detectBadge");
+  const repair=document.getElementById("discordRepair");
+  const repairText=document.getElementById("discordRepairText");
+  const repairLink=document.getElementById("discordRepairLink");
+
   badge.textContent="SCANNING";
   badge.className="badge wait";
 
   try{
     const res=await fetch(autoDetectUrl,{cache:"no-store"});
     const data=await res.json();
+    const diag=data.discord_diagnostic || {};
+
+    if(data.reinstall_url && repairLink){
+      repairLink.href=data.reinstall_url;
+    }
+
+    if(!diag.success){
+      repair.style.display="block";
+      const guildCode=diag.guild_status_code ?? "—";
+      const channelCode=diag.channels_status_code ?? "—";
+      repairText.textContent=
+        (diag.error || "Project Madden cannot read this Discord server.") +
+        ` Guild API: ${guildCode}; Channels API: ${channelCode}.`;
+
+      document.getElementById("detServer").textContent=
+        guildCode===404 ? "Bot not installed" :
+        guildCode===403 ? "Access denied" :
+        guildCode===401 ? "Bot token rejected" :
+        "Could not read";
+
+      document.getElementById("detChannels").textContent=
+        channelCode===403 ? "Permission denied" :
+        channelCode===404 ? "Bot not installed" :
+        "Unavailable";
+
+      document.getElementById("detGotw").textContent="Reconnect bot";
+      document.getElementById("detInjuries").textContent="Reconnect bot";
+
+      badge.textContent="FIX ACCESS";
+      badge.className="badge wait";
+      return;
+    }
+
+    repair.style.display="none";
 
     if(!res.ok || !data.success){
       throw new Error(data.error || "Discord channels could not be read.");
@@ -25920,12 +26129,10 @@ async function runAutoDetect(manual=false){
     const cats=data.categories || [];
     const s=data.suggestions || {};
 
-    if(data.guild_name){
-      document.getElementById("serverName").textContent=data.guild_name;
-      document.getElementById("detServer").textContent=data.guild_name;
-    }else{
-      document.getElementById("detServer").textContent="Connected";
-    }
+    document.getElementById("serverName").textContent=
+      data.guild_name || diag.guild_name || "Connected Server";
+    document.getElementById("detServer").textContent=
+      data.guild_name || diag.guild_name || "Connected";
 
     document.getElementById("detChannels").textContent=
       `${data.channel_count || 0} channels • ${data.category_count || 0} categories`;
@@ -25945,16 +26152,16 @@ async function runAutoDetect(manual=false){
     badge.textContent="DETECTED";
     badge.className="badge";
   }catch(err){
+    repair.style.display="block";
+    repairText.textContent=String(err.message || err);
     badge.textContent="MANUAL";
     badge.className="badge wait";
     document.getElementById("detServer").textContent="Could not read";
-    document.getElementById("detChannels").textContent="Check bot permissions";
+    document.getElementById("detChannels").textContent="Check Discord access";
     document.getElementById("detGotw").textContent="Choose manually";
     document.getElementById("detInjuries").textContent="Choose manually";
-    console.error(err);
   }
 }
-
 
 async function createChannels(){
   const badge=document.getElementById("createBadge");
@@ -26270,6 +26477,52 @@ def project_madden_setup_create_channels(
 
 
 @app.route(
+    "/dashboard/setup/discord-access/<setup_token>"
+)
+def project_madden_setup_discord_access(
+    setup_token
+):
+    guild = get_guild_config_by_token(
+        setup_token
+    )
+
+    if not guild:
+        return jsonify({
+            "success": False,
+            "error": "Invalid or expired setup token."
+        }), 404
+
+    diagnostic = discord_guild_api_diagnostic(
+        guild.get(
+            "guild_id"
+        )
+    )
+
+    diagnostic[
+        "reinstall_url"
+    ] = discord_install_url(
+        guild.get(
+            "guild_id"
+        )
+    )
+
+    diagnostic[
+        "required_permissions"
+    ] = [
+        "Manage Channels",
+        "View Channels",
+        "Send Messages",
+        "Embed Links",
+        "Attach Files",
+        "Read Message History"
+    ]
+
+    return jsonify(
+        diagnostic
+    )
+
+
+@app.route(
     "/dashboard/setup/autodetect/<setup_token>",
     methods=[
         "GET"
@@ -26290,10 +26543,26 @@ def project_madden_setup_autodetect(
                 "Invalid or expired setup token."
         }), 404
 
+    guild_id = guild.get(
+        "guild_id"
+    )
+
+    discord_diagnostic = discord_guild_api_diagnostic(
+        guild_id
+    )
+
     detected = detect_discord_setup(
-        guild.get(
-            "guild_id"
-        )
+        guild_id
+    )
+
+    detected[
+        "discord_diagnostic"
+    ] = discord_diagnostic
+
+    detected[
+        "reinstall_url"
+    ] = discord_install_url(
+        guild_id
     )
 
     # If Discord returned the real server name, persist it.
@@ -26585,6 +26854,8 @@ def project_madden_setup_link_preview(
 )
 def project_madden_setup_health():
     return jsonify({
+        "discord_required_permissions_integer":
+            discord_required_permissions(),
         "ea_direct_connector_beta":
             True,
         "ea_connector_configured":
