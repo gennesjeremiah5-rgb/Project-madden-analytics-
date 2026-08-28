@@ -52,6 +52,7 @@ PERSISTENT_JSON_FILES = {
     "analyst_receipts.json",
     "rivalry_history.json",
     "gotw_poll_history.json",
+    "injury_history.json",
 }
 
 PERSISTENT_DB_LOCK = threading.Lock()
@@ -64,7 +65,10 @@ LEAGUE_OWNER_TEST_ROLE_ID = "1538749830111694910"
 GOTW_POLL_HISTORY_FILE = "gotw_poll_history.json"
 GOTW_POLL_CLOSE_SECONDS = 300
 
-PROJECT_MADDEN_APP_VERSION = "v19-hof-fast-ack"
+INJURY_HISTORY_FILE = "injury_history.json"
+INJURY_MAJOR_OVR = 85
+
+PROJECT_MADDEN_APP_VERSION = "v21-injury-system"
 
 
 # =========================================================
@@ -974,6 +978,286 @@ def get_team_roster(team_name):
     return team, roster
 
 
+
+def detect_injury_info(record):
+    if not isinstance(record, dict):
+        return {"injured": False}
+
+    def val(keys):
+        return first_value(record, keys)
+
+    injury = val([
+        "injuryType","injuryName","injury","injury_type",
+        "injury_name","injuryDescription","injuryDesc"
+    ])
+    status = val([
+        "injuryStatus","injury_status","healthStatus",
+        "playerStatus","player_status"
+    ])
+    weeks = val([
+        "injuryLength","injuryWeeks","weeksRemaining",
+        "injuryWeeksRemaining","weeksOut","injury_length",
+        "injury_weeks","weeks_remaining"
+    ])
+    reserve = val([
+        "injuryReserve","injuredReserve","isOnIR","onIR",
+        "injury_reserve","injured_reserve"
+    ])
+    flag = val([
+        "isInjured","injured","hasInjury","is_injured","has_injury"
+    ])
+
+    def truthy(x):
+        if isinstance(x, bool):
+            return x
+        if isinstance(x, (int,float)):
+            return x != 0
+        return str(x or "").strip().lower() in {
+            "1","true","yes","injured","out","ir",
+            "injury reserve","injured reserve"
+        }
+
+    try:
+        weeks_i = int(float(weeks)) if weeks is not None else None
+    except Exception:
+        weeks_i = None
+
+    injury_text = str(injury or "").strip()
+    status_text = str(status or "").strip()
+    healthy_words = {"","none","healthy","uninjured","no injury","n/a","na","0"}
+
+    injured = (
+        truthy(flag)
+        or truthy(reserve)
+        or injury_text.lower() not in healthy_words
+        or status_text.lower() in {
+            "injured","out","ir","injury reserve",
+            "injured reserve","questionable","doubtful"
+        }
+        or (weeks_i is not None and weeks_i > 0)
+    )
+
+    return {
+        "injured": bool(injured),
+        "injury": injury_text if injury_text.lower() not in healthy_words else None,
+        "status": status_text or None,
+        "weeks_remaining": weeks_i,
+        "reserve": truthy(reserve),
+        "source_fields": {
+            str(k): v for k,v in record.items()
+            if "injur" in str(k).lower()
+        }
+    }
+
+
+def injury_webhook_url():
+    return os.environ.get("INJURY_DISCORD_WEBHOOK_URL","").strip()
+
+
+def load_injury_history():
+    data=load_json_file(INJURY_HISTORY_FILE)
+    if not isinstance(data,dict):
+        data={}
+    data.setdefault("current_by_team",{})
+    data.setdefault("events",[])
+    return data
+
+
+def save_injury_history(data):
+    data["events"]=list(data.get("events",[]))[-1000:]
+    save_json_file(INJURY_HISTORY_FILE,data)
+
+
+def build_injuries_from_roster_data(team_id, roster_data):
+    team=team_by_id(team_id) or {}
+    team_name=team.get("name") or team.get("displayName") or str(team_id)
+    items=[]
+    seen=set()
+
+    for record in recursive_records(roster_data):
+        name=detect_player_name(record)
+        if not name:
+            continue
+        info=detect_injury_info(record)
+        if not info.get("injured"):
+            continue
+        pos=detect_position(record)
+        key=(name.lower(),str(pos or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append({
+            "team_id":str(team_id),
+            "team":team_name,
+            "player":name,
+            "position":pos,
+            "overall":detect_overall(record),
+            "injury":info.get("injury"),
+            "status":info.get("status"),
+            "weeks_remaining":info.get("weeks_remaining"),
+            "reserve":info.get("reserve"),
+            "source_fields":info.get("source_fields",{})
+        })
+
+    items.sort(key=lambda x:(-(x.get("overall") or 0),x.get("player","")))
+    return items
+
+
+def injury_identity(item):
+    return f"{str(item.get('player','')).lower()}|{str(item.get('position','')).upper()}"
+
+
+def injury_summary_label(item):
+    detail=item.get("injury") or item.get("status") or "Injured"
+    weeks=item.get("weeks_remaining")
+    if weeks is not None and int(weeks)>0:
+        detail += f" • {weeks} week" + ("" if int(weeks)==1 else "s")
+    if item.get("reserve"):
+        detail += " • IR"
+    return detail
+
+
+def send_injury_event(event):
+    webhook=injury_webhook_url()
+    if not webhook:
+        return {"sent":False,"error":"INJURY_DISCORD_WEBHOOK_URL is not configured."}
+
+    p=event.get("player",{})
+    kind=event.get("event_type")
+    title={
+        "new":"🚑 PROJECT MADDEN INJURY REPORT",
+        "updated":"🩺 PROJECT MADDEN INJURY UPDATE",
+        "recovered":"✅ PROJECT MADDEN HEALTH UPDATE"
+    }.get(kind,"🩺 PROJECT MADDEN INJURY UPDATE")
+
+    desc=(
+        f"**{p.get('player')}** ({p.get('team')}) is now listed as injured."
+        if kind=="new" else
+        f"**{p.get('player')}** ({p.get('team')}) is no longer listed as injured."
+        if kind=="recovered" else
+        f"**{p.get('player')}** ({p.get('team')}) has an updated injury status."
+    )
+
+    payload={
+        "username":"Project Madden Injury Report",
+        "embeds":[{
+            "title":title,
+            "description":desc,
+            "fields":[
+                {"name":"Player","value":f"{p.get('position') or '—'} {p.get('player')}","inline":True},
+                {"name":"OVR","value":str(p.get("overall") or "—"),"inline":True},
+                {"name":"Status","value":injury_summary_label(p),"inline":False}
+            ],
+            "footer":{"text":"Detected from the latest Snallabot/Madden roster export"}
+        }]
+    }
+    try:
+        r=requests.post(webhook,json=payload,timeout=15)
+        return {"sent":r.status_code in [200,204],"status_code":r.status_code,
+                "error":"" if r.status_code in [200,204] else r.text[:500]}
+    except Exception as e:
+        return {"sent":False,"error":str(e)}
+
+
+def process_team_injury_export(team_id, roster_data):
+    history=load_injury_history()
+    previous=history["current_by_team"].get(str(team_id),[])
+    current=build_injuries_from_roster_data(team_id,roster_data)
+    old_map={injury_identity(x):x for x in previous if isinstance(x,dict)}
+    new_map={injury_identity(x):x for x in current if isinstance(x,dict)}
+    events=[]
+
+    for key,item in new_map.items():
+        old=old_map.get(key)
+        if old is None:
+            kind="new"
+        else:
+            old_sig=(old.get("injury"),old.get("status"),old.get("weeks_remaining"),bool(old.get("reserve")))
+            new_sig=(item.get("injury"),item.get("status"),item.get("weeks_remaining"),bool(item.get("reserve")))
+            if old_sig==new_sig:
+                continue
+            kind="updated"
+        events.append({
+            "event_type":kind,
+            "detected_at":datetime.now(timezone.utc).isoformat(),
+            "team_id":str(team_id),
+            "player":item
+        })
+
+    for key,item in old_map.items():
+        if key not in new_map:
+            events.append({
+                "event_type":"recovered",
+                "detected_at":datetime.now(timezone.utc).isoformat(),
+                "team_id":str(team_id),
+                "player":item
+            })
+
+    history["current_by_team"][str(team_id)]=current
+    history["events"].extend(events)
+    save_injury_history(history)
+
+    notices=[]
+    for event in events:
+        notices.append(send_injury_event(event))
+        p=event.get("player",{})
+        if event.get("event_type")=="new" and int(p.get("overall") or 0)>=INJURY_MAJOR_OVR:
+            try:
+                send_analyst_embed(
+                    "🚑 INJURY REACTION",
+                    f"**{p.get('player')}** ({p.get('team')}) is listed with **{injury_summary_label(p)}**. "
+                    f"At {p.get('overall')} OVR, that absence can change the entire game plan."
+                )
+            except Exception:
+                pass
+
+    return {"team_id":str(team_id),"current_injuries":current,"events":events,"notifications":notices}
+
+
+def all_current_injuries():
+    data=load_injury_history()
+    items=[]
+    for group in data.get("current_by_team",{}).values():
+        if isinstance(group,list):
+            items.extend(x for x in group if isinstance(x,dict))
+    items.sort(key=lambda x:(-(x.get("overall") or 0),x.get("team",""),x.get("player","")))
+    return items
+
+
+def injury_report_text(limit=25):
+    items=all_current_injuries()
+    if not items:
+        return "🚑 **PROJECT MADDEN INJURY REPORT**\nNo injuries are currently detected from saved roster exports."
+    lines=["🚑 **PROJECT MADDEN INJURY REPORT**"]
+    for x in items[:limit]:
+        lines.append(
+            f"**{x.get('team')} — {x.get('player')}** "
+            f"({x.get('position') or '—'}, {x.get('overall') or '—'} OVR) • {injury_summary_label(x)}"
+        )
+    return "\n".join(lines)
+
+
+@app.route("/injuries")
+def injuries_route():
+    data=load_injury_history()
+    return jsonify({
+        "app_version":PROJECT_MADDEN_APP_VERSION,
+        "injury_count":len(all_current_injuries()),
+        "injuries":all_current_injuries(),
+        "recent_events":list(reversed(data.get("events",[])))[:50]
+    })
+
+
+@app.route("/injuries/status")
+def injuries_status_route():
+    return jsonify({
+        "webhook_configured":bool(injury_webhook_url()),
+        "persistent_storage":INJURY_HISTORY_FILE in PERSISTENT_JSON_FILES,
+        "major_injury_ovr":INJURY_MAJOR_OVR,
+        "current_injury_count":len(all_current_injuries())
+    })
+
+
 def build_roster_index(team_name):
     team, roster = get_team_roster(team_name)
     records = recursive_records(roster)
@@ -1004,12 +1288,19 @@ def build_roster_index(team_name):
 
         seen.add(key)
 
+        injury_info = detect_injury_info(record)
+
         players.append({
             "name": name,
             "position": position,
             "overall": overall,
             "age": age,
-            "dev": detect_dev(record)
+            "dev": detect_dev(record),
+            "injured": injury_info.get("injured"),
+            "injury": injury_info.get("injury"),
+            "injury_status": injury_info.get("status"),
+            "injury_weeks_remaining": injury_info.get("weeks_remaining"),
+            "injury_reserve": injury_info.get("reserve")
         })
 
     players.sort(
@@ -11280,6 +11571,8 @@ def build_weekly_show_summary(
         )
     )
 
+    injuries = all_current_injuries()
+
     show = {
         "season_type":
             season_type,
@@ -11303,6 +11596,8 @@ def build_weekly_show_summary(
             trade_proposals,
         "fan_gotw":
             fan_gotw,
+        "injuries":
+            injuries,
         "playoff_race":
             playoff_race,
         "rivalry_spotlight":
@@ -11780,6 +12075,27 @@ def weekly_show_embed_fields(
                 )[:1024],
             "inline":
                 False
+        })
+
+    injuries = show.get(
+        "injuries",
+        []
+    )
+
+    if injuries:
+        lines = [
+            (
+                f"**{x.get('team')} — {x.get('player')}** "
+                f"({x.get('overall') or '—'} OVR) • "
+                f"{injury_summary_label(x)}"
+            )
+            for x in injuries[:8]
+        ]
+
+        fields.append({
+            "name": "🚑 Injury Report",
+            "value": "\n".join(lines)[:1024],
+            "inline": False
         })
 
     fan_gotw = show.get(
@@ -12359,10 +12675,43 @@ def hall_of_fame_channel_id():
 
 
 def hall_of_fame_category_id():
-    return os.environ.get(
+    raw = os.environ.get(
         "HALL_OF_FAME_CATEGORY_ID",
         ""
     ).strip()
+
+    # Discord category IDs are numeric snowflakes.
+    # If somebody accidentally pastes a webhook URL here,
+    # ignore it instead of letting channel creation fail.
+    if not re.fullmatch(
+        r"\d{15,22}",
+        raw
+    ):
+        return ""
+
+    return raw
+
+
+def hall_of_fame_category_config_issue():
+    raw = os.environ.get(
+        "HALL_OF_FAME_CATEGORY_ID",
+        ""
+    ).strip()
+
+    if not raw:
+        return None
+
+    if re.fullmatch(
+        r"\d{15,22}",
+        raw
+    ):
+        return None
+
+    return (
+        "HALL_OF_FAME_CATEGORY_ID is configured, "
+        "but it is not a valid numeric Discord category ID. "
+        "Channel creation will continue without a parent category."
+    )
 
 
 def safe_discord_channel_name(
@@ -12730,6 +13079,10 @@ def create_hall_of_fame_inductee_channel(
         hall_of_fame_category_id()
     )
 
+    category_warning = (
+        hall_of_fame_category_config_issue()
+    )
+
     if category_id:
         payload[
             "parent_id"
@@ -12778,7 +13131,9 @@ def create_hall_of_fame_inductee_channel(
         "channel_name":
             channel.get(
                 "name"
-            )
+            ),
+        "category_warning":
+            category_warning
     }
 
 
@@ -13205,6 +13560,7 @@ def create_hall_of_fame_test_channel(
     }
 
     category_id = hall_of_fame_category_id()
+    category_warning = hall_of_fame_category_config_issue()
 
     if category_id:
         payload[
@@ -13254,7 +13610,9 @@ def create_hall_of_fame_test_channel(
         "channel_name":
             channel.get(
                 "name"
-            )
+            ),
+        "category_warning":
+            category_warning
     }
 
 
@@ -13388,6 +13746,10 @@ def run_hall_of_fame_test(
         "channel_name":
             channel_result.get(
                 "channel_name"
+            ),
+        "category_warning":
+            channel_result.get(
+                "category_warning"
             ),
         "auto_delete_seconds":
             300,
@@ -14546,6 +14908,13 @@ def hall_of_fame_diagnostics_route():
             bool(
                 hall_of_fame_category_id()
             ),
+        "hall_category_config_valid":
+            (
+                hall_of_fame_category_config_issue()
+                is None
+            ),
+        "hall_category_config_issue":
+            hall_of_fame_category_config_issue(),
         "database_read_ok":
             db_read_ok,
         "database_error":
@@ -14582,6 +14951,8 @@ def hall_of_fame_status_route():
             bool(
                 hall_of_fame_category_id()
             ),
+        "category_config_issue":
+            hall_of_fame_category_config_issue(),
         "dedicated_inductee_channels":
             True,
         "custom_logo_generation":
@@ -16873,6 +17244,8 @@ def expected_project_madden_commands():
         "removehof",
         "hof",
         "hofping",
+        "injuries",
+        "testinjuries",
         "testmarcus",
         "teststephena",
         "weeklyshow",
@@ -17305,6 +17678,18 @@ def register_trade_slash_command():
     }
 
 
+
+    injuries_command = {
+        "name": "injuries",
+        "description": "View the current Project Madden injury report"
+    }
+
+    test_injuries_command = {
+        "name": "testinjuries",
+        "description": "League Owner: test the injury alert system"
+    }
+
+
     test_hof_command = {
         "name":
             "testhof",
@@ -17495,6 +17880,8 @@ def register_trade_slash_command():
         remove_hof_command,
         hof_command,
         hof_ping_command,
+        injuries_command,
+        test_injuries_command,
         test_marcus_command,
         test_stephen_command,
         weekly_show_command,
@@ -19272,6 +19659,19 @@ def process_test_hof_background(
                 "A custom HOF logo and induction profile were posted.\n"
                 "Nothing was saved to the permanent Hall of Fame.\n"
                 "🧹 The test channel will auto-delete in 5 minutes."
+                + (
+                    "\n⚠️ "
+                    + str(
+                        result.get(
+                            "category_warning",
+                            ""
+                        )
+                    )
+                    if result.get(
+                        "category_warning"
+                    )
+                    else ""
+                )
             )
         else:
             content = (
@@ -19663,6 +20063,44 @@ def discord_interactions():
         ):
             return discord_ephemeral(
                 "🔒 Hall of Fame management is locked to @League owner."
+            )
+
+        if command_name == "injuries":
+            return discord_ephemeral(
+                injury_report_text(
+                    25
+                )
+            )
+
+        if command_name == "testinjuries":
+            test_event = {
+                "event_type": "new",
+                "detected_at": datetime.now(timezone.utc).isoformat(),
+                "team_id": "test",
+                "player": {
+                    "team": "Project Madden Test Team",
+                    "player": "Test Player",
+                    "position": "WR",
+                    "overall": 90,
+                    "injury": "Test Injury",
+                    "status": "Out",
+                    "weeks_remaining": 2,
+                    "reserve": False
+                }
+            }
+
+            result = send_injury_event(
+                test_event
+            )
+
+            if result.get("sent"):
+                return discord_ephemeral(
+                    "✅ Injury test sent. This was not saved as a real league injury."
+                )
+
+            return discord_ephemeral(
+                "❌ Injury test failed: "
+                + str(result.get("error","Unknown error"))[:800]
             )
 
         if command_name == "hofping":
@@ -20185,6 +20623,14 @@ def discord_test_readiness():
                 gotw_poll_configured(),
             "needs":
                 "DISCORD_BOT_TOKEN + GOTW_CHANNEL_ID"
+        },
+        "testinjuries": {
+            "ready":
+                bool(
+                    injury_webhook_url()
+                ),
+            "needs":
+                "INJURY_DISCORD_WEBHOOK_URL"
         },
         "testhof": {
             "ready":
@@ -21119,10 +21565,22 @@ def snallabot_receiver(subpath):
             data
         )
 
+        try:
+            injury_result = process_team_injury_export(
+                team_id,
+                data
+            )
+        except Exception as e:
+            injury_result = {
+                "success": False,
+                "error": str(e)
+            }
+
         return jsonify({
             "success": True,
             "type": "roster",
-            "team_id": team_id
+            "team_id": team_id,
+            "injury_tracking": injury_result
         })
 
     if "week" in parts:
