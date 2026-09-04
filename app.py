@@ -12,6 +12,7 @@ import re
 import requests
 from PIL import Image, ImageDraw, ImageFont
 import threading
+from contextvars import ContextVar
 import time
 from nacl.signing import VerifyKey
 from nacl.exceptions import BadSignatureError
@@ -56,6 +57,7 @@ PERSISTENT_JSON_FILES = {
     "gotw_poll_history.json",
     "injury_history.json",
     "project_madden_guilds.json",
+    "project_madden_parlays.json",
 }
 
 PERSISTENT_DB_LOCK = threading.Lock()
@@ -71,7 +73,43 @@ GOTW_POLL_CLOSE_SECONDS = 300
 INJURY_HISTORY_FILE = "injury_history.json"
 INJURY_MAJOR_OVR = 85
 
-PROJECT_MADDEN_APP_VERSION = "v35-snallabot-ea-bridge"
+PROJECT_MADDEN_APP_VERSION = "v39-sportsbook-parlays"
+
+
+PARLAY_HISTORY_FILE = "project_madden_parlays.json"
+SPORTSBOOK_MAX_LEGS = 10
+SPORTSBOOK_MIN_LEGS = 2
+SPORTSBOOK_MIN_WAGER = 10
+SPORTSBOOK_MAX_WAGER = 1000000
+
+UNBELIEVABOAT_API_BASE = os.environ.get(
+    "UNBELIEVABOAT_API_BASE",
+    "https://unbelievaboat.com/api/v1"
+).strip().rstrip("/")
+
+UNBELIEVABOAT_API_TOKEN = os.environ.get(
+    "UNBELIEVABOAT_API_TOKEN",
+    ""
+).strip()
+
+SPORTSBOOK_LOCK = threading.Lock()
+
+
+
+
+# Request-safe guild context used when a Snallabot export triggers automatic
+# analyst/media posts. ContextVar prevents one league request from leaking
+# into another league request.
+CURRENT_PROJECT_MADDEN_GUILD_ID = ContextVar(
+    "current_project_madden_guild_id",
+    default=None
+)
+
+
+def current_project_madden_guild_id():
+    return CURRENT_PROJECT_MADDEN_GUILD_ID.get()
+
+
 
 
 
@@ -497,7 +535,7 @@ def create_project_madden_channel_bundle(
             (
                 "weekly_show",
                 "weekly-show",
-                "Project Madden Weekly Show, analyst reactions, and media."
+                "Project Madden AI Media: Marcus Hayes, Weekly Show, and clearly labeled AI parody analyst segments."
             )
         )
 
@@ -909,6 +947,33 @@ def ensure_guild_config(
             )
         )
         return None
+
+
+
+def get_guild_config_by_snallabot_league(
+    league_id
+):
+    league_id = str(
+        league_id
+        or ""
+    ).strip()
+
+    if not league_id:
+        return None
+
+    for config in list_guild_configs():
+        if (
+            str(
+                config.get(
+                    "snallabot_league_id",
+                    ""
+                )
+            ).strip()
+            == league_id
+        ):
+            return config
+
+    return None
 
 
 def get_guild_config(
@@ -1489,7 +1554,10 @@ def discord_guild_api_diagnostic(
         ]
         and result[
             "channels_access"
-        ]
+        ],
+        guild_id=interaction.get(
+            "guild_id"
+        )
     )
 
     if not result[
@@ -1732,6 +1800,267 @@ def project_madden_snallabot_receiver_base(
         f"{PROJECT_MADDEN_BASE_URL}/snallabot/"
         f"{platform}/{league_id}"
     )
+
+
+
+def discover_snallabot_league_for_guild(
+    guild_id
+):
+    guild_id = str(
+        guild_id
+        or ""
+    ).strip()
+
+    if not guild_id:
+        return {
+            "success": False,
+            "error": "Missing Discord guild ID."
+        }
+
+    try:
+        response = requests.get(
+            snallabot_ea_connect_url(
+                guild_id
+            ),
+            allow_redirects=False,
+            timeout=12,
+            headers={
+                "User-Agent":
+                    "ProjectMaddenAnalytics/1.0"
+            }
+        )
+
+        location = str(
+            response.headers.get(
+                "Location"
+            )
+            or ""
+        )
+
+        match = re.search(
+            r"/dashboard/league/(\d+)",
+            location
+        )
+
+        if not match:
+            return {
+                "success": False,
+                "linked": False,
+                "status_code":
+                    response.status_code,
+                "location":
+                    location or None,
+                "message":
+                    (
+                        "Snallabot has not linked a Madden league to "
+                        "this Discord server yet."
+                    )
+            }
+
+        return {
+            "success": True,
+            "linked": True,
+            "league_id":
+                match.group(
+                    1
+                ),
+            "status_code":
+                response.status_code,
+            "location":
+                location
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "linked": False,
+            "error":
+                str(
+                    e
+                )
+        }
+
+
+def configure_snallabot_project_madden_export(
+    league_id
+):
+    league_id = str(
+        league_id
+        or ""
+    ).strip()
+
+    if not re.fullmatch(
+        r"\d+",
+        league_id
+    ):
+        return {
+            "success": False,
+            "error": "Invalid Snallabot league ID."
+        }
+
+    destination_url = (
+        PROJECT_MADDEN_BASE_URL.rstrip(
+            "/"
+        )
+        + "/snallabot"
+    )
+
+    payload = {
+        "autoUpdate": True,
+        "leagueInfo": True,
+        "rosters": True,
+        "weeklyStats": True,
+        "url": destination_url,
+        "editable": True,
+        "extraData": True
+    }
+
+    try:
+        response = requests.post(
+            (
+                SNALLABOT_DASHBOARD_BASE
+                + "/league/"
+                + league_id
+                + "/updateExport"
+            ),
+            json=payload,
+            timeout=15,
+            headers={
+                "User-Agent":
+                    "ProjectMaddenAnalytics/1.0",
+                "Content-Type":
+                    "application/json"
+            }
+        )
+
+        if not response.ok:
+            return {
+                "success": False,
+                "status_code":
+                    response.status_code,
+                "error":
+                    response.text[:500]
+            }
+
+        return {
+            "success": True,
+            "status_code":
+                response.status_code,
+            "destination":
+                destination_url,
+            "auto_update":
+                True
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error":
+                str(
+                    e
+                )
+        }
+
+
+def auto_link_snallabot_guild(
+    guild
+):
+    discovered = discover_snallabot_league_for_guild(
+        guild.get(
+            "guild_id"
+        )
+    )
+
+    if not discovered.get(
+        "linked"
+    ):
+        return {
+            "success": False,
+            "linked": False,
+            "discovery":
+                discovered
+        }
+
+    league_id = str(
+        discovered[
+            "league_id"
+        ]
+    )
+
+    platform = str(
+        guild.get(
+            "platform"
+        )
+        or "xbsx"
+    ).strip().lower()
+
+    settings = dict(
+        guild.get(
+            "settings",
+            {}
+        )
+    )
+
+    settings[
+        "data_source"
+    ] = "snallabot"
+
+    settings[
+        "ea_connector"
+    ] = "snallabot"
+
+    settings[
+        "snallabot_auto_link"
+    ] = True
+
+    saved = save_guild_setup(
+        guild.get(
+            "guild_id"
+        ),
+        guild.get(
+            "league_name",
+            ""
+        ),
+        league_id,
+        platform,
+        settings
+    )
+
+    export_result = (
+        configure_snallabot_project_madden_export(
+            league_id
+        )
+        if saved
+        else {
+            "success": False,
+            "error":
+                "Could not save Project Madden guild configuration."
+        }
+    )
+
+    return {
+        "success":
+            bool(
+                saved
+                and export_result.get(
+                    "success"
+                )
+            ),
+        "linked":
+            bool(
+                saved
+            ),
+        "league_id":
+            league_id,
+        "discovery":
+            discovered,
+        "project_madden_saved":
+            bool(
+                saved
+            ),
+        "export_destination":
+            export_result
+    }
 
 
 def snallabot_bridge_status(
@@ -6175,11 +6504,37 @@ def weekly_show_webhook_configured():
 
 
 
+
 def send_analyst_embed(
     title,
     description,
-    fields=None
+    fields=None,
+    guild_id=None
 ):
+    guild_id = (
+        guild_id
+        or current_project_madden_guild_id()
+    )
+
+    marcus_avatar_url = (
+        "https://project-madden-analytics.onrender.com/"
+        "assets/marcus-hayes.png"
+    )
+
+    if guild_id:
+        return send_ai_media_embed(
+            guild_id,
+            title,
+            description,
+            fields=fields,
+            persona=
+                "Marcus Hayes | Project Madden",
+            footer=
+                "Marcus Hayes • Project Madden Media",
+            thumbnail_url=
+                marcus_avatar_url
+        )
+
     webhook_url = get_analyst_webhook()
 
     if not webhook_url:
@@ -6199,25 +6554,25 @@ def send_analyst_embed(
                 "Marcus Hayes • "
                 "Project Madden Media"
             )
+        },
+        "thumbnail": {
+            "url":
+                marcus_avatar_url
         }
     }
 
     if fields:
         embed["fields"] = fields
 
-    marcus_avatar_url = (
-        "https://project-madden-analytics.onrender.com/"
-        "assets/marcus-hayes.png"
-    )
-
-    embed["thumbnail"] = {
-        "url": marcus_avatar_url
-    }
-
     payload = {
-        "username": "Marcus Hayes | Project Madden",
-        "avatar_url": marcus_avatar_url,
-        "embeds": [embed]
+        "username":
+            "Marcus Hayes | Project Madden",
+        "avatar_url":
+            marcus_avatar_url,
+        "embeds":
+            [
+                embed
+            ]
     }
 
     try:
@@ -6227,23 +6582,2986 @@ def send_analyst_embed(
             timeout=10
         )
 
-        if response.status_code in [200, 204]:
-            return {"sent": True}
+        if response.status_code in [
+            200,
+            204
+        ]:
+            return {
+                "sent": True
+            }
 
         return {
             "sent": False,
-            "error": (
-                f"Discord returned "
-                f"{response.status_code}: "
-                f"{response.text[:200]}"
-            )
+            "error":
+                (
+                    f"Discord returned "
+                    f"{response.status_code}: "
+                    f"{response.text[:200]}"
+                )
         }
 
     except Exception as e:
         return {
             "sent": False,
-            "error": str(e)
+            "error":
+                str(
+                    e
+                )
         }
+
+
+# =========================================================
+# PROJECT MADDEN SPORTSBOOK / VIRTUAL PARLAYS
+# Virtual Discord-server currency only. No real-money wagering.
+# =========================================================
+
+def sportsbook_secret():
+    return (
+        os.environ.get(
+            "PROJECT_MADDEN_SETUP_SECRET",
+            ""
+        ).strip()
+        or discord_bot_token()
+        or os.environ.get(
+            "DISCORD_PUBLIC_KEY",
+            ""
+        ).strip()
+        or "project-madden-local-dev"
+    )
+
+
+def sportsbook_user_signature(
+    guild_id,
+    user_id
+):
+    message = (
+        f"{guild_id}:{user_id}:project-madden-sportsbook-v1"
+    ).encode(
+        "utf-8"
+    )
+
+    return hmac.new(
+        sportsbook_secret().encode(
+            "utf-8"
+        ),
+        message,
+        hashlib.sha256
+    ).hexdigest()[:32]
+
+
+def sportsbook_user_link(
+    guild_id,
+    user_id
+):
+    signature = sportsbook_user_signature(
+        guild_id,
+        user_id
+    )
+
+    return (
+        PROJECT_MADDEN_BASE_URL.rstrip(
+            "/"
+        )
+        + "/sportsbook/"
+        + str(
+            guild_id
+        )
+        + "/"
+        + str(
+            user_id
+        )
+        + "/"
+        + signature
+    )
+
+
+def sportsbook_link_valid(
+    guild_id,
+    user_id,
+    signature
+):
+    expected = sportsbook_user_signature(
+        guild_id,
+        user_id
+    )
+
+    return hmac.compare_digest(
+        str(
+            signature
+            or ""
+        ),
+        expected
+    )
+
+
+def unbelievaboat_headers():
+    if not UNBELIEVABOAT_API_TOKEN:
+        return {}
+
+    return {
+        "Authorization":
+            UNBELIEVABOAT_API_TOKEN,
+        "Content-Type":
+            "application/json",
+        "Accept":
+            "application/json",
+        "User-Agent":
+            "ProjectMaddenAnalytics/1.0"
+    }
+
+
+def unbelievaboat_configured():
+    return bool(
+        UNBELIEVABOAT_API_TOKEN
+    )
+
+
+def unbelievaboat_get_balance(
+    guild_id,
+    user_id
+):
+    if not unbelievaboat_configured():
+        return {
+            "success":
+                False,
+            "error":
+                "UNBELIEVABOAT_API_TOKEN is not configured."
+        }
+
+    try:
+        response = requests.get(
+            (
+                f"{UNBELIEVABOAT_API_BASE}/guilds/"
+                f"{guild_id}/users/{user_id}"
+            ),
+            headers=unbelievaboat_headers(),
+            timeout=15
+        )
+
+        if response.status_code != 200:
+            return {
+                "success":
+                    False,
+                "status_code":
+                    response.status_code,
+                "error":
+                    response.text[:500]
+            }
+
+        payload = response.json()
+
+        return {
+            "success":
+                True,
+            "cash":
+                int(
+                    payload.get(
+                        "cash",
+                        0
+                    )
+                    or 0
+                ),
+            "bank":
+                int(
+                    payload.get(
+                        "bank",
+                        0
+                    )
+                    or 0
+                ),
+            "total":
+                int(
+                    payload.get(
+                        "total",
+                        0
+                    )
+                    or 0
+                ),
+            "user":
+                payload
+        }
+
+    except Exception as e:
+        return {
+            "success":
+                False,
+            "error":
+                str(
+                    e
+                )
+        }
+
+
+def unbelievaboat_edit_cash(
+    guild_id,
+    user_id,
+    cash_delta,
+    reason
+):
+    if not unbelievaboat_configured():
+        return {
+            "success":
+                False,
+            "error":
+                "UNBELIEVABOAT_API_TOKEN is not configured."
+        }
+
+    try:
+        response = requests.patch(
+            (
+                f"{UNBELIEVABOAT_API_BASE}/guilds/"
+                f"{guild_id}/users/{user_id}"
+            ),
+            headers=unbelievaboat_headers(),
+            json={
+                "cash":
+                    int(
+                        cash_delta
+                    ),
+                "reason":
+                    str(
+                        reason
+                    )[:512]
+            },
+            timeout=15
+        )
+
+        if response.status_code != 200:
+            return {
+                "success":
+                    False,
+                "status_code":
+                    response.status_code,
+                "error":
+                    response.text[:500]
+            }
+
+        payload = response.json()
+
+        return {
+            "success":
+                True,
+            "cash":
+                int(
+                    payload.get(
+                        "cash",
+                        0
+                    )
+                    or 0
+                ),
+            "bank":
+                int(
+                    payload.get(
+                        "bank",
+                        0
+                    )
+                    or 0
+                ),
+            "total":
+                int(
+                    payload.get(
+                        "total",
+                        0
+                    )
+                    or 0
+                ),
+            "user":
+                payload
+        }
+
+    except Exception as e:
+        return {
+            "success":
+                False,
+            "error":
+                str(
+                    e
+                )
+        }
+
+
+def sportsbook_data_dir(
+    guild_id
+):
+    path = os.path.join(
+        DATA_DIR,
+        "league_data",
+        str(
+            guild_id
+        )
+    )
+
+    os.makedirs(
+        path,
+        exist_ok=True
+    )
+
+    return path
+
+
+def sportsbook_week_dir(
+    guild_id,
+    season_type,
+    week_number
+):
+    path = os.path.join(
+        sportsbook_data_dir(
+            guild_id
+        ),
+        "weekly",
+        str(
+            season_type
+        ),
+        f"week_{int(week_number)}"
+    )
+
+    os.makedirs(
+        path,
+        exist_ok=True
+    )
+
+    return path
+
+
+def sportsbook_save_league_export(
+    guild_id,
+    relative_name,
+    data
+):
+    if not guild_id:
+        return None
+
+    target = os.path.join(
+        sportsbook_data_dir(
+            guild_id
+        ),
+        relative_name
+    )
+
+    os.makedirs(
+        os.path.dirname(
+            target
+        ),
+        exist_ok=True
+    )
+
+    with open(
+        target,
+        "w",
+        encoding="utf-8"
+    ) as handle:
+        json.dump(
+            data,
+            handle,
+            indent=2
+        )
+
+    return target
+
+
+def sportsbook_load_league_export(
+    guild_id,
+    relative_name
+):
+    target = os.path.join(
+        sportsbook_data_dir(
+            guild_id
+        ),
+        relative_name
+    )
+
+    if not os.path.exists(
+        target
+    ):
+        return None
+
+    try:
+        with open(
+            target,
+            "r",
+            encoding="utf-8"
+        ) as handle:
+            return json.load(
+                handle
+            )
+    except Exception:
+        return None
+
+
+def sportsbook_load_week(
+    guild_id,
+    season_type,
+    week_number,
+    stat_type
+):
+    return sportsbook_load_league_export(
+        guild_id,
+        os.path.join(
+            "weekly",
+            str(
+                season_type
+            ),
+            f"week_{int(week_number)}",
+            f"{stat_type}.json"
+        )
+    )
+
+
+def load_parlay_history():
+    data = load_json_file(
+        PARLAY_HISTORY_FILE
+    )
+
+    if not isinstance(
+        data,
+        dict
+    ):
+        data = {}
+
+    data.setdefault(
+        "bets",
+        []
+    )
+
+    data.setdefault(
+        "version",
+        1
+    )
+
+    return data
+
+
+def save_parlay_history(
+    data
+):
+    data[
+        "bets"
+    ] = list(
+        data.get(
+            "bets",
+            []
+        )
+    )[-5000:]
+
+    save_json_file(
+        PARLAY_HISTORY_FILE,
+        data
+    )
+
+
+def sportsbook_find_bet(
+    bet_id
+):
+    data = load_parlay_history()
+
+    for bet in data.get(
+        "bets",
+        []
+    ):
+        if str(
+            bet.get(
+                "bet_id"
+            )
+        ) == str(
+            bet_id
+        ):
+            return bet
+
+    return None
+
+
+def sportsbook_user_bets(
+    guild_id,
+    user_id,
+    limit=25
+):
+    data = load_parlay_history()
+
+    bets = [
+        bet
+        for bet in data.get(
+            "bets",
+            []
+        )
+        if (
+            str(
+                bet.get(
+                    "guild_id"
+                )
+            )
+            == str(
+                guild_id
+            )
+            and str(
+                bet.get(
+                    "user_id"
+                )
+            )
+            == str(
+                user_id
+            )
+        )
+    ]
+
+    bets.sort(
+        key=lambda item: str(
+            item.get(
+                "created_at",
+                ""
+            )
+        ),
+        reverse=True
+    )
+
+    return bets[:limit]
+
+
+def sportsbook_all_open_bets(
+    guild_id
+):
+    data = load_parlay_history()
+
+    return [
+        bet
+        for bet in data.get(
+            "bets",
+            []
+        )
+        if (
+            str(
+                bet.get(
+                    "guild_id"
+                )
+            )
+            == str(
+                guild_id
+            )
+            and bet.get(
+                "status"
+            )
+            in [
+                "open",
+                "partial"
+            ]
+        )
+    ]
+
+
+def sportsbook_upsert_bet(
+    bet
+):
+    with SPORTSBOOK_LOCK:
+        data = load_parlay_history()
+        bets = data.get(
+            "bets",
+            []
+        )
+
+        replaced = False
+
+        for index, existing in enumerate(
+            bets
+        ):
+            if (
+                str(
+                    existing.get(
+                        "bet_id"
+                    )
+                )
+                == str(
+                    bet.get(
+                        "bet_id"
+                    )
+                )
+            ):
+                bets[
+                    index
+                ] = bet
+                replaced = True
+                break
+
+        if not replaced:
+            bets.append(
+                bet
+            )
+
+        data[
+            "bets"
+        ] = bets
+
+        save_parlay_history(
+            data
+        )
+
+
+def sportsbook_moneyline_odds(
+    home_ovr,
+    away_ovr
+):
+    try:
+        home_ovr = float(
+            home_ovr
+        )
+        away_ovr = float(
+            away_ovr
+        )
+    except Exception:
+        return (
+            -110,
+            -110
+        )
+
+    diff = max(
+        -12.0,
+        min(
+            12.0,
+            home_ovr
+            - away_ovr
+        )
+    )
+
+    if abs(
+        diff
+    ) < 0.75:
+        return (
+            -110,
+            -110
+        )
+
+    favorite_price = int(
+        -115
+        - min(
+            185,
+            abs(
+                diff
+            )
+            * 15
+        )
+    )
+
+    underdog_price = int(
+        100
+        + min(
+            180,
+            abs(
+                diff
+            )
+            * 14
+        )
+    )
+
+    if diff > 0:
+        return (
+            favorite_price,
+            underdog_price
+        )
+
+    return (
+        underdog_price,
+        favorite_price
+    )
+
+
+def american_to_decimal(
+    american
+):
+    american = int(
+        american
+    )
+
+    if american > 0:
+        return round(
+            1.0
+            + (
+                american
+                / 100.0
+            ),
+            4
+        )
+
+    return round(
+        1.0
+        + (
+            100.0
+            / abs(
+                american
+            )
+        ),
+        4
+    )
+
+
+def format_american_odds(
+    american
+):
+    american = int(
+        american
+    )
+
+    return (
+        f"+{american}"
+        if american > 0
+        else str(
+            american
+        )
+    )
+
+
+def parlay_decimal_odds(
+    legs
+):
+    value = 1.0
+
+    for leg in legs:
+        value *= american_to_decimal(
+            leg.get(
+                "odds",
+                -110
+            )
+        )
+
+    return round(
+        value,
+        4
+    )
+
+
+def parlay_payout(
+    wager,
+    legs
+):
+    return int(
+        round(
+            int(
+                wager
+            )
+            * parlay_decimal_odds(
+                legs
+            )
+        )
+    )
+
+
+def sportsbook_extract_team_name(
+    game,
+    side
+):
+    keys = (
+        [
+            "homeTeamName",
+            "homeTeam",
+            "homeName",
+            "home"
+        ]
+        if side == "home"
+        else [
+            "awayTeamName",
+            "awayTeam",
+            "awayName",
+            "away"
+        ]
+    )
+
+    for key in keys:
+        value = game.get(
+            key
+        )
+
+        if isinstance(
+            value,
+            dict
+        ):
+            value = (
+                value.get(
+                    "displayName"
+                )
+                or value.get(
+                    "name"
+                )
+                or value.get(
+                    "teamName"
+                )
+            )
+
+        if value not in [
+            None,
+            ""
+        ]:
+            return str(
+                value
+            )
+
+    team_id_keys = (
+        [
+            "homeTeamId",
+            "homeId"
+        ]
+        if side == "home"
+        else [
+            "awayTeamId",
+            "awayId"
+        ]
+    )
+
+    for key in team_id_keys:
+        value = game.get(
+            key
+        )
+
+        if value not in [
+            None,
+            ""
+        ]:
+            return str(
+                value
+            )
+
+    return (
+        "Home Team"
+        if side == "home"
+        else "Away Team"
+    )
+
+
+def sportsbook_extract_score(
+    game,
+    side
+):
+    keys = (
+        [
+            "homeScore",
+            "homeTeamScore",
+            "homePts",
+            "homePoints"
+        ]
+        if side == "home"
+        else [
+            "awayScore",
+            "awayTeamScore",
+            "awayPts",
+            "awayPoints"
+        ]
+    )
+
+    for key in keys:
+        value = game.get(
+            key
+        )
+
+        try:
+            if value is not None:
+                return int(
+                    value
+                )
+        except Exception:
+            continue
+
+    return None
+
+
+def sportsbook_game_completed(
+    game
+):
+    home_score = sportsbook_extract_score(
+        game,
+        "home"
+    )
+    away_score = sportsbook_extract_score(
+        game,
+        "away"
+    )
+
+    if (
+        home_score is not None
+        and away_score is not None
+    ):
+        status_text = str(
+            game.get(
+                "status",
+                game.get(
+                    "gameStatus",
+                    ""
+                )
+            )
+        ).lower()
+
+        if (
+            status_text
+            and any(
+                word in status_text
+                for word in [
+                    "pre",
+                    "scheduled",
+                    "unplayed"
+                ]
+            )
+        ):
+            return False
+
+        return True
+
+    return False
+
+
+def sportsbook_schedule_games(
+    schedule_data
+):
+    if not schedule_data:
+        return []
+
+    if isinstance(
+        schedule_data,
+        list
+    ):
+        return [
+            item
+            for item in schedule_data
+            if isinstance(
+                item,
+                dict
+            )
+        ]
+
+    if not isinstance(
+        schedule_data,
+        dict
+    ):
+        return []
+
+    for key in [
+        "gameScheduleInfoList",
+        "games",
+        "schedules",
+        "schedule",
+        "items"
+    ]:
+        value = schedule_data.get(
+            key
+        )
+
+        if isinstance(
+            value,
+            list
+        ):
+            return [
+                item
+                for item in value
+                if isinstance(
+                    item,
+                    dict
+                )
+            ]
+
+    return recursive_records(
+        schedule_data
+    )
+
+
+def sportsbook_team_lookup(
+    guild_id
+):
+    teams_data = sportsbook_load_league_export(
+        guild_id,
+        "leagueteams.json"
+    )
+
+    lookup = {}
+
+    for record in recursive_records(
+        teams_data
+        or {}
+    ):
+        team_id = (
+            record.get(
+                "teamId"
+            )
+            or record.get(
+                "id"
+            )
+        )
+
+        name = (
+            record.get(
+                "displayName"
+            )
+            or record.get(
+                "name"
+            )
+            or record.get(
+                "teamName"
+            )
+            or record.get(
+                "nickName"
+            )
+        )
+
+        overall = (
+            record.get(
+                "ovrRating"
+            )
+            or record.get(
+                "overallRating"
+            )
+            or record.get(
+                "overall"
+            )
+            or record.get(
+                "ovr"
+            )
+        )
+
+        if name:
+            lookup[
+                str(
+                    name
+                ).lower()
+            ] = {
+                "name":
+                    str(
+                        name
+                    ),
+                "team_id":
+                    str(
+                        team_id
+                    )
+                    if team_id is not None
+                    else None,
+                "overall":
+                    overall
+            }
+
+        if team_id is not None:
+            lookup[
+                str(
+                    team_id
+                )
+            ] = {
+                "name":
+                    str(
+                        name
+                        or team_id
+                    ),
+                "team_id":
+                    str(
+                        team_id
+                    ),
+                "overall":
+                    overall
+            }
+
+    return lookup
+
+
+def sportsbook_roster_records_for_team(
+    guild_id,
+    team_id
+):
+    if team_id in [
+        None,
+        ""
+    ]:
+        return []
+
+    data = sportsbook_load_league_export(
+        guild_id,
+        f"roster_{team_id}.json"
+    )
+
+    if not data:
+        return []
+
+    return recursive_records(
+        data
+    )
+
+
+def sportsbook_prop_line(
+    position,
+    stat_key,
+    overall
+):
+    try:
+        overall = int(
+            overall
+            or 75
+        )
+    except Exception:
+        overall = 75
+
+    position = str(
+        position
+        or ""
+    ).upper()
+
+    if stat_key == "passing_yards":
+        if overall >= 90:
+            return 249.5
+        if overall >= 82:
+            return 224.5
+        return 199.5
+
+    if stat_key == "rushing_yards":
+        if overall >= 90:
+            return 74.5
+        if overall >= 82:
+            return 59.5
+        return 44.5
+
+    if stat_key == "receiving_yards":
+        if overall >= 90:
+            return 79.5
+        if overall >= 82:
+            return 64.5
+        return 49.5
+
+    if stat_key in [
+        "sacks",
+        "interceptions"
+    ]:
+        return 0.5
+
+    if stat_key == "touchdowns":
+        return 0.5
+
+    return 0.5
+
+
+def sportsbook_player_candidates(
+    guild_id,
+    team_lookup
+):
+    players = []
+    seen = set()
+
+    team_entries = {}
+
+    for item in team_lookup.values():
+        team_id = item.get(
+            "team_id"
+        )
+
+        if team_id:
+            team_entries[
+                team_id
+            ] = item
+
+    for team_id, team in team_entries.items():
+        for record in sportsbook_roster_records_for_team(
+            guild_id,
+            team_id
+        ):
+            name = detect_player_name(
+                record
+            )
+
+            if not name:
+                continue
+
+            position = detect_position(
+                record
+            )
+
+            overall = detect_overall(
+                record
+            )
+
+            key = (
+                str(
+                    name
+                ).lower(),
+                str(
+                    team_id
+                )
+            )
+
+            if key in seen:
+                continue
+
+            seen.add(
+                key
+            )
+
+            players.append({
+                "name":
+                    name,
+                "position":
+                    str(
+                        position
+                        or ""
+                    ).upper(),
+                "overall":
+                    overall,
+                "team":
+                    team.get(
+                        "name"
+                    ),
+                "team_id":
+                    team_id
+            })
+
+    players.sort(
+        key=lambda item: (
+            -int(
+                item.get(
+                    "overall"
+                )
+                or 0
+            ),
+            item.get(
+                "name",
+                ""
+            )
+        )
+    )
+
+    return players
+
+
+def sportsbook_build_markets(
+    guild_id,
+    season_type,
+    week_number
+):
+    schedule_data = sportsbook_load_week(
+        guild_id,
+        season_type,
+        week_number,
+        "schedules"
+    )
+
+    if not schedule_data:
+        return {
+            "season_type":
+                season_type,
+            "week":
+                int(
+                    week_number
+                ),
+            "games":
+                [],
+            "markets":
+                [],
+            "error":
+                "No Snallabot schedule export has been received for this week yet."
+        }
+
+    team_lookup = sportsbook_team_lookup(
+        guild_id
+    )
+
+    games = []
+    markets = []
+
+    for index, game in enumerate(
+        sportsbook_schedule_games(
+            schedule_data
+        )
+    ):
+        if sportsbook_game_completed(
+            game
+        ):
+            continue
+
+        home_name = sportsbook_extract_team_name(
+            game,
+            "home"
+        )
+        away_name = sportsbook_extract_team_name(
+            game,
+            "away"
+        )
+
+        home_info = team_lookup.get(
+            str(
+                home_name
+            ).lower(),
+            team_lookup.get(
+                str(
+                    game.get(
+                        "homeTeamId",
+                        ""
+                    )
+                ),
+                {}
+            )
+        )
+
+        away_info = team_lookup.get(
+            str(
+                away_name
+            ).lower(),
+            team_lookup.get(
+                str(
+                    game.get(
+                        "awayTeamId",
+                        ""
+                    )
+                ),
+                {}
+            )
+        )
+
+        home_odds, away_odds = sportsbook_moneyline_odds(
+            home_info.get(
+                "overall"
+            ),
+            away_info.get(
+                "overall"
+            )
+        )
+
+        game_id = str(
+            game.get(
+                "scheduleId"
+            )
+            or game.get(
+                "gameId"
+            )
+            or game.get(
+                "id"
+            )
+            or (
+                f"{season_type}-{week_number}-"
+                f"{index}-{away_name}-{home_name}"
+            )
+        )
+
+        game_entry = {
+            "game_id":
+                game_id,
+            "home":
+                home_name,
+            "away":
+                away_name,
+            "home_team_id":
+                home_info.get(
+                    "team_id"
+                )
+                or game.get(
+                    "homeTeamId"
+                ),
+            "away_team_id":
+                away_info.get(
+                    "team_id"
+                )
+                or game.get(
+                    "awayTeamId"
+                ),
+            "home_overall":
+                home_info.get(
+                    "overall"
+                ),
+            "away_overall":
+                away_info.get(
+                    "overall"
+                )
+        }
+
+        games.append(
+            game_entry
+        )
+
+        for side, team_name, odds in [
+            (
+                "home",
+                home_name,
+                home_odds
+            ),
+            (
+                "away",
+                away_name,
+                away_odds
+            )
+        ]:
+            market_id = hashlib.sha256(
+                (
+                    f"{guild_id}|{season_type}|{week_number}|"
+                    f"{game_id}|moneyline|{side}"
+                ).encode(
+                    "utf-8"
+                )
+            ).hexdigest()[:20]
+
+            markets.append({
+                "market_id":
+                    market_id,
+                "market_type":
+                    "moneyline",
+                "season_type":
+                    season_type,
+                "week":
+                    int(
+                        week_number
+                    ),
+                "game_id":
+                    game_id,
+                "game":
+                    f"{away_name} @ {home_name}",
+                "selection":
+                    team_name,
+                "side":
+                    side,
+                "label":
+                    f"{team_name} Moneyline",
+                "odds":
+                    odds
+            })
+
+    # Player props are generated from actual Snallabot rosters.
+    candidate_players = sportsbook_player_candidates(
+        guild_id,
+        team_lookup
+    )
+
+    team_names_in_week = set()
+
+    for game in games:
+        team_names_in_week.add(
+            str(
+                game.get(
+                    "home"
+                )
+            ).lower()
+        )
+        team_names_in_week.add(
+            str(
+                game.get(
+                    "away"
+                )
+            ).lower()
+        )
+
+    per_position_limit = {
+        "QB":
+            12,
+        "HB":
+            12,
+        "RB":
+            12,
+        "WR":
+            20,
+        "TE":
+            12,
+        "LE":
+            8,
+        "RE":
+            8,
+        "LOLB":
+            8,
+        "ROLB":
+            8,
+        "MLB":
+            8,
+        "CB":
+            8,
+        "FS":
+            6,
+        "SS":
+            6
+    }
+
+    used_counts = {}
+
+    for player in candidate_players:
+        if (
+            str(
+                player.get(
+                    "team"
+                )
+            ).lower()
+            not in team_names_in_week
+        ):
+            continue
+
+        position = player.get(
+            "position"
+        )
+
+        if position not in per_position_limit:
+            continue
+
+        used_counts.setdefault(
+            position,
+            0
+        )
+
+        if (
+            used_counts[
+                position
+            ]
+            >= per_position_limit[
+                position
+            ]
+        ):
+            continue
+
+        used_counts[
+            position
+        ] += 1
+
+        prop_specs = []
+
+        if position == "QB":
+            prop_specs = [
+                (
+                    "passing_yards",
+                    "Passing Yards"
+                ),
+                (
+                    "touchdowns",
+                    "Passing TDs"
+                )
+            ]
+        elif position in [
+            "HB",
+            "RB"
+        ]:
+            prop_specs = [
+                (
+                    "rushing_yards",
+                    "Rushing Yards"
+                ),
+                (
+                    "touchdowns",
+                    "Any TD"
+                )
+            ]
+        elif position in [
+            "WR",
+            "TE"
+        ]:
+            prop_specs = [
+                (
+                    "receiving_yards",
+                    "Receiving Yards"
+                ),
+                (
+                    "touchdowns",
+                    "Any TD"
+                )
+            ]
+        elif position in [
+            "LE",
+            "RE",
+            "LOLB",
+            "ROLB",
+            "MLB"
+        ]:
+            prop_specs = [
+                (
+                    "sacks",
+                    "Sacks"
+                )
+            ]
+        elif position in [
+            "CB",
+            "FS",
+            "SS"
+        ]:
+            prop_specs = [
+                (
+                    "interceptions",
+                    "Interceptions"
+                )
+            ]
+
+        for stat_key, stat_label in prop_specs:
+            line = sportsbook_prop_line(
+                position,
+                stat_key,
+                player.get(
+                    "overall"
+                )
+            )
+
+            for direction in [
+                "over",
+                "under"
+            ]:
+                odds = -110
+
+                market_id = hashlib.sha256(
+                    (
+                        f"{guild_id}|{season_type}|{week_number}|"
+                        f"{player.get('name')}|{player.get('team')}|"
+                        f"{stat_key}|{line}|{direction}"
+                    ).encode(
+                        "utf-8"
+                    )
+                ).hexdigest()[:20]
+
+                markets.append({
+                    "market_id":
+                        market_id,
+                    "market_type":
+                        "player_prop",
+                    "season_type":
+                        season_type,
+                    "week":
+                        int(
+                            week_number
+                        ),
+                    "player":
+                        player.get(
+                            "name"
+                        ),
+                    "team":
+                        player.get(
+                            "team"
+                        ),
+                    "position":
+                        position,
+                    "stat_key":
+                        stat_key,
+                    "stat_label":
+                        stat_label,
+                    "line":
+                        line,
+                    "direction":
+                        direction,
+                    "selection":
+                        (
+                            f"{player.get('name')} "
+                            f"{direction.title()} {line} {stat_label}"
+                        ),
+                    "label":
+                        (
+                            f"{player.get('name')} • "
+                            f"{direction.title()} {line} {stat_label}"
+                        ),
+                    "odds":
+                        odds
+                })
+
+    return {
+        "season_type":
+            season_type,
+        "week":
+            int(
+                week_number
+            ),
+        "games":
+            games,
+        "markets":
+            markets,
+        "market_count":
+            len(
+                markets
+            )
+    }
+
+
+def sportsbook_market_index(
+    guild_id,
+    season_type,
+    week_number
+):
+    board = sportsbook_build_markets(
+        guild_id,
+        season_type,
+        week_number
+    )
+
+    return {
+        item.get(
+            "market_id"
+        ):
+            item
+        for item in board.get(
+            "markets",
+            []
+        )
+        if item.get(
+            "market_id"
+        )
+    }
+
+
+def sportsbook_current_week(
+    guild_id
+):
+    extra = sportsbook_load_league_export(
+        guild_id,
+        "extra.json"
+    )
+
+    if isinstance(
+        extra,
+        dict
+    ):
+        for key in [
+            "currentWeek",
+            "week",
+            "current_week",
+            "weekNumber"
+        ]:
+            value = extra.get(
+                key
+            )
+
+            try:
+                if value is not None:
+                    return max(
+                        1,
+                        int(
+                            value
+                        )
+                    )
+            except Exception:
+                pass
+
+    return 1
+
+
+def sportsbook_place_parlay(
+    guild_id,
+    user_id,
+    season_type,
+    week_number,
+    wager,
+    market_ids
+):
+    try:
+        wager = int(
+            wager
+        )
+    except Exception:
+        return {
+            "success":
+                False,
+            "error":
+                "Wager must be a whole number."
+        }
+
+    if (
+        wager < SPORTSBOOK_MIN_WAGER
+        or wager > SPORTSBOOK_MAX_WAGER
+    ):
+        return {
+            "success":
+                False,
+            "error":
+                (
+                    f"Wager must be between "
+                    f"{SPORTSBOOK_MIN_WAGER:,} and "
+                    f"{SPORTSBOOK_MAX_WAGER:,} coins."
+                )
+        }
+
+    clean_ids = []
+
+    for item in market_ids:
+        item = str(
+            item
+        ).strip()
+
+        if (
+            item
+            and item not in clean_ids
+        ):
+            clean_ids.append(
+                item
+            )
+
+    if (
+        len(
+            clean_ids
+        )
+        < SPORTSBOOK_MIN_LEGS
+        or len(
+            clean_ids
+        )
+        > SPORTSBOOK_MAX_LEGS
+    ):
+        return {
+            "success":
+                False,
+            "error":
+                (
+                    f"A parlay needs {SPORTSBOOK_MIN_LEGS}-"
+                    f"{SPORTSBOOK_MAX_LEGS} legs."
+                )
+        }
+
+    market_index = sportsbook_market_index(
+        guild_id,
+        season_type,
+        week_number
+    )
+
+    legs = []
+
+    for market_id in clean_ids:
+        market = market_index.get(
+            market_id
+        )
+
+        if not market:
+            return {
+                "success":
+                    False,
+                "error":
+                    "One or more selected markets are no longer available."
+            }
+
+        legs.append(
+            dict(
+                market
+            )
+        )
+
+    # Prevent contradictory selections from the same market group.
+    groups = set()
+
+    for leg in legs:
+        if leg.get(
+            "market_type"
+        ) == "moneyline":
+            group = (
+                "moneyline",
+                leg.get(
+                    "game_id"
+                )
+            )
+        else:
+            group = (
+                "player_prop",
+                str(
+                    leg.get(
+                        "player"
+                    )
+                ).lower(),
+                leg.get(
+                    "stat_key"
+                ),
+                leg.get(
+                    "line"
+                )
+            )
+
+        if group in groups:
+            return {
+                "success":
+                    False,
+                "error":
+                    "A parlay cannot contain opposite sides of the same market."
+            }
+
+        groups.add(
+            group
+        )
+
+    balance = unbelievaboat_get_balance(
+        guild_id,
+        user_id
+    )
+
+    if not balance.get(
+        "success"
+    ):
+        return {
+            "success":
+                False,
+            "error":
+                (
+                    "Could not read your UnbelievaBoat balance: "
+                    + str(
+                        balance.get(
+                            "error",
+                            "Unknown error"
+                        )
+                    )
+                )
+        }
+
+    if balance.get(
+        "cash",
+        0
+    ) < wager:
+        return {
+            "success":
+                False,
+            "error":
+                (
+                    f"You only have {balance.get('cash', 0):,} cash coins. "
+                    f"This parlay costs {wager:,}."
+                )
+        }
+
+    bet_id = (
+        "PM-"
+        + uuid.uuid4().hex[:10].upper()
+    )
+
+    payout = parlay_payout(
+        wager,
+        legs
+    )
+
+    now = datetime.now(
+        timezone.utc
+    ).isoformat()
+
+    bet = {
+        "bet_id":
+            bet_id,
+        "guild_id":
+            str(
+                guild_id
+            ),
+        "user_id":
+            str(
+                user_id
+            ),
+        "season_type":
+            str(
+                season_type
+            ),
+        "week":
+            int(
+                week_number
+            ),
+        "wager":
+            wager,
+        "potential_payout":
+            payout,
+        "decimal_odds":
+            parlay_decimal_odds(
+                legs
+            ),
+        "legs":
+            legs,
+        "status":
+            "pending_debit",
+        "created_at":
+            now,
+        "updated_at":
+            now,
+        "currency_source":
+            "UnbelievaBoat cash",
+        "real_money":
+            False
+    }
+
+    sportsbook_upsert_bet(
+        bet
+    )
+
+    debit = unbelievaboat_edit_cash(
+        guild_id,
+        user_id,
+        -wager,
+        (
+            f"Project Madden parlay {bet_id} wager"
+        )
+    )
+
+    if not debit.get(
+        "success"
+    ):
+        bet[
+            "status"
+        ] = "cancelled_debit_failed"
+
+        bet[
+            "updated_at"
+        ] = datetime.now(
+            timezone.utc
+        ).isoformat()
+
+        bet[
+            "debit_error"
+        ] = debit.get(
+            "error"
+        )
+
+        sportsbook_upsert_bet(
+            bet
+        )
+
+        return {
+            "success":
+                False,
+            "error":
+                (
+                    "UnbelievaBoat did not accept the wager deduction: "
+                    + str(
+                        debit.get(
+                            "error",
+                            "Unknown error"
+                        )
+                    )
+                )
+        }
+
+    bet[
+        "status"
+    ] = "open"
+
+    bet[
+        "accepted_at"
+    ] = datetime.now(
+        timezone.utc
+    ).isoformat()
+
+    bet[
+        "updated_at"
+    ] = bet[
+        "accepted_at"
+    ]
+
+    bet[
+        "cash_after_wager"
+    ] = debit.get(
+        "cash"
+    )
+
+    sportsbook_upsert_bet(
+        bet
+    )
+
+    return {
+        "success":
+            True,
+        "bet":
+            bet,
+        "balance":
+            debit
+    }
+
+
+def sportsbook_find_player_stat(
+    data,
+    player_name,
+    stat_key
+):
+    if not data:
+        return None
+
+    target = str(
+        player_name
+        or ""
+    ).strip().lower()
+
+    aliases = {
+        "passing_yards": [
+            "passYds",
+            "passingYards",
+            "pass_yards",
+            "yards"
+        ],
+        "rushing_yards": [
+            "rushYds",
+            "rushingYards",
+            "rush_yards",
+            "yards"
+        ],
+        "receiving_yards": [
+            "recYds",
+            "receivingYards",
+            "receiving_yards",
+            "yards"
+        ],
+        "sacks": [
+            "sacks",
+            "defSacks",
+            "sack"
+        ],
+        "interceptions": [
+            "defInts",
+            "interceptions",
+            "ints",
+            "int"
+        ],
+        "touchdowns": [
+            "passTDs",
+            "rushTDs",
+            "recTDs",
+            "touchdowns",
+            "tds"
+        ]
+    }
+
+    for record in recursive_records(
+        data
+    ):
+        name = detect_player_name(
+            record
+        )
+
+        if (
+            not name
+            or str(
+                name
+            ).strip().lower()
+            != target
+        ):
+            continue
+
+        if stat_key == "touchdowns":
+            total = 0
+            found = False
+
+            for key in aliases[
+                stat_key
+            ]:
+                value = record.get(
+                    key
+                )
+
+                try:
+                    if value is not None:
+                        total += float(
+                            value
+                        )
+                        found = True
+                except Exception:
+                    pass
+
+            if found:
+                return total
+
+        else:
+            for key in aliases.get(
+                stat_key,
+                []
+            ):
+                value = record.get(
+                    key
+                )
+
+                try:
+                    if value is not None:
+                        return float(
+                            value
+                        )
+                except Exception:
+                    pass
+
+    return None
+
+
+def sportsbook_settle_leg(
+    guild_id,
+    bet,
+    leg
+):
+    season_type = bet.get(
+        "season_type"
+    )
+    week_number = bet.get(
+        "week"
+    )
+
+    if leg.get(
+        "market_type"
+    ) == "moneyline":
+        schedules = sportsbook_load_week(
+            guild_id,
+            season_type,
+            week_number,
+            "schedules"
+        )
+
+        for game in sportsbook_schedule_games(
+            schedules
+        ):
+            candidate_id = str(
+                game.get(
+                    "scheduleId"
+                )
+                or game.get(
+                    "gameId"
+                )
+                or game.get(
+                    "id"
+                )
+                or ""
+            )
+
+            if (
+                candidate_id
+                and candidate_id
+                != str(
+                    leg.get(
+                        "game_id"
+                    )
+                )
+            ):
+                continue
+
+            home = sportsbook_extract_team_name(
+                game,
+                "home"
+            )
+            away = sportsbook_extract_team_name(
+                game,
+                "away"
+            )
+
+            if (
+                not candidate_id
+                and (
+                    f"{away} @ {home}"
+                    != leg.get(
+                        "game"
+                    )
+                )
+            ):
+                continue
+
+            if not sportsbook_game_completed(
+                game
+            ):
+                return {
+                    "result":
+                        "pending"
+                }
+
+            home_score = sportsbook_extract_score(
+                game,
+                "home"
+            )
+            away_score = sportsbook_extract_score(
+                game,
+                "away"
+            )
+
+            if home_score == away_score:
+                return {
+                    "result":
+                        "void",
+                    "actual":
+                        f"{away_score}-{home_score}"
+                }
+
+            winner = (
+                home
+                if home_score > away_score
+                else away
+            )
+
+            return {
+                "result":
+                    (
+                        "hit"
+                        if str(
+                            winner
+                        ).lower()
+                        == str(
+                            leg.get(
+                                "selection"
+                            )
+                        ).lower()
+                        else "miss"
+                    ),
+                "actual":
+                    f"{away} {away_score} - {home} {home_score}",
+                "winner":
+                    winner
+            }
+
+        return {
+            "result":
+                "pending"
+        }
+
+    if leg.get(
+        "market_type"
+    ) == "player_prop":
+        stat_key = leg.get(
+            "stat_key"
+        )
+
+        stat_type_map = {
+            "passing_yards":
+                "passing",
+            "rushing_yards":
+                "rushing",
+            "receiving_yards":
+                "receiving",
+            "sacks":
+                "defense",
+            "interceptions":
+                "defense",
+            "touchdowns":
+                (
+                    "passing"
+                    if leg.get(
+                        "position"
+                    ) == "QB"
+                    else (
+                        "rushing"
+                        if leg.get(
+                            "position"
+                        )
+                        in [
+                            "HB",
+                            "RB"
+                        ]
+                        else "receiving"
+                    )
+                )
+        }
+
+        stat_type = stat_type_map.get(
+            stat_key
+        )
+
+        data = sportsbook_load_week(
+            guild_id,
+            season_type,
+            week_number,
+            stat_type
+        )
+
+        if not data:
+            return {
+                "result":
+                    "pending"
+            }
+
+        actual = sportsbook_find_player_stat(
+            data,
+            leg.get(
+                "player"
+            ),
+            stat_key
+        )
+
+        if actual is None:
+            return {
+                "result":
+                    "pending"
+            }
+
+        line = float(
+            leg.get(
+                "line",
+                0
+            )
+        )
+
+        direction = leg.get(
+            "direction"
+        )
+
+        if direction == "over":
+            hit = actual > line
+        else:
+            hit = actual < line
+
+        return {
+            "result":
+                (
+                    "hit"
+                    if hit
+                    else "miss"
+                ),
+            "actual":
+                actual
+        }
+
+    return {
+        "result":
+            "pending"
+    }
+
+
+def sportsbook_post_result(
+    bet,
+    result_text
+):
+    channel_id = guild_ai_media_channel_id(
+        bet.get(
+            "guild_id"
+        )
+    )
+
+    if not channel_id:
+        return {
+            "sent":
+                False,
+            "error":
+                "No sportsbook/media channel configured."
+        }
+
+    return discord_send_embed_to_channel(
+        channel_id,
+        {
+            "title":
+                (
+                    "🎟️ PROJECT MADDEN PARLAY RESULT • "
+                    + str(
+                        bet.get(
+                            "bet_id"
+                        )
+                    )
+                ),
+            "description":
+                result_text,
+            "footer": {
+                "text":
+                    (
+                        "Virtual Discord-server currency only • "
+                        "Settled from Snallabot Madden league data"
+                    )
+            }
+        }
+    )
+
+
+def settle_open_parlays_for_guild(
+    guild_id
+):
+    results = []
+
+    for bet in sportsbook_all_open_bets(
+        guild_id
+    ):
+        leg_results = []
+        any_miss = False
+        any_pending = False
+        hit_count = 0
+
+        for leg in bet.get(
+            "legs",
+            []
+        ):
+            result = sportsbook_settle_leg(
+                guild_id,
+                bet,
+                leg
+            )
+
+            leg_result = dict(
+                leg
+            )
+
+            leg_result[
+                "settlement"
+            ] = result
+
+            leg_results.append(
+                leg_result
+            )
+
+            if result.get(
+                "result"
+            ) == "miss":
+                any_miss = True
+            elif result.get(
+                "result"
+            ) == "pending":
+                any_pending = True
+            elif result.get(
+                "result"
+            ) in [
+                "hit",
+                "void"
+            ]:
+                hit_count += 1
+
+        bet[
+            "leg_results"
+        ] = leg_results
+
+        bet[
+            "updated_at"
+        ] = datetime.now(
+            timezone.utc
+        ).isoformat()
+
+        if any_miss:
+            bet[
+                "status"
+            ] = "lost"
+
+            bet[
+                "settled_at"
+            ] = bet[
+                "updated_at"
+            ]
+
+            sportsbook_upsert_bet(
+                bet
+            )
+
+            sportsbook_post_result(
+                bet,
+                (
+                    f"<@{bet.get('user_id')}> your parlay **LOST** ❌\n"
+                    f"Stake: **{bet.get('wager'):,}** coins\n"
+                    f"Potential payout was **{bet.get('potential_payout'):,}** coins.\n\n"
+                    + "\n".join(
+                        (
+                            f"{'✅' if item.get('settlement', {}).get('result') in ['hit','void'] else '❌' if item.get('settlement', {}).get('result') == 'miss' else '⏳'} "
+                            f"{item.get('label')} • "
+                            f"{format_american_odds(item.get('odds', -110))}"
+                        )
+                        for item in leg_results
+                    )
+                )
+            )
+
+            results.append({
+                "bet_id":
+                    bet.get(
+                        "bet_id"
+                    ),
+                "status":
+                    "lost"
+            })
+
+            continue
+
+        if any_pending:
+            bet[
+                "status"
+            ] = "partial"
+
+            sportsbook_upsert_bet(
+                bet
+            )
+
+            results.append({
+                "bet_id":
+                    bet.get(
+                        "bet_id"
+                    ),
+                "status":
+                    "partial"
+            })
+
+            continue
+
+        # All legs hit or voided. A fully voided ticket returns stake.
+        payout = int(
+            bet.get(
+                "potential_payout",
+                bet.get(
+                    "wager",
+                    0
+                )
+            )
+        )
+
+        if all(
+            item.get(
+                "settlement",
+                {}
+            ).get(
+                "result"
+            )
+            == "void"
+            for item in leg_results
+        ):
+            payout = int(
+                bet.get(
+                    "wager",
+                    0
+                )
+            )
+
+        # Mark the payout as in-progress before touching the external wallet.
+        # If the HTTP result becomes ambiguous, we stop and require manual review
+        # rather than risking a duplicate payout.
+        bet[
+            "status"
+        ] = "settling"
+
+        bet[
+            "payout_started_at"
+        ] = datetime.now(
+            timezone.utc
+        ).isoformat()
+
+        sportsbook_upsert_bet(
+            bet
+        )
+
+        payout_result = unbelievaboat_edit_cash(
+            bet.get(
+                "guild_id"
+            ),
+            bet.get(
+                "user_id"
+            ),
+            payout,
+            (
+                f"Project Madden parlay {bet.get('bet_id')} payout"
+            )
+        )
+
+        if not payout_result.get(
+            "success"
+        ):
+            bet[
+                "status"
+            ] = "payout_review"
+
+            bet[
+                "payout_error"
+            ] = payout_result.get(
+                "error"
+            )
+
+            sportsbook_upsert_bet(
+                bet
+            )
+
+            results.append({
+                "bet_id":
+                    bet.get(
+                        "bet_id"
+                    ),
+                "status":
+                    "payout_review"
+            })
+
+            continue
+
+        bet[
+            "status"
+        ] = "won"
+
+        bet[
+            "settled_at"
+        ] = datetime.now(
+            timezone.utc
+        ).isoformat()
+
+        bet[
+            "payout_paid"
+        ] = payout
+
+        bet[
+            "cash_after_payout"
+        ] = payout_result.get(
+            "cash"
+        )
+
+        sportsbook_upsert_bet(
+            bet
+        )
+
+        sportsbook_post_result(
+            bet,
+            (
+                f"<@{bet.get('user_id')}> your parlay **HIT** 🎉\n"
+                f"Stake: **{bet.get('wager'):,}** coins\n"
+                f"Payout: **{payout:,}** coins\n"
+                f"New UnbelievaBoat cash balance: "
+                f"**{payout_result.get('cash', 0):,}**\n\n"
+                + "\n".join(
+                    (
+                        f"{'✅' if item.get('settlement', {}).get('result') == 'hit' else '↩️'} "
+                        f"{item.get('label')} • "
+                        f"{format_american_odds(item.get('odds', -110))}"
+                    )
+                    for item in leg_results
+                )
+            )
+        )
+
+        results.append({
+            "bet_id":
+                bet.get(
+                    "bet_id"
+                ),
+            "status":
+                "won",
+            "payout":
+                payout
+        })
+
+    return {
+        "success":
+            True,
+        "guild_id":
+            str(
+                guild_id
+            ),
+        "settlements":
+            results
+    }
+
+
+# =========================================================
+# MULTI-SERVER AI MEDIA DELIVERY
+# =========================================================
+
+def guild_ai_media_channel_id(
+    guild_id
+):
+    config = get_guild_config(
+        guild_id
+    )
+
+    if not config:
+        return None
+
+    settings = config.get(
+        "settings",
+        {}
+    )
+
+    if not isinstance(
+        settings,
+        dict
+    ):
+        settings = {}
+
+    return (
+        settings.get(
+            "weekly_show_channel_id"
+        )
+        or settings.get(
+            "media_channel_id"
+        )
+        or settings.get(
+            "analyst_channel_id"
+        )
+    )
+
+
+def discord_send_embed_to_channel(
+    channel_id,
+    embed
+):
+    channel_id = str(
+        channel_id
+        or ""
+    ).strip()
+
+    if not channel_id:
+        return {
+            "sent": False,
+            "error":
+                "No Discord channel is configured for this server."
+        }
+
+    token = discord_bot_token()
+
+    if not token:
+        return {
+            "sent": False,
+            "error":
+                "DISCORD_BOT_TOKEN is not configured."
+        }
+
+    try:
+        response = requests.post(
+            (
+                f"{DISCORD_API_BASE}/channels/"
+                f"{channel_id}/messages"
+            ),
+            headers={
+                "Authorization":
+                    f"Bot {token}",
+                "Content-Type":
+                    "application/json"
+            },
+            json={
+                "embeds": [
+                    embed
+                ]
+            },
+            timeout=15
+        )
+
+        if response.status_code in [
+            200,
+            201
+        ]:
+            payload = response.json()
+
+            return {
+                "sent": True,
+                "channel_id":
+                    channel_id,
+                "message_id":
+                    payload.get(
+                        "id"
+                    )
+            }
+
+        return {
+            "sent": False,
+            "channel_id":
+                channel_id,
+            "status_code":
+                response.status_code,
+            "error":
+                response.text[:500]
+        }
+
+    except Exception as e:
+        return {
+            "sent": False,
+            "channel_id":
+                channel_id,
+            "error":
+                str(
+                    e
+                )
+        }
+
+
+def send_ai_media_embed(
+    guild_id,
+    title,
+    description,
+    fields=None,
+    persona="Project Madden Media",
+    footer="Project Madden Media",
+    thumbnail_url=None,
+    image_url=None
+):
+    channel_id = guild_ai_media_channel_id(
+        guild_id
+    )
+
+    if not channel_id:
+        return {
+            "sent": False,
+            "error":
+                (
+                    "This server does not have a Project Madden "
+                    "AI Media / Weekly Show channel configured yet."
+                )
+        }
+
+    embed = {
+        "title":
+            str(
+                title
+            )[:256],
+        "description":
+            str(
+                description
+            )[:4096],
+        "footer": {
+            "text":
+                str(
+                    footer
+                )[:2048]
+        }
+    }
+
+    if fields:
+        embed[
+            "fields"
+        ] = fields[:25]
+
+    if thumbnail_url:
+        embed[
+            "thumbnail"
+        ] = {
+            "url":
+                thumbnail_url
+        }
+
+    if image_url:
+        embed[
+            "image"
+        ] = {
+            "url":
+                image_url
+        }
+
+    result = discord_send_embed_to_channel(
+        channel_id,
+        embed
+    )
+
+    result[
+        "persona"
+    ] = persona
+
+    result[
+        "guild_id"
+    ] = str(
+        guild_id
+    )
+
+    return result
+
+
+def ai_bots_status_for_guild(
+    guild_id
+):
+    config = get_guild_config(
+        guild_id
+    )
+
+    channel_id = guild_ai_media_channel_id(
+        guild_id
+    )
+
+    return {
+        "guild_id":
+            str(
+                guild_id
+            ),
+        "configured":
+            bool(
+                config
+            ),
+        "media_channel_id":
+            channel_id,
+        "bot_token_ready":
+            bool(
+                discord_bot_token()
+            ),
+        "global_commands":
+            True,
+        "analysts": {
+            "marcus_hayes": {
+                "available":
+                    bool(
+                        channel_id
+                        and discord_bot_token()
+                    ),
+                "type":
+                    "Project Madden fictional analyst"
+            },
+            "stephen_a_smith_ai_parody": {
+                "available":
+                    bool(
+                        channel_id
+                        and discord_bot_token()
+                    ),
+                "disclaimer":
+                    "Fictional AI parody; not real statements."
+            },
+            "pat_mcafee_ai_parody": {
+                "available":
+                    bool(
+                        channel_id
+                        and discord_bot_token()
+                    ),
+                "disclaimer":
+                    "Fictional AI parody; not real statements."
+            },
+            "josh_pate_ai_parody": {
+                "available":
+                    bool(
+                        channel_id
+                        and discord_bot_token()
+                    ),
+                "disclaimer":
+                    "Fictional AI parody; not real statements."
+            },
+            "weekly_show": {
+                "available":
+                    bool(
+                        channel_id
+                        and discord_bot_token()
+                    )
+            }
+        }
+    }
 
 
 # =========================================================
@@ -14692,35 +18010,63 @@ def weekly_show_embed_fields(
     return fields
 
 
+
 def send_weekly_show_embed(
     title,
     description,
-    fields=None
+    fields=None,
+    guild_id=None
 ):
-    webhook_url = get_weekly_show_webhook()
-
-    if not webhook_url:
-        return {
-            "sent": False,
-            "error": (
-                "WEEKLY_SHOW_DISCORD_WEBHOOK_URL "
-                "is not configured."
-            )
-        }
+    guild_id = (
+        guild_id
+        or current_project_madden_guild_id()
+    )
 
     weekly_show_logo_url = (
         "https://project-madden-analytics.onrender.com/"
         "assets/weekly-show-logo.jpg"
     )
 
+    if guild_id:
+        return send_ai_media_embed(
+            guild_id,
+            title,
+            description,
+            fields=fields,
+            persona=
+                "Project Madden Weekly Show",
+            footer=
+                "Project Madden Weekly Show",
+            thumbnail_url=
+                weekly_show_logo_url,
+            image_url=
+                weekly_show_logo_url
+        )
+
+    webhook_url = get_weekly_show_webhook()
+
+    if not webhook_url:
+        return {
+            "sent": False,
+            "error":
+                (
+                    "WEEKLY_SHOW_DISCORD_WEBHOOK_URL "
+                    "is not configured."
+                )
+        }
+
     embed = {
-        "title": title,
-        "description": description,
+        "title":
+            title,
+        "description":
+            description,
         "thumbnail": {
-            "url": weekly_show_logo_url
+            "url":
+                weekly_show_logo_url
         },
         "image": {
-            "url": weekly_show_logo_url
+            "url":
+                weekly_show_logo_url
         },
         "footer": {
             "text":
@@ -14729,14 +18075,19 @@ def send_weekly_show_embed(
     }
 
     if fields:
-        embed["fields"] = fields
+        embed[
+            "fields"
+        ] = fields
 
     payload = {
         "username":
             "Project Madden Weekly Show",
         "avatar_url":
             weekly_show_logo_url,
-        "embeds": [embed]
+        "embeds":
+            [
+                embed
+            ]
     }
 
     try:
@@ -14746,28 +18097,37 @@ def send_weekly_show_embed(
             timeout=15
         )
 
-        if response.status_code not in [200, 204]:
+        if response.status_code not in [
+            200,
+            204
+        ]:
             return {
                 "sent": False,
-                "error": (
-                    f"Discord returned "
-                    f"{response.status_code}: "
-                    f"{response.text[:500]}"
-                )
+                "error":
+                    (
+                        f"Discord returned "
+                        f"{response.status_code}: "
+                        f"{response.text[:500]}"
+                    )
             }
 
-        return {"sent": True}
+        return {
+            "sent": True
+        }
 
     except Exception as e:
         return {
             "sent": False,
-            "error": str(e)
+            "error":
+                str(
+                    e
+                )
         }
-
 
 def send_weekly_show_to_discord(
     season_type,
-    week_number
+    week_number,
+    guild_id=None
 ):
     if not weekly_show_webhook_configured():
         return {
@@ -14828,7 +18188,8 @@ def send_weekly_show_to_discord(
         description,
         weekly_show_embed_fields(
             show
-        )
+        ),
+        guild_id=guild_id
     )
 
     if result.get("sent"):
@@ -17754,27 +21115,49 @@ def build_stephen_a_parody_segment(
     return stories
 
 
+
 def send_stephen_a_parody_embed(
     title,
-    description
+    description,
+    guild_id=None
 ):
-    webhook_url = (
-        get_stephen_a_parody_webhook()
+    guild_id = (
+        guild_id
+        or current_project_madden_guild_id()
     )
-
-    if not webhook_url:
-        return {
-            "sent": False,
-            "error": (
-                "STEPHEN_A_PARODY_WEBHOOK_URL "
-                "is not configured."
-            )
-        }
 
     stephen_avatar_url = (
         "https://project-madden-analytics.onrender.com/"
         "assets/stephen-a-smith.png"
     )
+
+    if guild_id:
+        return send_ai_media_embed(
+            guild_id,
+            title,
+            description,
+            persona=
+                "Stephen A. Smith | AI Parody",
+            footer=
+                (
+                    "AI parody segment • "
+                    "Not real Stephen A. Smith statements"
+                ),
+            thumbnail_url=
+                stephen_avatar_url
+        )
+
+    webhook_url = get_stephen_a_parody_webhook()
+
+    if not webhook_url:
+        return {
+            "sent": False,
+            "error":
+                (
+                    "STEPHEN_A_PARODY_WEBHOOK_URL "
+                    "is not configured."
+                )
+        }
 
     payload = {
         "username":
@@ -17783,16 +21166,20 @@ def send_stephen_a_parody_embed(
             stephen_avatar_url,
         "embeds": [
             {
-                "title": title,
-                "description": description,
+                "title":
+                    title,
+                "description":
+                    description,
                 "thumbnail": {
-                    "url": stephen_avatar_url
+                    "url":
+                        stephen_avatar_url
                 },
                 "footer": {
-                    "text": (
-                        "AI parody segment • "
-                        "Not real Stephen A. Smith statements"
-                    )
+                    "text":
+                        (
+                            "AI parody segment • "
+                            "Not real Stephen A. Smith statements"
+                        )
                 }
             }
         ]
@@ -17811,21 +21198,26 @@ def send_stephen_a_parody_embed(
         ]:
             return {
                 "sent": False,
-                "error": (
-                    f"Discord returned "
-                    f"{response.status_code}: "
-                    f"{response.text[:500]}"
-                )
+                "error":
+                    (
+                        f"Discord returned "
+                        f"{response.status_code}: "
+                        f"{response.text[:500]}"
+                    )
             }
 
-        return {"sent": True}
+        return {
+            "sent": True
+        }
 
     except Exception as e:
         return {
             "sent": False,
-            "error": str(e)
+            "error":
+                str(
+                    e
+                )
         }
-
 
 def process_stephen_a_parody_posts(
     season_type,
@@ -18147,29 +21539,58 @@ def build_josh_pate_trade_reaction(analysis):
     return f"{line} {closer}"
 
 
-def send_josh_pate_parody_embed(title, description):
+
+def send_josh_pate_parody_embed(
+    title,
+    description,
+    guild_id=None
+):
+    guild_id = (
+        guild_id
+        or current_project_madden_guild_id()
+    )
+
+    if guild_id:
+        return send_ai_media_embed(
+            guild_id,
+            title,
+            description,
+            persona=
+                "Josh Pate | AI Parody",
+            footer=
+                (
+                    "AI parody segment • "
+                    "Not real Josh Pate statements"
+                )
+        )
+
     webhook_url = get_josh_pate_parody_webhook()
 
     if not webhook_url:
         return {
             "sent": False,
-            "error": (
-                "JOSH_PATE_PARODY_WEBHOOK_URL "
-                "is not configured."
-            )
+            "error":
+                (
+                    "JOSH_PATE_PARODY_WEBHOOK_URL "
+                    "is not configured."
+                )
         }
 
     payload = {
-        "username": "Josh Pate | AI Parody",
+        "username":
+            "Josh Pate | AI Parody",
         "embeds": [
             {
-                "title": title,
-                "description": description,
+                "title":
+                    title,
+                "description":
+                    description,
                 "footer": {
-                    "text": (
-                        "AI parody segment • "
-                        "Not real Josh Pate statements"
-                    )
+                    "text":
+                        (
+                            "AI parody segment • "
+                            "Not real Josh Pate statements"
+                        )
                 }
             }
         ]
@@ -18182,23 +21603,32 @@ def send_josh_pate_parody_embed(title, description):
             timeout=15
         )
 
-        if response.status_code not in [200, 204]:
+        if response.status_code not in [
+            200,
+            204
+        ]:
             return {
                 "sent": False,
-                "error": (
-                    f"Discord returned {response.status_code}: "
-                    f"{response.text[:500]}"
-                )
+                "error":
+                    (
+                        f"Discord returned "
+                        f"{response.status_code}: "
+                        f"{response.text[:500]}"
+                    )
             }
 
-        return {"sent": True}
+        return {
+            "sent": True
+        }
 
     except Exception as e:
         return {
             "sent": False,
-            "error": str(e)
+            "error":
+                str(
+                    e
+                )
         }
-
 
 # =========================================================
 # PAT MCAFEE - AI PARODY SPECIAL SEGMENT
@@ -19475,6 +22905,10 @@ def expected_project_madden_commands():
         "testsystem",
         "testgotw",
         "testhof",
+        "analysts",
+        "sportsbook",
+        "parlay",
+        "mybets",
     ]
 
 
@@ -19778,6 +23212,34 @@ def register_trade_slash_command():
             "hof",
         "description":
             "View the Project Madden Hall of Fame"
+    }
+
+    analysts_command = {
+        "name":
+            "analysts",
+        "description":
+            "View this server's Project Madden AI analyst lineup"
+    }
+
+    sportsbook_command = {
+        "name":
+            "sportsbook",
+        "description":
+            "Open this server's Project Madden virtual parlay sportsbook"
+    }
+
+    parlay_command = {
+        "name":
+            "parlay",
+        "description":
+            "Open your Project Madden parlay bet slip"
+    }
+
+    mybets_command = {
+        "name":
+            "mybets",
+        "description":
+            "View your recent Project Madden virtual parlays"
     }
 
     test_marcus_command = {
@@ -20128,7 +23590,11 @@ def register_trade_slash_command():
         test_pat_command,
         test_system_command,
         test_gotw_command,
-        test_hof_command
+        test_hof_command,
+        analysts_command,
+        sportsbook_command,
+        parlay_command,
+        mybets_command
     ]
 
     headers = {
@@ -21168,7 +24634,10 @@ def process_test_weekly_show_background(
                 ),
                 "inline": False
             }
-        ]
+        ],
+        guild_id=interaction.get(
+            "guild_id"
+        )
     )
 
     if result.get("sent"):
@@ -21228,7 +24697,10 @@ def process_weekly_show_background(
 
         result = send_weekly_show_to_discord(
             season_type,
-            week_number
+            week_number,
+            guild_id=interaction.get(
+                "guild_id"
+            )
         )
 
         if result.get("skipped"):
@@ -21810,6 +25282,9 @@ def process_test_system_background(
             test.get(
                 "fields",
                 []
+            ),
+            guild_id=interaction.get(
+                "guild_id"
             )
         )
 
@@ -22621,6 +26096,178 @@ def discord_interactions():
                 }
             })
 
+        if command_name in [
+            "sportsbook",
+            "parlay"
+        ]:
+            guild_id = str(
+                interaction.get(
+                    "guild_id",
+                    ""
+                )
+            ).strip()
+
+            user_id = str(
+                (
+                    interaction.get(
+                        "member",
+                        {}
+                    )
+                    .get(
+                        "user",
+                        {}
+                    )
+                    .get(
+                        "id",
+                        ""
+                    )
+                )
+            ).strip()
+
+            if not guild_id:
+                return discord_ephemeral(
+                    "❌ Sportsbook can only be used inside a Discord server."
+                )
+
+            if not user_id:
+                return discord_ephemeral(
+                    "❌ Could not identify your Discord account."
+                )
+
+            config = get_guild_config(
+                guild_id
+            )
+
+            if not config:
+                return discord_ephemeral(
+                    "❌ This server has not completed Project Madden `/setup` yet."
+                )
+
+            if not config.get(
+                "snallabot_league_id"
+            ):
+                return discord_ephemeral(
+                    "❌ Connect this server to its Madden league through Snallabot first."
+                )
+
+            if not unbelievaboat_configured():
+                return discord_ephemeral(
+                    "❌ Project Madden's UnbelievaBoat API connection is not configured yet."
+                )
+
+            return discord_ephemeral_link(
+                (
+                    "🎟️ **PROJECT MADDEN SPORTSBOOK**\\n"
+                    "Your Discord server and UnbelievaBoat wallet are already attached. "
+                    "Build moneyline + player-stat parlays from your Madden league."
+                ),
+                "OPEN SPORTSBOOK",
+                sportsbook_user_link(
+                    guild_id,
+                    user_id
+                )
+            )
+
+        if command_name == "mybets":
+            guild_id = str(
+                interaction.get(
+                    "guild_id",
+                    ""
+                )
+            ).strip()
+
+            user_id = str(
+                (
+                    interaction.get(
+                        "member",
+                        {}
+                    )
+                    .get(
+                        "user",
+                        {}
+                    )
+                    .get(
+                        "id",
+                        ""
+                    )
+                )
+            ).strip()
+
+            bets = sportsbook_user_bets(
+                guild_id,
+                user_id,
+                5
+            )
+
+            if not bets:
+                return discord_ephemeral(
+                    "🎟️ You do not have any Project Madden parlays yet."
+                )
+
+            lines = [
+                "🎟️ **YOUR PROJECT MADDEN PARLAYS**"
+            ]
+
+            for bet in bets:
+                lines.append(
+                    (
+                        f"**{bet.get('bet_id')}** • "
+                        f"{str(bet.get('status')).upper()} • "
+                        f"{len(bet.get('legs', []))} legs • "
+                        f"{int(bet.get('wager', 0)):,} stake • "
+                        f"{int(bet.get('potential_payout', 0)):,} payout"
+                    )
+                )
+
+            lines.append(
+                "\\nUse `/sportsbook` to open the full bet slip and history."
+            )
+
+            return discord_ephemeral(
+                "\\n".join(
+                    lines
+                )
+            )
+
+        if command_name == "analysts":
+            guild_id = str(
+                interaction.get(
+                    "guild_id",
+                    ""
+                )
+            ).strip()
+
+            status = ai_bots_status_for_guild(
+                guild_id
+            )
+
+            channel_id = status.get(
+                "media_channel_id"
+            )
+
+            if not channel_id:
+                return discord_ephemeral(
+                    "🎙️ **PROJECT MADDEN AI ANALYSTS**\n"
+                    "Marcus Hayes ✅\n"
+                    "Stephen A. Smith — AI Parody ✅\n"
+                    "Pat McAfee — AI Parody ✅\n"
+                    "Josh Pate — AI Parody ✅\n"
+                    "Weekly Show ✅\n\n"
+                    "⚠️ This server still needs an AI Media / "
+                    "Weekly Show channel selected in `/setup`."
+                )
+
+            return discord_ephemeral(
+                "🎙️ **PROJECT MADDEN AI ANALYSTS**\n"
+                "Marcus Hayes ✅\n"
+                "Stephen A. Smith — AI Parody ✅\n"
+                "Pat McAfee — AI Parody ✅\n"
+                "Josh Pate — AI Parody ✅\n"
+                "Weekly Show ✅\n\n"
+                f"Media channel: <#{channel_id}>\n"
+                "These commands are globally installed with Project Madden."
+            )
+
         if command_name == "testmarcus":
             options = discord_option_map(
                 interaction
@@ -22646,6 +26293,9 @@ def discord_interactions():
                     f"## {headline}\n"
                     f"{take}\n\n"
                     "*Test message from Discord.*"
+                ),
+                guild_id=interaction.get(
+                    "guild_id"
                 )
             )
 
@@ -22802,6 +26452,9 @@ def discord_interactions():
                     "and this fictional AI parody segment is ready for weekly reactions.\n\n"
                     "⚠️ *Fictional AI parody for Project Madden. "
                     "This is not a real Pat McAfee quote or statement.*"
+                ),
+                guild_id=interaction.get(
+                    "guild_id"
                 )
             )
 
@@ -22868,6 +26521,9 @@ def discord_interactions():
                     f"{take}\n\n"
                     "⚠️ *Fictional AI parody for Project Madden. "
                     "This is not a real Josh Pate quote or statement.*"
+                ),
+                guild_id=interaction.get(
+                    "guild_id"
                 )
             )
 
@@ -22912,6 +26568,9 @@ def discord_interactions():
                     f"{take}\n\n"
                     "⚠️ *Fictional AI parody for Project Madden. "
                     "This is not a real Stephen A. Smith quote or statement.*"
+                ),
+                guild_id=interaction.get(
+                    "guild_id"
                 )
             )
 
@@ -23978,6 +27637,7 @@ def home():
         "service": "Project Madden Analytics",
         "snallabot": "connected",
         "trade_center": "/proposetrade",
+        "sportsbook": "/sportsbook/status/<guild_id>",
         "test_center": "/test-center",
         "team_api": "/api/teams",
         "player_search": "/api/players",
@@ -24048,6 +27708,51 @@ def snallabot_receiver(subpath):
 
     parts = subpath.split("/")
 
+    # Snallabot export paths are:
+    # /snallabot/<platform>/<league_id>/...
+    # Resolve that league to the Discord server so automatic Marcus /
+    # Weekly Show / parody posts go to the correct server's media channel.
+    export_guild_context_token = None
+    export_guild_id = None
+
+    try:
+        league_id_from_export = (
+            parts[1]
+            if len(
+                parts
+            ) >= 2
+            else None
+        )
+
+        export_guild = get_guild_config_by_snallabot_league(
+            league_id_from_export
+        )
+
+        if export_guild:
+            export_guild_id = str(
+                export_guild.get(
+                    "guild_id"
+                )
+            )
+
+            export_guild_context_token = (
+                CURRENT_PROJECT_MADDEN_GUILD_ID.set(
+                    str(
+                        export_guild.get(
+                            "guild_id"
+                        )
+                    )
+                )
+            )
+
+    except Exception as e:
+        print(
+            "EXPORT GUILD CONTEXT ERROR:",
+            repr(
+                e
+            )
+        )
+
     print(
         "PROJECT MADDEN EXPORT:",
         subpath
@@ -24059,6 +27764,13 @@ def snallabot_receiver(subpath):
             data
         )
 
+        if export_guild_id:
+            sportsbook_save_league_export(
+                export_guild_id,
+                "leagueteams.json",
+                data
+            )
+
         return jsonify({
             "success": True,
             "type": "leagueteams"
@@ -24069,6 +27781,13 @@ def snallabot_receiver(subpath):
             "standings.json",
             data
         )
+
+        if export_guild_id:
+            sportsbook_save_league_export(
+                export_guild_id,
+                "standings.json",
+                data
+            )
 
         marcus_standings = None
 
@@ -24098,6 +27817,13 @@ def snallabot_receiver(subpath):
             data
         )
 
+        if export_guild_id:
+            sportsbook_save_league_export(
+                export_guild_id,
+                "extra.json",
+                data
+            )
+
         return jsonify({
             "success": True,
             "type": "extra"
@@ -24111,6 +27837,13 @@ def snallabot_receiver(subpath):
             "freeagents_roster.json",
             data
         )
+
+        if export_guild_id:
+            sportsbook_save_league_export(
+                export_guild_id,
+                "freeagents_roster.json",
+                data
+            )
 
         return jsonify({
             "success": True,
@@ -24130,6 +27863,13 @@ def snallabot_receiver(subpath):
             f"roster_{team_id}.json",
             data
         )
+
+        if export_guild_id:
+            sportsbook_save_league_export(
+                export_guild_id,
+                f"roster_{team_id}.json",
+                data
+            )
 
         try:
             injury_result = process_team_injury_export(
@@ -24199,6 +27939,18 @@ def snallabot_receiver(subpath):
                 indent=2
             )
 
+        if export_guild_id:
+            sportsbook_save_league_export(
+                export_guild_id,
+                os.path.join(
+                    "weekly",
+                    season_type,
+                    f"week_{week_number}",
+                    f"{stat_type}.json"
+                ),
+                data
+            )
+
         auto_post = None
         gotw_auto_post = None
 
@@ -24251,6 +28003,34 @@ def snallabot_receiver(subpath):
                     "error": str(e)
                 }
 
+        parlay_settlement = None
+
+        if (
+            export_guild_id
+            and stat_type in [
+                "schedules",
+                "passing",
+                "rushing",
+                "receiving",
+                "defense"
+            ]
+        ):
+            try:
+                parlay_settlement = (
+                    settle_open_parlays_for_guild(
+                        export_guild_id
+                    )
+                )
+            except Exception as e:
+                parlay_settlement = {
+                    "success":
+                        False,
+                    "error":
+                        str(
+                            e
+                        )
+                }
+
         return jsonify({
             "success": True,
             "type": "weekly",
@@ -24258,7 +28038,8 @@ def snallabot_receiver(subpath):
             "week": week_number,
             "stat_type": stat_type,
             "marcus_auto_post": auto_post,
-            "gotw_auto_post": gotw_auto_post
+            "gotw_auto_post": gotw_auto_post,
+            "parlay_settlement": parlay_settlement
         })
 
     return jsonify({
@@ -24267,6 +28048,449 @@ def snallabot_receiver(subpath):
         "path": subpath
     })
 
+
+
+
+SPORTSBOOK_HTML = """
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Project Madden Sportsbook</title>
+<style>
+:root{
+  --bg:#07100b;--panel:#101914;--panel2:#16231b;--line:#29382e;
+  --text:#f3f8f4;--muted:#9db0a2;--green:#28d17c;--green2:#8ef2b8;
+  --red:#ff6969;--gold:#ffd36b;--blue:#65b8ff;
+}
+*{box-sizing:border-box}
+body{margin:0;background:linear-gradient(160deg,#061009,#0b1510 58%,#09110c);color:var(--text);
+font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.shell{max-width:1180px;margin:auto;padding:18px 14px 100px}
+.top{position:sticky;top:0;z-index:5;background:rgba(7,16,11,.94);backdrop-filter:blur(12px);
+padding:12px 0;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:12px;align-items:center}
+.brand{font-weight:950;letter-spacing:.03em}.brand span{color:var(--green)}
+.wallet{text-align:right}.wallet b{font-size:19px}.small{font-size:12px;color:var(--muted)}
+.tabs{display:flex;gap:8px;overflow:auto;padding:16px 0 6px}.tab{white-space:nowrap;border:1px solid var(--line);
+background:var(--panel);color:var(--text);padding:10px 14px;border-radius:999px;font-weight:800;cursor:pointer}
+.tab.active{background:var(--green);color:#05140b;border-color:var(--green)}
+.notice{background:#12281b;border:1px solid #285f3e;padding:13px 15px;border-radius:12px;margin:14px 0;color:#c6f6d9}
+.game{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:15px;margin-top:14px}
+.gamehead{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.match{font-size:18px;font-weight:900}
+.market-title{font-size:12px;color:var(--muted);font-weight:900;text-transform:uppercase;margin:15px 0 8px}
+.options{display:grid;grid-template-columns:1fr 1fr;gap:8px}.pick{border:1px solid var(--line);background:var(--panel2);color:var(--text);
+border-radius:11px;padding:12px;text-align:left;cursor:pointer;font-weight:800}.pick .odds{float:right;color:var(--green2)}
+.pick.selected{outline:2px solid var(--green);background:#183326}
+.props{margin-top:10px}.prop-row{display:grid;grid-template-columns:1.4fr .8fr .8fr;gap:7px;align-items:center;margin:7px 0}
+.prop-name{font-size:13px}.slip{position:fixed;bottom:0;left:0;right:0;background:#101914;border-top:1px solid var(--line);
+box-shadow:0 -10px 35px rgba(0,0,0,.35);z-index:9}.slip-inner{max-width:1180px;margin:auto;padding:12px 14px}
+.slip-row{display:flex;justify-content:space-between;gap:12px;align-items:center}.legs{font-weight:900}
+.wager{width:125px;background:#07100b;color:#fff;border:1px solid var(--line);border-radius:10px;padding:11px;font-size:16px}
+.place{background:var(--green);color:#06130a;border:0;border-radius:11px;padding:12px 17px;font-weight:950;cursor:pointer}
+.place:disabled{opacity:.45}.receipt{margin-top:13px;padding:13px;border-radius:12px;background:#132019;border:1px solid var(--line)}
+.bet{border:1px solid var(--line);border-radius:13px;padding:13px;margin:10px 0;background:var(--panel)}
+.status{display:inline-block;padding:4px 8px;border-radius:999px;background:#26362c;font-size:11px;font-weight:900;text-transform:uppercase}
+.status.won{background:#174d2d;color:#8af0b3}.status.lost{background:#4a2020;color:#ff9e9e}.error{background:#3b1c1c;border:1px solid #783232;padding:12px;border-radius:10px;color:#ffb1b1}
+@media(max-width:700px){.options{grid-template-columns:1fr 1fr}.prop-row{grid-template-columns:1fr 1fr}.prop-name{grid-column:1/-1}.wallet b{font-size:16px}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="top">
+    <div>
+      <div class="brand">PROJECT MADDEN <span>SPORTSBOOK</span></div>
+      <div class="small">Virtual league coins • Powered by Snallabot + UnbelievaBoat</div>
+    </div>
+    <div class="wallet">
+      <div class="small">CASH BALANCE</div>
+      <b id="cashBalance">{{ "{:,}".format(balance.cash if balance.success else 0) }}</b>
+    </div>
+  </div>
+
+  <div class="notice">
+    🎮 This sportsbook uses your Discord server's virtual UnbelievaBoat currency only. Snallabot Madden exports create the markets and settle results automatically.
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" onclick="showTab('board',this)">Sportsbook</button>
+    <button class="tab" onclick="showTab('bets',this)">My Bets</button>
+  </div>
+
+  <section id="boardTab">
+    {% if board.error %}
+      <div class="error">{{ board.error }}</div>
+    {% else %}
+      {% for game in board.games %}
+        <div class="game">
+          <div class="gamehead">
+            <div>
+              <div class="match">{{ game.away }} @ {{ game.home }}</div>
+              <div class="small">{{ season_type|upper }} WEEK {{ week }}</div>
+            </div>
+          </div>
+          <div class="market-title">Moneyline</div>
+          <div class="options">
+            {% for market in board.markets if market.market_type == 'moneyline' and market.game_id == game.game_id %}
+              <button class="pick" data-id="{{ market.market_id }}" data-odds="{{ market.odds }}" data-label="{{ market.label|e }}" onclick="togglePick(this)">
+                {{ market.selection }} <span class="odds">{{ '+' if market.odds > 0 else '' }}{{ market.odds }}</span>
+              </button>
+            {% endfor %}
+          </div>
+
+          {% set game_team_names = [game.home, game.away] %}
+          {% set props = board.markets|selectattr('market_type','equalto','player_prop')|selectattr('team','in',game_team_names)|list %}
+          {% if props %}
+          <div class="market-title">Player Props</div>
+          <div class="props">
+            {% set grouped = {} %}
+            {% for market in props %}
+              {% set key = market.player ~ '|' ~ market.stat_key ~ '|' ~ market.line %}
+              {% if grouped.update({key: (grouped.get(key, []) + [market])}) %}{% endif %}
+            {% endfor %}
+            {% for key, group in grouped.items() %}
+              <div class="prop-row">
+                <div class="prop-name"><b>{{ group[0].player }}</b><br><span class="small">{{ group[0].line }} {{ group[0].stat_label }}</span></div>
+                {% for market in group %}
+                  <button class="pick" data-id="{{ market.market_id }}" data-odds="{{ market.odds }}" data-label="{{ market.label|e }}" onclick="togglePick(this)">
+                    {{ market.direction|title }} <span class="odds">{{ market.odds }}</span>
+                  </button>
+                {% endfor %}
+              </div>
+            {% endfor %}
+          </div>
+          {% endif %}
+        </div>
+      {% endfor %}
+    {% endif %}
+  </section>
+
+  <section id="betsTab" style="display:none">
+    {% if bets %}
+      {% for bet in bets %}
+        <div class="bet">
+          <div style="display:flex;justify-content:space-between;gap:10px">
+            <b>{{ bet.bet_id }}</b>
+            <span class="status {{ bet.status }}">{{ bet.status }}</span>
+          </div>
+          <div class="small" style="margin:6px 0">{{ bet.legs|length }} legs • {{ "{:,}".format(bet.wager) }} stake • {{ "{:,}".format(bet.potential_payout) }} payout</div>
+          {% for leg in bet.legs %}
+            <div>• {{ leg.label }} <span class="small">({{ '+' if leg.odds > 0 else '' }}{{ leg.odds }})</span></div>
+          {% endfor %}
+        </div>
+      {% endfor %}
+    {% else %}
+      <div class="bet">No parlays yet.</div>
+    {% endif %}
+  </section>
+</div>
+
+<div class="slip">
+  <div class="slip-inner">
+    <div class="slip-row">
+      <div>
+        <div class="legs"><span id="legCount">0</span> legs</div>
+        <div class="small">Potential payout: <b id="potential">0</b></div>
+      </div>
+      <input id="wager" class="wager" type="number" min="{{ min_wager }}" step="1" placeholder="Wager" oninput="updateSlip()">
+      <button id="placeBtn" class="place" disabled onclick="placeParlay()">PLACE PARLAY</button>
+    </div>
+    <div id="receipt"></div>
+  </div>
+</div>
+
+<script>
+const selected = new Map();
+const placeUrl = "{{ place_url }}";
+const minLegs = {{ min_legs }};
+const maxLegs = {{ max_legs }};
+
+function americanToDecimal(a){
+  a = Number(a);
+  return a > 0 ? 1 + a/100 : 1 + 100/Math.abs(a);
+}
+
+function togglePick(btn){
+  const id = btn.dataset.id;
+  if(selected.has(id)){
+    selected.delete(id);
+    btn.classList.remove("selected");
+  } else {
+    if(selected.size >= maxLegs){
+      alert(`Maximum ${maxLegs} legs.`);
+      return;
+    }
+    selected.set(id,{
+      id,
+      odds:Number(btn.dataset.odds),
+      label:btn.dataset.label
+    });
+    btn.classList.add("selected");
+  }
+  updateSlip();
+}
+
+function updateSlip(){
+  const wager = Number(document.getElementById("wager").value || 0);
+  let dec = 1;
+  selected.forEach(x => dec *= americanToDecimal(x.odds));
+  const payout = Math.round(wager * dec);
+  document.getElementById("legCount").textContent = selected.size;
+  document.getElementById("potential").textContent = payout.toLocaleString();
+  document.getElementById("placeBtn").disabled = selected.size < minLegs || wager < {{ min_wager }};
+}
+
+async function placeParlay(){
+  const btn = document.getElementById("placeBtn");
+  btn.disabled = true;
+  const wager = Number(document.getElementById("wager").value || 0);
+  const receipt = document.getElementById("receipt");
+
+  try{
+    const res = await fetch(placeUrl,{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({
+        wager:wager,
+        season_type:"{{ season_type }}",
+        week:{{ week }},
+        market_ids:Array.from(selected.keys())
+      })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success){
+      receipt.innerHTML = `<div class="error">${data.error || "Parlay failed."}</div>`;
+      updateSlip();
+      return;
+    }
+
+    const bet=data.bet;
+    receipt.innerHTML =
+      `<div class="receipt">✅ <b>${bet.bet_id}</b> accepted • `+
+      `${bet.legs.length} legs • ${bet.wager.toLocaleString()} stake • `+
+      `${bet.potential_payout.toLocaleString()} potential payout</div>`;
+
+    document.getElementById("cashBalance").textContent =
+      Number(data.balance.cash || 0).toLocaleString();
+
+    selected.clear();
+    document.querySelectorAll(".pick.selected").forEach(x=>x.classList.remove("selected"));
+    document.getElementById("wager").value="";
+    updateSlip();
+  }catch(err){
+    receipt.innerHTML = `<div class="error">Could not submit parlay.</div>`;
+    updateSlip();
+  }
+}
+
+function showTab(name,button){
+  document.getElementById("boardTab").style.display = name==="board" ? "" : "none";
+  document.getElementById("betsTab").style.display = name==="bets" ? "" : "none";
+  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
+  button.classList.add("active");
+}
+</script>
+</body>
+</html>
+"""
+
+
+@app.route(
+    "/sportsbook/<guild_id>/<user_id>/<signature>"
+)
+def project_madden_sportsbook(
+    guild_id,
+    user_id,
+    signature
+):
+    if not sportsbook_link_valid(
+        guild_id,
+        user_id,
+        signature
+    ):
+        return (
+            "Invalid Project Madden sportsbook link.",
+            403
+        )
+
+    guild = get_guild_config(
+        guild_id
+    )
+
+    if not guild:
+        return (
+            "This Discord server is not connected to Project Madden.",
+            404
+        )
+
+    week = request.args.get(
+        "week",
+        sportsbook_current_week(
+            guild_id
+        )
+    )
+
+    season_type = str(
+        request.args.get(
+            "season_type",
+            "reg"
+        )
+    ).lower()
+
+    if season_type not in [
+        "pre",
+        "reg"
+    ]:
+        season_type = "reg"
+
+    try:
+        week = max(
+            1,
+            int(
+                week
+            )
+        )
+    except Exception:
+        week = 1
+
+    board = sportsbook_build_markets(
+        guild_id,
+        season_type,
+        week
+    )
+
+    balance = unbelievaboat_get_balance(
+        guild_id,
+        user_id
+    )
+
+    bets = sportsbook_user_bets(
+        guild_id,
+        user_id,
+        25
+    )
+
+    return render_template_string(
+        SPORTSBOOK_HTML,
+        guild=guild,
+        user_id=user_id,
+        board=board,
+        balance=balance,
+        bets=bets,
+        season_type=season_type,
+        week=week,
+        min_wager=SPORTSBOOK_MIN_WAGER,
+        min_legs=SPORTSBOOK_MIN_LEGS,
+        max_legs=SPORTSBOOK_MAX_LEGS,
+        place_url=(
+            f"/sportsbook/{guild_id}/{user_id}/{signature}/place"
+        )
+    )
+
+
+@app.route(
+    "/sportsbook/<guild_id>/<user_id>/<signature>/place",
+    methods=[
+        "POST"
+    ]
+)
+def project_madden_sportsbook_place(
+    guild_id,
+    user_id,
+    signature
+):
+    if not sportsbook_link_valid(
+        guild_id,
+        user_id,
+        signature
+    ):
+        return jsonify({
+            "success":
+                False,
+            "error":
+                "Invalid sportsbook session."
+        }), 403
+
+    payload = request.get_json(
+        silent=True
+    ) or {}
+
+    result = sportsbook_place_parlay(
+        guild_id,
+        user_id,
+        str(
+            payload.get(
+                "season_type",
+                "reg"
+            )
+        ).lower(),
+        payload.get(
+            "week",
+            1
+        ),
+        payload.get(
+            "wager",
+            0
+        ),
+        payload.get(
+            "market_ids",
+            []
+        )
+    )
+
+    return jsonify(
+        result
+    ), (
+        200
+        if result.get(
+            "success"
+        )
+        else 400
+    )
+
+
+@app.route(
+    "/sportsbook/status/<guild_id>"
+)
+def project_madden_sportsbook_status(
+    guild_id
+):
+    config = get_guild_config(
+        guild_id
+    )
+
+    return jsonify({
+        "success":
+            bool(
+                config
+            ),
+        "guild_id":
+            str(
+                guild_id
+            ),
+        "league_id":
+            (
+                config.get(
+                    "snallabot_league_id"
+                )
+                if config
+                else None
+            ),
+        "unbelievaboat_api_configured":
+            unbelievaboat_configured(),
+        "guild_automatic":
+            True,
+        "settlement_source":
+            "Snallabot weekly exports",
+        "currency_source":
+            "UnbelievaBoat cash",
+        "real_money":
+            False,
+        "min_legs":
+            SPORTSBOOK_MIN_LEGS,
+        "max_legs":
+            SPORTSBOOK_MAX_LEGS
+    })
 
 
 # =========================================================
@@ -24496,6 +28720,32 @@ button.secondary{margin-top:10px;background:#141d2a;color:#e9f2ff;border:1px sol
     <div class="auto">
       <div class="auto-head">
         <div>
+          <div class="auto-title">🎟️ Project Madden Sportsbook</div>
+          <div class="note">Moneylines + player stat props from Snallabot. Parlays use each member's existing UnbelievaBoat cash balance and settle automatically from Madden exports.</div>
+        </div>
+        <span class="badge">INCLUDED</span>
+      </div>
+      <div class="info">
+        Discord server ID is detected automatically from the installed Project Madden app. No commissioner has to enter a guild ID manually.
+      </div>
+    </div>
+
+    <div class="auto">
+      <div class="auto-head">
+        <div>
+          <div class="auto-title">🎙️ Project Madden AI Media Desk</div>
+          <div class="note">Included for every connected server: Marcus Hayes, Weekly Show, Stephen A. Smith AI parody, Pat McAfee AI parody, and Josh Pate AI parody.</div>
+        </div>
+        <span class="badge">INCLUDED</span>
+      </div>
+      <div class="info">
+        Select an <b>AI Media / Weekly Show Channel</b> below. Project Madden posts through the installed bot in that server, so separate webhook setup is not required for new servers.
+      </div>
+    </div>
+
+    <div class="auto">
+      <div class="auto-head">
+        <div>
           <div class="auto-title">🛠️ Create Project Madden Channels</div>
           <div class="note">If your server does not already have the channels, Project Madden can create them for you.</div>
         </div>
@@ -24564,7 +28814,7 @@ button.secondary{margin-top:10px;background:#141d2a;color:#e9f2ff;border:1px sol
         <option value="">Auto detect / Not configured</option>
       </select>
 
-      <label>Weekly Show Channel</label>
+      <label>AI Media / Weekly Show Channel</label>
       <select name="weekly_show_channel_id" id="weekly_show_channel_id" data-current="{{ settings.get('weekly_show_channel_id','') }}">
         <option value="">Auto detect / Not configured</option>
       </select>
@@ -25240,6 +29490,19 @@ def project_madden_guild_setup(
                     None
                 )
 
+        settings[
+            "ai_bots_enabled"
+        ] = True
+
+        if settings.get(
+            "weekly_show_channel_id"
+        ):
+            settings[
+                "media_channel_id"
+            ] = settings.get(
+                "weekly_show_channel_id"
+            )
+
         saved = save_guild_setup(
             guild.get(
                 "guild_id"
@@ -25396,6 +29659,34 @@ def project_madden_setup_link_preview(
 )
 def project_madden_setup_health():
     return jsonify({
+        "sportsbook_parlays":
+            True,
+        "sportsbook_moneylines":
+            True,
+        "sportsbook_player_props":
+            True,
+        "sportsbook_automatic_guild_id":
+            True,
+        "sportsbook_snallabot_settlement":
+            True,
+        "sportsbook_unbelievaboat_currency":
+            True,
+        "sportsbook_real_money":
+            False,
+        "automatic_ai_export_guild_routing":
+            True,
+        "ai_media_webhook_required_for_new_servers":
+            False,
+        "ai_bots_multiserver":
+            True,
+        "ai_bots_global_commands":
+            True,
+        "ai_bots_delivery":
+            "per_guild_bot_channel",
+        "snallabot_auto_league_detection":
+            True,
+        "snallabot_auto_export_configuration":
+            True,
         "snallabot_dashboard_base":
             SNALLABOT_DASHBOARD_BASE,
         "official_madden_data_source":
@@ -25486,30 +29777,21 @@ SNALLABOT_EA_BRIDGE_HTML = """
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Connect EA via Snallabot • Project Madden</title>
 <style>
-:root{
-  --bg:#f5f7fb;--panel:#fff;--line:#d9dee7;--text:#14191f;
-  --muted:#65707f;--blue:#1578ff;--green:#70b895;--soft:#eaf4ff;
-  --warn:#fff8df;--warnline:#ecd57b;--shadow:0 8px 28px rgba(24,39,75,.12)
-}
+:root{--bg:#f5f7fb;--panel:#fff;--line:#d9dee7;--text:#14191f;--muted:#65707f;--blue:#1578ff;--green:#70b895;--soft:#eaf4ff;--warn:#fff8df;--warnline:#ecd57b;--shadow:0 8px 28px rgba(24,39,75,.12)}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,sans-serif}
-.wrap{max-width:820px;margin:auto;padding:24px 16px 60px}
-.brand{text-align:center;font-weight:950;font-size:20px;margin-bottom:18px}
+.wrap{max-width:820px;margin:auto;padding:24px 16px 60px}.brand{text-align:center;font-weight:950;font-size:20px;margin-bottom:18px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:26px}
 h1{margin:0 0 8px;font-size:34px}.muted{color:var(--muted);line-height:1.6}
 .notice{background:var(--soft);border:1px solid #bdd9f6;padding:15px;border-radius:10px;margin:18px 0}
-.step{border-top:1px solid var(--line);padding-top:20px;margin-top:20px}
-.num{display:inline-grid;place-items:center;width:30px;height:30px;border-radius:50%;background:#111827;color:#fff;font-weight:900;margin-right:8px}
+.step{border-top:1px solid var(--line);padding-top:20px;margin-top:20px}.num{display:inline-grid;place-items:center;width:30px;height:30px;border-radius:50%;background:#111827;color:#fff;font-weight:900;margin-right:8px}
 .btn{display:inline-flex;align-items:center;justify-content:center;min-height:52px;padding:0 22px;border:0;border-radius:10px;font-weight:900;font-size:17px;text-decoration:none;cursor:pointer}
-.primary{background:var(--blue);color:#fff}.green{background:var(--green);color:#fff}.secondary{background:#eef2f7;color:#17202a}
-label{display:block;font-weight:850;margin:16px 0 7px}
-input,select{width:100%;height:52px;border:1px solid var(--line);border-radius:10px;padding:0 14px;font-size:17px;background:#fff}
-.receiver{word-break:break-all;background:#0d1722;color:#dff0ff;border-radius:10px;padding:14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.primary{background:var(--blue);color:#fff}.secondary{background:#eef2f7;color:#17202a}
 .ok{background:#e8f7ef;border:1px solid #acd8bf;color:#236443;padding:14px;border-radius:10px;margin:14px 0}
 .wait{background:var(--warn);border:1px solid var(--warnline);color:#735d12;padding:14px;border-radius:10px;margin:14px 0}
+.status{margin-top:14px;padding:14px;border-radius:10px;border:1px solid var(--line);background:#f8fafc}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.box{border:1px solid var(--line);border-radius:10px;padding:13px}.small{font-size:12px;color:var(--muted);font-weight:800;text-transform:uppercase}.value{margin-top:5px;font-weight:850}
-.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
-.footer{text-align:center;color:#7b8490;font-size:13px;padding-top:22px}
+.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}.footer{text-align:center;color:#7b8490;font-size:13px;padding-top:22px}
 @media(max-width:640px){.card{padding:20px}.grid{grid-template-columns:1fr}.btn{width:100%}}
 </style>
 </head>
@@ -25518,68 +29800,117 @@ input,select{width:100%;height:52px;border:1px solid var(--line);border-radius:1
 <div class="brand">PROJECT MADDEN</div>
 <div class="card">
 <h1>Connect EA Through Snallabot</h1>
-<p class="muted">Project Madden will use Snallabot's existing EA connector. Project Madden does not need your EA password, EA OAuth client secret, access token, or refresh token.</p>
+<p class="muted">Complete the EA connection in Snallabot. Project Madden will automatically detect the league Snallabot links to this Discord server and configure itself.</p>
 
 <div class="notice">
-<b>Data flow:</b> EA → Snallabot → Project Madden.<br>
-Snallabot handles the EA login, Madden persona, league discovery, and token refresh. Project Madden receives the exported league data and powers your dashboard/Discord features.
+<b>Automatic flow:</b> EA → Snallabot → Project Madden.<br>
+You do not have to type your Snallabot League ID after setup. Project Madden checks Snallabot for the league connected to this Discord server.
 </div>
 
 <div class="step">
-<h2><span class="num">1</span>Connect Madden in Snallabot</h2>
-<p class="muted">Open Snallabot's dashboard. Complete the EA login flow there, select your Madden persona, then select the Franchise league you want to use.</p>
+<h2><span class="num">1</span>Open Snallabot</h2>
+<p class="muted">Sign in to EA through Snallabot, select your Madden persona, and select your Franchise. Snallabot associates the selected league with this Discord server.</p>
 <div class="actions">
-<a class="btn primary" href="{{ connect_url }}" target="_blank" rel="noopener">OPEN SNALLABOT EA CONNECTOR</a>
+<a class="btn primary" href="{{ connect_url }}" target="_blank" rel="noopener" onclick="beginWatching()">OPEN SNALLABOT EA CONNECTOR</a>
 </div>
 </div>
 
 <div class="step">
-<h2><span class="num">2</span>Link that league to Project Madden</h2>
-<form method="post" action="/dashboard/snallabot-ea/save/{{ guild.setup_token }}">
-<label>Snallabot League ID</label>
-<input name="league_id" value="{{ status.league_id or '' }}" placeholder="Example: 1360051" inputmode="numeric" required>
-
-<label>Platform</label>
-<select name="platform">
-{% for value,label in platforms %}
-<option value="{{ value }}" {% if status.platform == value %}selected{% endif %}>{{ label }}</option>
-{% endfor %}
-</select>
-
-<button class="btn green" type="submit" style="margin-top:18px">SAVE SNALLABOT CONNECTION</button>
-</form>
+<h2><span class="num">2</span>Project Madden Auto Connect</h2>
+<div id="autoStatus" class="wait">
+Waiting for Snallabot to finish linking your Madden league…
 </div>
-
-{% if status.connected %}
-<div class="step">
-<h2><span class="num">3</span>Send Snallabot exports to Project Madden</h2>
-<div class="ok">✅ Snallabot league {{ status.league_id }} is linked to this Project Madden server.</div>
-
-<p class="muted">Use the Project Madden receiver as the export destination in Snallabot:</p>
-<div class="receiver">{{ status.project_madden_receiver }}</div>
-
+<p class="muted">Leave this page open. Project Madden checks Snallabot every few seconds. When the league appears, Project Madden saves the league ID and adds itself as an automatic Snallabot export destination.</p>
 <div class="actions">
-<a class="btn primary" href="{{ status.snallabot_league_dashboard }}" target="_blank" rel="noopener">OPEN SNALLABOT LEAGUE DASHBOARD</a>
+<button class="btn secondary" type="button" onclick="checkConnection(true)">CHECK NOW</button>
+</div>
+</div>
+
+<div id="connectedPanel" class="step" style="{{ '' if status.connected else 'display:none' }}">
+<h2><span class="num">3</span>Connected</h2>
+<div class="ok">✅ Your Snallabot league is connected to Project Madden.</div>
+<div class="grid">
+<div class="box"><div class="small">League ID</div><div class="value" id="leagueIdValue">{{ status.league_id or 'Detecting…' }}</div></div>
+<div class="box"><div class="small">EA Login</div><div class="value">Handled by Snallabot</div></div>
+<div class="box"><div class="small">Exports</div><div class="value">Auto → Project Madden</div></div>
+<div class="box"><div class="small">Data Flow</div><div class="value">EA → Snallabot → Project Madden</div></div>
+</div>
+<div class="actions">
+<a id="leagueDashLink" class="btn primary" href="{{ status.snallabot_league_dashboard or '#' }}" target="_blank" rel="noopener">OPEN SNALLABOT LEAGUE</a>
 <a class="btn secondary" href="/dashboard/setup/{{ guild.setup_token }}">BACK TO PROJECT MADDEN</a>
 </div>
-
-<div class="grid" style="margin-top:18px">
-<div class="box"><div class="small">EA Authentication</div><div class="value">Handled by Snallabot</div></div>
-<div class="box"><div class="small">Project Madden Source</div><div class="value">Snallabot Exports</div></div>
-<div class="box"><div class="small">League ID</div><div class="value">{{ status.league_id }}</div></div>
-<div class="box"><div class="small">Platform</div><div class="value">{{ status.platform|upper }}</div></div>
 </div>
-</div>
-{% else %}
-<div class="wait">Complete steps 1 and 2 to activate the Project Madden receiver.</div>
-{% endif %}
 
 </div>
 <div class="footer">Built for Project Madden • Thanks to Developer Jay</div>
 </div>
+
+<script>
+const autoLinkUrl="/dashboard/snallabot-ea/auto-link/{{ guild.setup_token }}";
+let watchTimer=null;
+
+async function checkConnection(manual=false){
+  const status=document.getElementById("autoStatus");
+
+  try{
+    const res=await fetch(autoLinkUrl,{
+      method:"POST",
+      cache:"no-store"
+    });
+    const data=await res.json();
+
+    if(data.linked){
+      const exportOK=data.export_destination && data.export_destination.success;
+
+      status.className=exportOK ? "ok" : "status";
+      status.textContent=exportOK
+        ? `Connected automatically to Snallabot league ${data.league_id}. Project Madden was also added as an automatic export destination.`
+        : `League ${data.league_id} was found and saved. Project Madden could not automatically add the export destination yet.`;
+
+      document.getElementById("connectedPanel").style.display="block";
+      document.getElementById("leagueIdValue").textContent=data.league_id;
+
+      const link=document.getElementById("leagueDashLink");
+      link.href="{{ snallabot_league_base }}/" + data.league_id;
+
+      if(watchTimer){
+        clearInterval(watchTimer);
+        watchTimer=null;
+      }
+
+      return true;
+    }
+
+    status.className="wait";
+    status.textContent="Still waiting for Snallabot to link the league to this Discord server…";
+    return false;
+
+  }catch(err){
+    status.className="status";
+    status.textContent="Project Madden could not check Snallabot right now. Tap CHECK NOW to retry.";
+    return false;
+  }
+}
+
+function beginWatching(){
+  checkConnection(false);
+
+  if(!watchTimer){
+    watchTimer=setInterval(
+      ()=>checkConnection(false),
+      5000
+    );
+  }
+}
+
+document.addEventListener("DOMContentLoaded",()=>{
+  beginWatching();
+});
+</script>
 </body>
 </html>
 """
+
 
 
 @app.route(
@@ -25610,6 +29941,10 @@ def project_madden_snallabot_ea_page(
             guild.get(
                 "guild_id"
             )
+        ),
+        snallabot_league_base=(
+            SNALLABOT_DASHBOARD_BASE
+            + "/league"
         ),
         platforms=[
             (
@@ -25720,6 +30055,35 @@ def project_madden_snallabot_ea_save(
     )
 
 
+
+@app.route(
+    "/dashboard/snallabot-ea/auto-link/<setup_token>",
+    methods=[
+        "POST",
+        "GET"
+    ]
+)
+def project_madden_snallabot_ea_auto_link(
+    setup_token
+):
+    guild = get_guild_config_by_token(
+        setup_token
+    )
+
+    if not guild:
+        return jsonify({
+            "success": False,
+            "error":
+                "Invalid or expired setup token."
+        }), 404
+
+    return jsonify(
+        auto_link_snallabot_guild(
+            guild
+        )
+    )
+
+
 @app.route(
     "/dashboard/snallabot-ea/status/<setup_token>"
 )
@@ -25745,6 +30109,88 @@ def project_madden_snallabot_ea_status(
             snallabot_bridge_status(
                 guild
             )
+    })
+
+
+
+@app.route(
+    "/dashboard/ai-bots/status/<setup_token>"
+)
+def project_madden_ai_bots_status(
+    setup_token
+):
+    guild = get_guild_config_by_token(
+        setup_token
+    )
+
+    if not guild:
+        return jsonify({
+            "success":
+                False,
+            "error":
+                "Invalid or expired setup token."
+        }), 404
+
+    return jsonify({
+        "success":
+            True,
+        "ai_bots":
+            ai_bots_status_for_guild(
+                guild.get(
+                    "guild_id"
+                )
+            )
+    })
+
+
+
+@app.route(
+    "/dashboard/ai-bots/audit/<setup_token>"
+)
+def project_madden_ai_bots_audit(
+    setup_token
+):
+    guild = get_guild_config_by_token(
+        setup_token
+    )
+
+    if not guild:
+        return jsonify({
+            "success":
+                False,
+            "error":
+                "Invalid or expired setup token."
+        }), 404
+
+    status = ai_bots_status_for_guild(
+        guild.get(
+            "guild_id"
+        )
+    )
+
+    return jsonify({
+        "success":
+            True,
+        "app_version":
+            PROJECT_MADDEN_APP_VERSION,
+        "guild_id":
+            guild.get(
+                "guild_id"
+            ),
+        "league_id":
+            guild.get(
+                "snallabot_league_id"
+            ),
+        "ai_bots":
+            status,
+        "automatic_export_guild_routing":
+            True,
+        "legacy_webhook_fallback":
+            True,
+        "global_analysts_command":
+            True,
+        "real_person_content":
+            "Clearly labeled fictional AI parody"
     })
 
 
